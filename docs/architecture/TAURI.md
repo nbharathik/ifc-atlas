@@ -94,7 +94,7 @@ Layout: `uploads/`, `snapshots/`, `data/`, `ifc_history/`, plus an optional `.en
 
 The install location (e.g. `C:\Program Files\IFC Atlas\`) stays read-only: installers can drop in without needing write access, and uninstalling does not delete user data.
 
-Resolution lives in [`backend/app/core/config.py`](https://github.com/nbharathik/ifc-atlas/blob/master/backend/app/core/config.py) → `_user_data_root()`. Settings → Storage → User data folder shows the resolved paths, per-scope sizes, flush buttons, and an LRU cap. See [Data Storage](../user/DATA_STORAGE.md) for the user-facing description.
+Resolution lives in [`backend/app/core/config.py`](https://github.com/nbharathik/ifc-atlas/blob/main/backend/app/core/config.py) → `_user_data_root()`. Settings → Storage → User data folder shows the resolved paths, per-scope sizes, flush buttons, and an LRU cap. See [Data Storage](../user/DATA_STORAGE.md) for the user-facing description.
 
 ---
 

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -76,8 +76,8 @@ jobs:
   backend-full:
     name: Backend - full pytest suite (Linux, IfcOpenShell safe)
     runs-on: ubuntu-latest
-    # Only on pushes to master (not on PRs) to save CI minutes
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    # Only on pushes to main (not on PRs) to save CI minutes
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     defaults:
       run:
         working-directory: backend

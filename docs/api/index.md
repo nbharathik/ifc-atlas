@@ -15,13 +15,13 @@ The two generated pages are refreshed by `python scripts/generate_api_doc.py`. A
 
 | Prefix | Module | Purpose |
 |---|---|---|
-| `/api/health` | [`main.py`](https://github.com/nbharathik/ifc-atlas/blob/master/backend/app/main.py) | Liveness probe. |
-| `/api/ifc/*` | [`ifc_routes.py`](https://github.com/nbharathik/ifc-atlas/blob/master/backend/app/api/ifc_routes.py) | IFC upload, geometry, edit-preview / apply / discard, IDS validation, checkpoints. |
-| `/api/chat/*` | [`chat_routes.py`](https://github.com/nbharathik/ifc-atlas/blob/master/backend/app/api/chat_routes.py) | Agents, tools, prompts, snippets, budgets, document index, WebSocket chat. |
-| `/api/settings/*` | [`settings_routes.py`](https://github.com/nbharathik/ifc-atlas/blob/master/backend/app/api/settings_routes.py) | Provider info and the secrets store (`~/.ifc-atlas/secrets.json`). |
-| `/api/system/*` | [`system_routes.py`](https://github.com/nbharathik/ifc-atlas/blob/master/backend/app/api/system_routes.py) | User-data folder paths and cache flush controls. |
-| `/api/mcp/*` | [`mcp_routes.py`](https://github.com/nbharathik/ifc-atlas/blob/master/backend/app/api/mcp_routes.py) | Read-only registry for **external** MCP servers. |
-| `/mcp/*` | [`mcp_server/`](https://github.com/nbharathik/ifc-atlas/blob/master/backend/app/mcp_server/) | MCP server SSE endpoint that exposes the viewer toolset to external clients. |
+| `/api/health` | [`main.py`](https://github.com/nbharathik/ifc-atlas/blob/main/backend/app/main.py) | Liveness probe. |
+| `/api/ifc/*` | [`ifc_routes.py`](https://github.com/nbharathik/ifc-atlas/blob/main/backend/app/api/ifc_routes.py) | IFC upload, geometry, edit-preview / apply / discard, IDS validation, checkpoints. |
+| `/api/chat/*` | [`chat_routes.py`](https://github.com/nbharathik/ifc-atlas/blob/main/backend/app/api/chat_routes.py) | Agents, tools, prompts, snippets, budgets, document index, WebSocket chat. |
+| `/api/settings/*` | [`settings_routes.py`](https://github.com/nbharathik/ifc-atlas/blob/main/backend/app/api/settings_routes.py) | Provider info and the secrets store (`~/.ifc-atlas/secrets.json`). |
+| `/api/system/*` | [`system_routes.py`](https://github.com/nbharathik/ifc-atlas/blob/main/backend/app/api/system_routes.py) | User-data folder paths and cache flush controls. |
+| `/api/mcp/*` | [`mcp_routes.py`](https://github.com/nbharathik/ifc-atlas/blob/main/backend/app/api/mcp_routes.py) | Read-only registry for **external** MCP servers. |
+| `/mcp/*` | [`mcp_server/`](https://github.com/nbharathik/ifc-atlas/blob/main/backend/app/mcp_server/) | MCP server SSE endpoint that exposes the viewer toolset to external clients. |
 
 ## WebSocket endpoints
 

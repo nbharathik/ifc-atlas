@@ -66,7 +66,7 @@ Settings → Performance exposes a wait-timeout slider so a cold reload of a mod
 
 ## Edit pipeline (`ifc_patch`)
 
-Every committed edit produces a typed envelope on the `/api/ifc/sync/ws` WebSocket. Frontend handlers in [`frontend/src/services/viewer/`](https://github.com/nbharathik/ifc-atlas/blob/master/frontend/src/services/viewer/) apply the patch in place:
+Every committed edit produces a typed envelope on the `/api/ifc/sync/ws` WebSocket. Frontend handlers in [`frontend/src/services/viewer/`](https://github.com/nbharathik/ifc-atlas/blob/main/frontend/src/services/viewer/) apply the patch in place:
 
 | Patch kind | Frontend reaction |
 |---|---|
@@ -102,7 +102,7 @@ The frontend auto-applies the action when the tool result arrives, so an answer 
 
 ## Streaming geometry (opt-in)
 
-A streaming tile path exists in [`frontend/src/services/viewer/streamingGeometryConsumer.ts`](https://github.com/nbharathik/ifc-atlas/blob/master/frontend/src/services/viewer/streamingGeometryConsumer.ts) and is wired to a per-storey tile manifest in the backend. It is gated by `VITE_STREAMING_GEOMETRY=true` and is **off in the v1 release**. When enabled, the visible-by-default tiles (envelope + active storey) load first and other tiles lazy-load on orbit into frustum.
+A streaming tile path exists in [`frontend/src/services/viewer/streamingGeometryConsumer.ts`](https://github.com/nbharathik/ifc-atlas/blob/main/frontend/src/services/viewer/streamingGeometryConsumer.ts) and is wired to a per-storey tile manifest in the backend. It is gated by `VITE_STREAMING_GEOMETRY=true` and is **off in the v1 release**. When enabled, the visible-by-default tiles (envelope + active storey) load first and other tiles lazy-load on orbit into frustum.
 
 ---
 

@@ -36,10 +36,6 @@ The desktop installers bundle the viewer, the AI agent, and the backend into a s
 
 ---
 
-## Public demo
-
-A browser-only build (no backend, no AI chat; models parse in the browser via `web-ifc`) is published at [`nbharathik.github.io/ifc-atlas/demo/`](https://nbharathik.github.io/ifc-atlas/demo/). Good for sharing a model.
-
 ## Repository
 
-Source code, issue tracker, and releases live at [github.com/nbharathik/ifc-atlas](https://github.com/nbharathik/ifc-atlas). Licensed under [MPL 2.0](https://github.com/nbharathik/ifc-atlas/blob/master/LICENSE).
+Source code, issue tracker, and releases live at [github.com/nbharathik/ifc-atlas](https://github.com/nbharathik/ifc-atlas). Licensed under [MPL 2.0](https://github.com/nbharathik/ifc-atlas/blob/main/LICENSE).

@@ -2,7 +2,7 @@
 
 **An open-source IFC / BIM viewer with a built-in multi-LLM agent.** Load a model, ask questions in plain English, and get answers grounded in real model data through structured tool calls.
 
-> The published site lives at [`nbharathik.github.io/ifc-atlas/docs/`](https://nbharathik.github.io/ifc-atlas/docs/). This page is the in-repo index for the same content.
+> The published site lives at [`nbharathik.github.io/ifc-atlas/`](https://nbharathik.github.io/ifc-atlas/). This page is the in-repo index for the same content.
 
 ---
 
@@ -71,4 +71,4 @@ System-design notes live under [`docs/architecture/`](../architecture/), includi
 
 ## License
 
-MPL 2.0. See [`LICENSE`](https://github.com/nbharathik/ifc-atlas/blob/master/LICENSE).
+MPL 2.0. See [`LICENSE`](https://github.com/nbharathik/ifc-atlas/blob/main/LICENSE).

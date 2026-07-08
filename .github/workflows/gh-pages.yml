@@ -1,8 +1,8 @@
-name: GH-Pages Website + Demo + Docs Deploy
+name: Deploy Docs to GitHub Pages
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -10,45 +10,12 @@ permissions:
 
 jobs:
   deploy:
-    name: Build and deploy website + demo + framework docs
+    name: Build and deploy the MkDocs documentation site
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      # ── Viewer demo (Vite) ─────────────────────────────────────────────
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Build demo bundle
-        working-directory: frontend
-        env:
-          VITE_PUBLIC_DEMO: 'true'
-        # Served at https://nbharathik.github.io/ifc-atlas/demo/, so asset
-        # URLs must resolve under that sub-path, not the domain root.
-        run: npx vite build --outDir dist-demo --base=/ifc-atlas/demo/
-
-      - name: Copy sample IFC into bundle
-        run: |
-          mkdir -p frontend/dist-demo/samples
-          if [ -f data/fixtures/BasicHouse.ifc ]; then
-            cp data/fixtures/BasicHouse.ifc frontend/dist-demo/samples/BasicHouse.ifc
-          else
-            # Public clones do not track the 50 MB sample; fetch it from the
-            # GitHub Release asset instead. Skip quietly if unavailable.
-            curl -fsSL -o frontend/dist-demo/samples/BasicHouse.ifc \
-              "https://github.com/nbharathik/ifc-atlas/releases/download/v1.0.0/BasicHouse.ifc" \
-              || rm -f frontend/dist-demo/samples/BasicHouse.ifc
-          fi
 
       # ── Framework docs (mkdocs-material) ──────────────────────────────
       - name: Setup Python
@@ -72,20 +39,10 @@ jobs:
       - name: Build mkdocs site
         run: mkdocs build
 
-      # ── Combine: website at root, demo at /demo/, docs at /docs/ ──────
-      - name: Assemble gh-pages output
-        run: |
-          mkdir -p gh-pages-out
-          cp -r website/. gh-pages-out/
-          rm -f gh-pages-out/README.md
-          mkdir -p gh-pages-out/demo
-          cp -r frontend/dist-demo/. gh-pages-out/demo/
-          mkdir -p gh-pages-out/docs
-          cp -r site/. gh-pages-out/docs/
-
+      # ── Publish the docs at the site root (served at /ifc-atlas/) ──────
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: gh-pages-out
+          publish_dir: site
           force_orphan: true

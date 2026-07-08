@@ -10,7 +10,7 @@ A reference of the issues most users hit and how to fix them. Open a [GitHub iss
 
 Multi-threaded `web-ifc` refuses to spawn when `crossOriginIsolated` is `false`. The fix is to send the COOP and COEP headers:
 
-- **Dev server.** Already configured in [`frontend/vite.config.ts`](https://github.com/nbharathik/ifc-atlas/blob/master/frontend/vite.config.ts). If you proxy through nginx, Caddy, or Cloudflare, mirror the headers:
+- **Dev server.** Already configured in [`frontend/vite.config.ts`](https://github.com/nbharathik/ifc-atlas/blob/main/frontend/vite.config.ts). If you proxy through nginx, Caddy, or Cloudflare, mirror the headers:
 
   ```
   Cross-Origin-Opener-Policy: same-origin

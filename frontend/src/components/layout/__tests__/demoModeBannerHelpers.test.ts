@@ -84,11 +84,11 @@ describe('demoModeBannerHelpers - SELF_HOST_GUIDE_URL', () => {
   it('targets a file that actually exists in the repo (catches link rot)', () => {
     // The regex pin above protects the URL shape but not the path. If
     // someone renames or relocates the doc, the URL still matches the
-    // pattern yet 404s in browsers. This test resolves the /blob/master/
+    // pattern yet 404s in browsers. This test resolves the /blob/main/
     // path against the repo root and asserts the file is present, so a
     // rename surfaces here before the banner ships broken.
-    const match = SELF_HOST_GUIDE_URL.match(/\/blob\/master\/(.+)$/);
-    expect(match, 'URL must use /blob/master/{path} shape').not.toBeNull();
+    const match = SELF_HOST_GUIDE_URL.match(/\/blob\/main\/(.+)$/);
+    expect(match, 'URL must use /blob/main/{path} shape').not.toBeNull();
     const repoRelPath = match![1];
     const fullPath = resolve(REPO_ROOT, repoRelPath);
     expect(

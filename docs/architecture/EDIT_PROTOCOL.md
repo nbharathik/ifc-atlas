@@ -188,7 +188,7 @@ the result is `execute_rejected` and nothing is staged.
 
 ## Tool allowlist (how a preset restricts writes)
 
-Every preset in [`agent_registry.py`](https://github.com/nbharathik/ifc-atlas/blob/master/backend/app/services/agent_registry.py) carries an `allowed_tools` list. Of the two built-in presets, `default` (Ask) uses `null` (every tool passes the allowlist) and `edit-assistant` carries an explicit list including the write tools. Three router gates apply before any write executes: the global `EDIT_MODE_ENABLED` flag (off by default in this release) refuses the entire write tier, ask-category agents are refused every write tool regardless of allowlist, and a tool absent from an explicit allowlist is refused before it reaches any service.
+Every preset in [`agent_registry.py`](https://github.com/nbharathik/ifc-atlas/blob/main/backend/app/services/agent_registry.py) carries an `allowed_tools` list. Of the two built-in presets, `default` (Ask) uses `null` (every tool passes the allowlist) and `edit-assistant` carries an explicit list including the write tools. Three router gates apply before any write executes: the global `EDIT_MODE_ENABLED` flag (off by default in this release) refuses the entire write tier, ask-category agents are refused every write tool regardless of allowlist, and a tool absent from an explicit allowlist is refused before it reaches any service.
 
 ## Frontend contract: `DiffPreviewPanel`
 

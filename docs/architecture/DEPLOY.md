@@ -85,12 +85,12 @@ next to the demo bundle; it is not loaded automatically - users drop a file
 
 ### GitHub Actions
 
-The published demo is rebuilt on every push to `master` by
-[`.github/workflows/gh-pages.yml`](https://github.com/nbharathik/ifc-atlas/blob/master/.github/workflows/gh-pages.yml),
-which builds the demo bundle with `--base=/ifc-atlas/demo/`, stages the
-sample model, builds the MkDocs site, and publishes website + demo + docs
-to the `gh-pages` branch (website at the root, demo at `/demo/`, docs at
-`/docs/`). The workflow file is the source of truth for the exact steps.
+[`.github/workflows/gh-pages.yml`](https://github.com/nbharathik/ifc-atlas/blob/main/.github/workflows/gh-pages.yml)
+runs on every push to `main`: it regenerates the auto-generated tool/API
+pages, builds the MkDocs site, and publishes it to the root of the
+`gh-pages` branch (served at `/ifc-atlas/`). The demo bundle is not
+auto-published - build and deploy it yourself using the commands above.
+The workflow file is the source of truth for the exact steps.
 
 ---
 

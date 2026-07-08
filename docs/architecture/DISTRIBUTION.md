@@ -98,7 +98,7 @@ VITE_PUBLIC_DEMO=true npm run build
 npx gh-pages -d dist -b gh-pages
 ```
 
-In CI, [`.github/workflows/gh-pages.yml`](https://github.com/nbharathik/ifc-atlas/blob/master/.github/workflows/gh-pages.yml) does the same on every push to `master`.
+CI does not publish the demo; [`.github/workflows/gh-pages.yml`](https://github.com/nbharathik/ifc-atlas/blob/main/.github/workflows/gh-pages.yml) deploys the documentation site only on every push to `main`. Run the commands above to publish the demo yourself.
 
 The `VITE_PUBLIC_DEMO=true` build:
 
@@ -127,7 +127,7 @@ Demo relies on the in-browser `web-ifc` parser (the cloud sidecar path is unreac
 
 ## License notes
 
-The project is MPL-2.0 (see [`LICENSE`](https://github.com/nbharathik/ifc-atlas/blob/master/LICENSE)). Third-party dependencies are catalogued in [`docs/THIRD_PARTY_NOTICES.md`](https://github.com/nbharathik/ifc-atlas/blob/master/docs/THIRD_PARTY_NOTICES.md).
+The project is MPL-2.0 (see [`LICENSE`](https://github.com/nbharathik/ifc-atlas/blob/main/LICENSE)). Third-party dependencies are catalogued in [`docs/THIRD_PARTY_NOTICES.md`](https://github.com/nbharathik/ifc-atlas/blob/main/docs/THIRD_PARTY_NOTICES.md).
 
 `IfcOpenShell` is LGPL-3.0 (library-copyleft, not full copyleft). The Cloud edition is open source so the relink requirement is moot. The Desktop edition ships IfcOpenShell as replaceable `.pyd`/`.so` files; THIRD_PARTY_NOTICES.md documents how a user would swap in their own build. The Demo edition does not ship IfcOpenShell (browser-only).
 
@@ -139,4 +139,4 @@ The project is MPL-2.0 (see [`LICENSE`](https://github.com/nbharathik/ifc-atlas/
 |---|---|---|---|
 | Cloud | Frontend `dist/` + backend source + Docker image | Container registry + tagged GitHub release | Manual |
 | Desktop | `.msi` / `.exe` / `.dmg` / `.AppImage` / `.deb` / `.rpm` | GitHub Releases | Manual |
-| Demo | Static frontend | `gh-pages` branch | Every push to `master` |
+| Demo | Static frontend | Self-hosted (GitHub Pages, etc.) | Manual |

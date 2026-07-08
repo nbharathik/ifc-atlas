@@ -18,7 +18,7 @@ export const DEMO_BANNER_DISMISSED_KEY = 'demo_banner_dismissed';
  * component imports the single source of truth.
  */
 export const SELF_HOST_GUIDE_URL =
-  'https://github.com/nbharathik/ifc-atlas/blob/master/docs/user/DEPLOY_YOUR_OWN.md';
+  'https://github.com/nbharathik/ifc-atlas/blob/main/docs/user/DEPLOY_YOUR_OWN.md';
 
 export interface DemoBannerEnv {
   readonly VITE_PUBLIC_DEMO?: string | boolean;

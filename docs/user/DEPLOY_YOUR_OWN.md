@@ -96,7 +96,7 @@ backend-URL build variable to set.
 
 The easiest public sharing mode. Chat and Edit are disabled; viewer, measurement, classification, aggregate inspection, and share-link URLs all work.
 
-The official build is published at [`nbharathik.github.io/ifc-atlas/demo/`](https://nbharathik.github.io/ifc-atlas/demo/) and is rebuilt on every push to `master` by [`gh-pages.yml`](https://github.com/nbharathik/ifc-atlas/blob/master/.github/workflows/gh-pages.yml).
+There is no official hosted demo; publish your own viewer-only build to GitHub Pages.
 
 To publish a fork (GitHub Pages serves project sites under `/<repo>/`, so
 the build needs a matching `--base` or every asset URL 404s):

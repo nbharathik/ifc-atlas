@@ -1,12 +1,11 @@
 <h1 align="center">IFC Atlas</h1>
 
 <p align="center">
-  <strong>An open-source IFC viewer with a built-in AI agent.</strong><br>
-  Explore BIM models in 3D and query them in plain English, grounded in real model data.
+  <strong>Open-source IFC viewer for visualizing and inspecting BIM models with built-in AI chat features.</strong><br>
 </p>
 
 <p align="center">
-  <img alt="IFC Atlas with a sample house model loaded: the model tree on the left, the 3D viewport in the center, and the AI agent summarizing the model on the right." src="website/assets/viewer.png" width="900">
+  <img alt="IFC Atlas with a sample house model loaded: the model tree on the left, the 3D viewport in the center, and the AI agent summarizing the model on the right." src="docs/assets/viewer.png" width="900">
 </p>
 
 ## Features
@@ -44,7 +43,7 @@ cd backend && pip install -r requirements.txt && python run.py
 cd frontend && npm install && npm run dev
 ```
 
-Open <http://localhost:5173> in Chrome or Edge and drop an `.ifc` file onto the upload zone. API keys are set in-app on first launch, via environment variables, or in `~/.ifc-atlas/.env`. A ~50 MB sample model is available via `scripts/fetch-sample.ps1` / `scripts/fetch-sample.sh`.
+Open <http://localhost:5173> in Chrome or Edge and drop an `.ifc` file onto the upload zone. API keys are set in-app on first launch, via environment variables, or in `~/.ifc-atlas/.env`. 
 
 To run with Docker instead:
 
@@ -54,7 +53,7 @@ docker compose up --build
 
 ## Documentation
 
-Getting started, features, the AI agent guide, self-hosting, desktop builds, and the API reference live under [`docs/`](docs/), published as a [documentation site](https://nbharathik.github.io/ifc-atlas/docs/).
+Getting started, features, the AI agent guide, self-hosting, desktop builds, and the API reference live under [`docs/`](docs/), published as a [documentation site](https://nbharathik.github.io/ifc-atlas/).
 
 ## Contributing
 

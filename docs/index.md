@@ -6,8 +6,8 @@ Explore building models in 3D and ask questions in plain English. Every answer i
 
 <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin: 2rem 0;">
   <a href="https://github.com/nbharathik/ifc-atlas/releases/latest" class="md-button md-button--primary" style="padding: 0.75rem 1.5rem; font-weight: 600;">Download for Windows / Linux →</a>
-  <a href="user/GETTING_STARTED.md" class="md-button" style="padding: 0.75rem 1.5rem; font-weight: 600;">Get started in 5 minutes →</a>
-  <a href="user/FEATURES.md" class="md-button" style="padding: 0.75rem 1.5rem; font-weight: 600;">See every feature →</a>
+  <a href="user/GETTING_STARTED/" class="md-button" style="padding: 0.75rem 1.5rem; font-weight: 600;">Get started in 5 minutes →</a>
+  <a href="user/FEATURES/" class="md-button" style="padding: 0.75rem 1.5rem; font-weight: 600;">See every feature →</a>
 </div>
 
 The desktop installers bundle the viewer, the AI agent, and the backend into a single file (Windows `.exe` / `.msi`, Linux `.AppImage` / `.deb` / `.rpm`). No Python or Node required; see [Getting Started](user/GETTING_STARTED.md) for the direct links.

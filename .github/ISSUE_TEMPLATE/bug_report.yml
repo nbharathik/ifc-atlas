@@ -1,0 +1,66 @@
+name: Bug report
+description: Something in IFC Atlas does not work as expected
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the app is affected?
+      options:
+        - 3D viewer (loading, rendering, selection, measurements)
+        - Properties / model tree / search
+        - AI chat (agents, tools, providers, keys)
+        - IDS validation
+        - Editing / save
+        - Desktop app (Tauri)
+        - Backend API / MCP server
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Clear description of the bug, plus what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Load model X
+        2. Click on ...
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: model
+    attributes:
+      label: IFC model details
+      description: >
+        Schema version (IFC2X3 / IFC4 / IFC4X3), approximate file size, and
+        whether the bug also reproduces with the BasicHouse sample model.
+        Attach or link the model if you can share it.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: |
+        OS: Windows 11
+        Browser: Chrome 137 (or desktop app version)
+        Install method: dev setup / Docker / desktop installer
+        Python: 3.12
+        Node: 22
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console output / logs
+      description: >
+        Browser devtools console errors, backend terminal output, or both.
+      render: text

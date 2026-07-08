@@ -1,0 +1,45 @@
+# IFC Atlas
+
+**An open-source IFC / BIM viewer with a built-in multi-LLM agent.**
+
+Explore building models in 3D and ask questions in plain English. Every answer is grounded in real model data via structured tool calls, not guesswork.
+
+[Download for Windows / Linux →](https://github.com/nbharathik/ifc-atlas/releases/latest){ .md-button .md-button--primary }
+[Get started in 5 minutes →](user/GETTING_STARTED.md){ .md-button }
+[See every feature →](user/FEATURES.md){ .md-button }
+
+The desktop installers bundle the viewer, the AI agent, and the backend into a single file (Windows `.exe` / `.msi`, Linux `.AppImage` / `.deb` / `.rpm`). No Python or Node required; see [Getting Started](user/GETTING_STARTED.md) for the direct links.
+
+---
+
+## What it is
+
+- **3D viewer.** Three.js with `@thatopen/components` rendering. Selection, isolate / hide / ghost mode, section planes, measurements (linear / polygon / angle), classification browser, screenshots, saved viewpoints, share links.
+- **AI Chat.** Streaming WebSocket chat against OpenAI, Anthropic, or OpenRouter. A UI-configurable model catalogue, per-agent tool allowlists, cost telemetry, and a per-agent monthly budget cap.
+- **Model editing (experimental, disabled by default).** An Edit Assistant agent can stage writes inside a sandboxed IfcOpenShell copy, with a Diff Preview panel for Apply / Discard. The capability ships disabled in this release and must be explicitly enabled.
+- **Integrations.** Full buildingSMART IDS 1.0 validation, MCP client and server (Claude Desktop / Cursor compatible), Tauri 2 desktop shell.
+
+---
+
+## How the docs are organised
+
+| Section | Best for |
+|---|---|
+| [Getting Started](user/GETTING_STARTED.md) | First-time setup, first model, first AI query. |
+| [Features](user/FEATURES.md) | Every shipped feature, grouped by area. |
+| [Keyboard Shortcuts](user/KEYBOARD_SHORTCUTS.md) | Full key reference. |
+| [AI Agent Guide](user/AI_AGENT_GUIDE.md) | Built-in agents, example prompts, tool routing. |
+| [API Reference](api/index.md) | REST + WebSocket protocol, generated from the live FastAPI app. |
+| [Tools Reference](agent/TOOLS_REFERENCE.md) | Every agent tool, generated from the tool registry. |
+| [Self-hosting](user/DEPLOY_YOUR_OWN.md) | Docker, Caddy, GitHub Pages, Tauri builds. |
+| [Troubleshooting](user/TROUBLESHOOTING.md) | COOP/COEP, WASM, large models, chat reconnects. |
+
+---
+
+## Public demo
+
+A browser-only build (no backend, no AI chat; models parse in the browser via `web-ifc`) is published at [`nbharathik.github.io/ifc-atlas/demo/`](https://nbharathik.github.io/ifc-atlas/demo/). Good for sharing a model.
+
+## Repository
+
+Source code, issue tracker, and releases live at [github.com/nbharathik/ifc-atlas](https://github.com/nbharathik/ifc-atlas). Licensed under [MPL 2.0](https://github.com/nbharathik/ifc-atlas/blob/master/LICENSE).

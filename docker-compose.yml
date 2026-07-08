@@ -1,0 +1,39 @@
+services:
+  backend:
+    # Note: the backend image has no Node.js, so the optional Node sidecar
+    # (server-side IFC -> fragments conversion) does not run in Docker.
+    # Model loads use the in-browser web-ifc worker parse instead, which is
+    # slower on large models but fully functional.
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      # All writable state (uploads, fragment cache, secrets, edit history)
+      # lives in the per-user dotfolder - persist it across recreates.
+      - ifc-atlas-data:/root/.ifc-atlas
+    environment:
+      - FRONTEND_URL=http://localhost:5173
+    env_file:
+      # Optional: API keys / overrides. You can also set keys in-app
+      # (stored in the ifc-atlas-data volume).
+      - path: ./backend/.env
+        required: false
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      # Vite's /api dev proxy must target the backend container, not the
+      # frontend container's own localhost.
+      - BACKEND_HOST=backend
+    depends_on:
+      - backend
+
+volumes:
+  ifc-atlas-data:

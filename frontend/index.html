@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0d1016" />
+    <title>IFC Atlas</title>
+    <!--
+      Warm web-ifc.wasm during HTML parse so
+      ifcLoader.setup() inside ViewerPanel.init() hits the HTTP cache
+      instead of the network. Saves ~300-500ms off first-model-open on
+      cold starts.
+
+      The inline script below detects cross-origin isolation
+      (COOP + COEP set by the dev/preview/prod server) and preloads the
+      MT variant when it's available. web-ifc auto-selects
+      `web-ifc-mt.wasm` when `SharedArrayBuffer` is usable, so we want
+      the correct binary in the HTTP cache by the time
+      `ifcLoader.setup()` runs. Falls back to the ST variant otherwise
+      so unsupported environments still get the preload speedup and we
+      never log "unused preload" warnings.
+    -->
+    <script>
+      (function () {
+        var isolated =
+          typeof self !== 'undefined' &&
+          self.crossOriginIsolated === true &&
+          typeof SharedArrayBuffer !== 'undefined';
+        var href = isolated ? '/web-ifc-mt.wasm' : '/web-ifc.wasm';
+        var link = document.createElement('link');
+        link.rel = 'preload';
+        link.as = 'fetch';
+        link.type = 'application/wasm';
+        link.crossOrigin = 'anonymous';
+        link.href = href;
+        document.head.appendChild(link);
+        // Expose for runtime telemetry; App.tsx reads this to log which
+        // variant is likely to be consumed.
+        window.__ifcWasmVariant = isolated ? 'mt' : 'st';
+        window.__crossOriginIsolated = !!isolated;
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

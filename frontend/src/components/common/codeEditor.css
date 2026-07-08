@@ -1,0 +1,124 @@
+/* CodeEditor - overlay editor (transparent textarea over a highlighted pre).
+   CRITICAL: the gutter, highlight layer and textarea share the font metrics
+   declared on .code-editor (family, size, line-height, tab-size) and the
+   padding declared on .code-editor-highlight/.code-editor-input. Changing any
+   of these on one layer without the others makes the caret drift off the
+   colored text. line-height here must match LINE_HEIGHT_PX in CodeEditor.tsx;
+   the input padding must match VERTICAL_PADDING_PX (top + bottom). */
+
+.code-editor {
+  display: flex;
+  align-items: stretch;
+  min-height: 96px;
+  background: var(--s-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 20px;
+  tab-size: 4;
+}
+.code-editor:focus-within {
+  border-color: var(--acc);
+}
+.code-editor--readonly:focus-within {
+  border-color: var(--b-3);
+}
+
+/* Line-number gutter: clipped column whose inner block is translated by
+   -scrollTop so the numbers track the textarea's vertical scroll exactly. */
+.code-editor-gutter {
+  flex-shrink: 0;
+  min-width: 40px;
+  overflow: hidden;
+  background: var(--s-3);
+  border-right: 1px solid var(--border-subtle);
+  user-select: none;
+}
+.code-editor-gutter-inner {
+  padding: 8px var(--space-2) 8px var(--space-1);
+  text-align: right;
+  white-space: pre;
+  color: var(--f-3);
+  font-size: 11px;
+  line-height: 20px; /* same line grid as the code layers */
+  will-change: transform;
+}
+
+.code-editor-area {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.code-editor-highlight,
+.code-editor-input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  border: 0;
+  padding: 8px 10px;
+  font: inherit;
+  line-height: inherit;
+  tab-size: inherit;
+  letter-spacing: normal;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+  background: transparent;
+  box-sizing: border-box;
+}
+
+.code-editor-highlight {
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--f-0);
+}
+.code-editor-code {
+  display: block;
+  font: inherit;
+  line-height: inherit;
+  white-space: pre;
+}
+
+.code-editor-input {
+  resize: none;
+  overflow: auto;
+  color: transparent;
+  caret-color: var(--f-0);
+  outline: none;
+}
+.code-editor-input::placeholder {
+  color: var(--f-3);
+  opacity: 1;
+}
+/* Semi-transparent selection so the highlighted tokens stay readable through
+   it; selected overlay text stays invisible (it would otherwise be repainted
+   opaque by some browsers). */
+.code-editor-input::selection {
+  background: var(--acc-bord);
+  color: transparent;
+}
+.code-editor--readonly .code-editor-input {
+  caret-color: transparent;
+  cursor: default;
+}
+
+/* Token palette */
+.code-editor-tok--keyword {
+  color: var(--acc);
+}
+.code-editor-tok--builtin {
+  color: var(--accent-primary);
+}
+.code-editor-tok--string {
+  color: var(--amber);
+}
+.code-editor-tok--comment {
+  color: var(--f-3);
+  font-style: italic;
+}
+.code-editor-tok--number {
+  color: var(--green-live);
+}

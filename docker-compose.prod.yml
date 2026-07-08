@@ -1,0 +1,75 @@
+# Production Docker Compose - Caddy reverse-proxy + backend + pre-built frontend
+#
+# Prerequisites:
+#   1. Build the frontend: cd frontend && npm run build (outputs dist/)
+#   2. Set env vars: DOMAIN, ANTHROPIC_API_KEY, OPENAI_API_KEY (optional),
+#      IFC_VIEWER_MAX_UPLOAD_BYTES (optional)
+#
+# Quick start (self-host):
+#   DOMAIN=your-domain.com \
+#   ANTHROPIC_API_KEY=sk-ant-... \
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Local HTTPS (no domain): DOMAIN=localhost - Caddy uses a self-signed cert.
+
+services:
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    volumes:
+      - ./Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      - ./frontend/dist:/srv/frontend:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    depends_on:
+      - backend
+
+  backend:
+    # Note: the backend image has no Node.js, so the optional Node sidecar
+    # (server-side IFC -> fragments conversion) does not run in Docker.
+    # Model loads use the in-browser web-ifc worker parse instead, which is
+    # slower on large models but fully functional.
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "8000"
+    volumes:
+      # All writable state (uploads, fragment cache, secrets, edit history)
+      # lives in the per-user dotfolder - persist it across recreates.
+      - ifc-atlas-data:/root/.ifc-atlas
+      - ifc-sandbox:/tmp/ifc_sandbox
+    environment:
+      - FRONTEND_URL=https://${DOMAIN:-localhost}
+      - IFC_VIEWER_MAX_UPLOAD_BYTES=${IFC_VIEWER_MAX_UPLOAD_BYTES:-536870912}
+      - LOG_LEVEL=info
+      # LLM provider keys, forwarded from the shell that runs compose (see
+      # the quick start above). Keys can also be set in-app, which stores
+      # them in the ifc-atlas-data volume.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    env_file:
+      # Optional overrides; the file does not exist in a fresh clone.
+      - path: ./backend/.env
+        required: false
+    # IfcOpenShell can be memory-hungry on large models
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+        reservations:
+          memory: 512m
+
+volumes:
+  ifc-atlas-data:
+  ifc-sandbox:
+  caddy-data:
+  caddy-config:

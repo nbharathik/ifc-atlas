@@ -1,0 +1,164 @@
+# Backend Architecture
+
+FastAPI + uvicorn + IfcOpenShell on Python 3.11 or 3.12. LLM providers: OpenAI SDK, Anthropic SDK, OpenRouter (HTTP). No database: uploads are files on disk, session state lives in-memory per WebSocket connection, and **all writable state lives in the per-user `~/.ifc-atlas/` folder** (see [Data storage](../user/DATA_STORAGE.md)). The backend never writes inside the repo.
+
+---
+
+## Tree
+
+```
+backend/
+├── app/
+│   ├── api/
+│   │   ├── ifc_routes.py        REST: upload, native parse, geometry, fragments,
+│   │   │                        edits, undo, IDS, checkpoints, AABB + sync WS
+│   │   ├── chat_routes.py       WS: /api/chat/ws + agent / prompt / snippet /
+│   │   │                        tool-set / model CRUD + doc index
+│   │   ├── settings_routes.py   /api/settings/secrets, per-user API-key store
+│   │   ├── system_routes.py     /api/system/*, data-dir info + cache flush/cap
+│   │   └── mcp_routes.py        /api/mcp/*, external MCP server registry
+│   ├── core/
+│   │   └── config.py            env vars + ~/.ifc-atlas folder resolution
+│   ├── models/                  Pydantic request / response schemas
+│   ├── services/                singletons (see below)
+│   ├── mcp_server/              MCP server exposing the viewer toolset
+│   └── main.py                  FastAPI entry, lifespan hooks, /mcp mount
+├── sidecar/                     Node/TS native IFC parser (spawned on demand)
+├── tests/                       pytest suite
+├── run.py                       uvicorn launcher (+ frozen-build sandbox child)
+└── requirements.txt
+```
+
+---
+
+## Service responsibilities
+
+### `ifc_service.py`
+
+- **Reads** through every query helper (`get_project_info`, `get_model_stats`, `get_storeys`, `get_element_details`, `get_elements_by_type`, `get_elements_by_storey`, `search_by_property`, `get_all_property_names`, `get_quantities_summary`, `search_elements`, `find_nearby_elements`, …).
+- **Writes** through the sandbox flow: `rename_element`, `update_property_value`, batch variants, `create_wall_from_ends`, `delete_element`, `execute_ifc_code`.
+- **Undo stack** records `{express_id, attr, before, after}` for every committed write; `undo_last_edit` pops and applies the inverse.
+- `load()` copies the upload to a hidden `.working/<name>.ifc` so the original stays pristine; `_file_path` is the working file.
+- The `model` accessor is a property without a setter; tests must monkeypatch `_model` directly.
+
+### `sandbox_service.py`
+
+- `sandbox_copy(model)` returns a deep-copied handle.
+- A pending-edit store records `{edit_id, sandbox, source_hash, diff}` until the user Applies or Discards.
+- `commit_sandbox(live, sandbox, source_hash)` verifies the live model's hash still matches before swapping.
+
+### `llm_service.py`
+
+- Unified streaming interface over OpenAI / Anthropic / OpenRouter; all providers stream and tool-call events are shape-normalised so `chat_routes.py` doesn't branch on provider.
+- The LangGraph agent path (`agent_graph.py`) drives multi-turn tool use.
+- Keys resolve fresh on every call via `secrets_service.get_api_key()` (env var → `~/.ifc-atlas/secrets.json`).
+
+### `tools.py`
+
+- `TOOL_DEFINITIONS`: the JSON-Schema catalogue passed to the LLM.
+- `execute_tool(name, args)` dispatches:
+  - **Tier-1 read** → `ifc_service` / `metadata_index_service`, returns JSON.
+  - **Tier-2 viewer op** → emits a frontend WS event.
+  - **Tier-3 write** → sandbox flow → `pending_edit` event (gated by `EDIT_MODE_ENABLED`).
+- Read-only results are memoised within a single LLM turn (`tool_memo.py`).
+
+### `agent_registry.py`
+
+Two built-in presets (read-only): `default` (Ask mode) and `edit-assistant` (hidden behind the `EDIT_MODE_ENABLED` flag). Custom agents are CRUD-able through `/api/chat/agents/*` and persist to `~/.ifc-atlas/data/custom_agents.json`. Built-ins cannot be deleted; unknown agent ids fall back to `default`.
+
+### `model_registry.py`
+
+UI-editable LLM model catalogue persisted to `~/.ifc-atlas/data/models.json`. Built-in entries are seeded once and merge non-destructively on upgrade; `provider_params.py` maps each entry's sampling/reasoning settings onto provider-specific request params.
+
+### `metadata_index_service.py` + `sidecar_manager.py`
+
+The Node/TS sidecar (`backend/sidecar/`) parses IFC natively (~30× faster than IfcOpenShell on large files) and produces a read-only `MetadataIndex` (spatial tree, element catalog, psets, GlobalId↔ExpressId map) that serves Ask-mode tools and `GET /api/ifc/native-index` while IfcOpenShell warms in the background. `readiness_service.py` tracks both backends' warm-up state.
+
+### `fragment_prebuild_service.py`
+
+Background server-side IFC→fragments conversion on upload; results are cached in `~/.ifc-atlas/fragments/{sha}-{profile}.frag` and served by `/api/ifc/fragments/serve`. `fragment_prebuild_gc.py` reaps abandoned jobs every 30 s.
+
+### `ids_service.py`
+
+IDS 1.0 validator backed by the `ifctester` reference engine (all five facet types). Falls back to a minimal v0 implementation if `ifctester` is unavailable.
+
+### `ifc_checkpoint_service.py`
+
+Git-backed snapshots of the model in `~/.ifc-atlas/ifc_history/`, one commit per applied edit; `/api/ifc/checkpoints/*` lists, diffs, and rolls back.
+
+### `mcp_registry.py` and `mcp_server/`
+
+- `mcp_registry.py` is the **client** registry: external MCP servers the viewer connects out to. CRUD via `/api/mcp/*`, configured in `~/.ifc-atlas/mcp_servers.json`.
+- `mcp_server/` is the **server** that exposes the viewer toolset to external LLM clients (Claude Desktop, Cursor, …) over SSE at `/mcp/sse` or stdio via `python -m app.mcp_server`. Bearer-token gated by `MCP_SERVER_TOKEN`; write tools gated by `MCP_ALLOW_WRITES=1`.
+
+### Smaller singletons
+
+`aabb_service` (real-AABB warm-up for culling), `storey_splitter` / `spatial_tile_splitter` (progressive-reveal manifests), `element_index_service` / `document_index_service` (BM25 search), `budget_tracker` (per-agent monthly spend), `session_memory` (per-WS fact memory), `snippet_service` / `prompt_library` / `tool_sets` / `tool_settings_service` (Chat-Manager CRUD stores), `ifc_checkpoint_service`, `code_runner` (subprocess sandbox for `execute_ifc_code`), `frag_delta_service` / `patch_generator` (staged fragment-patch work).
+
+---
+
+## REST endpoint groups
+
+| Prefix | Module | Purpose |
+|---|---|---|
+| `/api/ifc/*` | `ifc_routes.py` | Upload, native parse, geometry, fragment convert / cache, edits, undo, checkpoints, IDS validation, AABB, sync WS. |
+| `/api/chat/*` | `chat_routes.py` | Agents / prompts / snippets / tool sets / models CRUD, budget, document index, chat WS. |
+| `/api/settings/*` | `settings_routes.py` | `secrets.json` status / PUT / DELETE. |
+| `/api/system/*` | `system_routes.py` | User-data folder paths + cache flush / cap. |
+| `/api/mcp/*` | `mcp_routes.py` | External MCP server registry. |
+| `/mcp/*` | `mcp_server/` | SSE server exposing the viewer toolset to external clients. |
+
+Full endpoint catalogue: [REST API](../api/REST.md) (regenerate with `python scripts/generate_api_doc.py`).
+
+## WebSocket endpoints
+
+| Path | Purpose |
+|---|---|
+| `/api/chat/ws` | Main chat: agent responses, tool calls, pending edits, budget warnings, memory updates. |
+| `/api/ifc/sync/ws` | Live model-sync broadcasts (`ifc_patch` after commits, `pending_edit`, `readiness_changed`). |
+
+---
+
+## Configuration
+
+Env vars are read from the shell and from `~/.ifc-atlas/.env` (the backend does not read a repo-side `.env`). Everything is optional.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` | (unset) | Provider keys. Env beats `secrets.json`; the in-app AI-keys UI writes the latter. |
+| `IFC_ATLAS_HOME` | `~/.ifc-atlas` | Relocate the per-user data folder (legacy alias: `IFC_VIEWER_HOME`). |
+| `UPLOAD_DIR` / `SNAPSHOT_DIR` / `DATA_DIR` / `CHECKPOINT_DIR` / `FRAGMENT_CACHE_DIR` | under `IFC_ATLAS_HOME` | Re-point individual dirs. |
+| `IFC_VIEWER_CACHE_MAX_BYTES` | `2147483648` | Uploads-dir LRU cap; `0` disables. |
+| `IFC_VIEWER_MAX_UPLOAD_BYTES` | `536870912` | Per-request IFC body cap; `0` disables. |
+| `HOST` / `PORT` | `0.0.0.0` / `8000` | Bind address (run.py falls back to a free port if taken). |
+| `FRONTEND_URL` | `http://localhost:5173` | CORS allow-list entry. |
+| `LOG_LEVEL` | `info` | uvicorn + app log level. |
+| `BACKEND_VERBOSE` | `0` | `1` = DEBUG logs + per-request timing. |
+| `MCP_SERVER_TOKEN` | (unset) | Require bearer auth on `/mcp/*`. |
+| `MCP_ALLOW_WRITES` | unset | `1` exposes the MCP write tier. |
+| `EDIT_MODE_ENABLED` | `0` | Enables the chat write-tool tier (must flip with the frontend flag). |
+| `SIDECAR_DIR` / `SIDECAR_PORT` / `SIDECAR_HOST` / `SIDECAR_SPAWN_TIMEOUT_S` | auto | Advanced: native-parser sidecar overrides. |
+
+---
+
+## Testing
+
+- **pytest** runs under `cd backend && pytest -q` (needs `ifctester` installed for the IDS suite).
+- Fixtures load `data/fixtures/BasicHouse.ifc` once per session; `conftest.py` points `IFC_ATLAS_HOME` at a throwaway temp dir so tests never touch your real `~/.ifc-atlas`.
+- Write-tool tests cover the happy path, missing-entity errors, inverse-delta round-trips, and sandbox hash gating.
+
+**Windows + Python 3.13 caveat:** the IfcOpenShell wheel SIGSEGVs on import. Use Python 3.12, or skip IFC-loading tests:
+
+```bash
+pytest -m "not requires_ifc_load and not subprocess_sandbox"
+```
+
+---
+
+## Conventions
+
+- **Services are stateless** except for in-memory caches (`ifc_service` holds the parsed IfcOpenShell file).
+- **No ORM, no DB.** Persistent state would require an ADR first.
+- **Every write goes through the sandbox.** No direct `model.add()` / `model.write()` on the live handle outside `sandbox_service.commit_sandbox`.
+- **Tool-call results are JSON-serialisable.** Binary outputs (screenshots, archives) are written to disk and returned as URLs.
+- **No repo-side writes.** Anything the backend persists belongs under `app.core.config.BASE_DIR` (`~/.ifc-atlas`).

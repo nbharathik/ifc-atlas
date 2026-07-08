@@ -1,0 +1,100 @@
+# Copy this file to the new repository root as .gitignore before the initial commit.
+
+# Local-only workspace files
+dev/
+.agents/
+.claude/
+.codex/
+CLAUDE.md
+AGENTS.md
+dev.py
+reset-and-start.ps1
+scripts/make-tester-zip.ps1
+scripts/publish-export.ps1
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+backend/sidecar/node_modules/
+.venv/
+venv/
+env/
+backend/.venv*/
+
+# Python cache and tooling state
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Frontend and documentation build outputs
+dist/
+build/
+frontend/dist/
+frontend/dist-demo/
+frontend/.vite/
+*.tsbuildinfo
+site/
+
+# Tauri and sidecar build outputs
+src-tauri/target/
+dist-tauri/
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+
+# Runtime data and user content
+backend/uploads/
+backend/snapshots/
+backend/data/
+backend/fragments/
+backend/ifc_history/
+uploads/
+snapshots/
+data/
+fragments/
+ifc_history/
+frontend/public/.working/
+
+# Local IFC models and generated archives
+*.ifc
+*.ifczip
+*.ifcZIP
+*.zip
+!backend/tests/fixtures/**/*.ifc
+!frontend/public/.gitkeep
+
+# Environment and user-specific configuration
+.env
+.env.local
+.env.*.local
+backend/.env
+backend/mcp_servers.json
+*.pem
+*.p12
+*.pfx
+*.key
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# IDE and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Local reference material
+bin/
+vendor/
+website/

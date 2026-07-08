@@ -1,0 +1,16 @@
+{
+  "id": "merge_duplicate_walls",
+  "name": "Merge Duplicate Walls",
+  "description": "Remove duplicate walls that share a Name and a placement origin within a distance tolerance, keeping the first wall of each duplicate group.",
+  "version": "1.0.0",
+  "params": [
+    {
+      "name": "tolerance_mm",
+      "label": "Tolerance (mm)",
+      "type": "number",
+      "default": 1.0,
+      "required": false
+    }
+  ],
+  "requires_write": true
+}

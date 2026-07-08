@@ -1,0 +1,123 @@
+site_name: IFC Atlas - Documentation
+site_description: User and developer documentation for IFC Atlas, an open-source IFC viewer with a built-in multi-LLM agent.
+site_author: IFC Atlas contributors
+site_url: https://nbharathik.github.io/ifc-atlas/docs/
+repo_url: https://github.com/nbharathik/ifc-atlas
+repo_name: nbharathik/ifc-atlas
+edit_uri: edit/master/docs/
+copyright: Copyright &copy; 2026 IFC Atlas contributors - Mozilla Public License 2.0
+
+docs_dir: docs
+site_dir: site
+dev_addr: 127.0.0.1:8001
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - search.share
+    - content.code.annotate
+    - content.code.copy
+    - content.tabs.link
+  font:
+    text: Inter
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: false
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.emoji
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Quick start: user/GETTING_STARTED.md
+    - Features: user/FEATURES.md
+    - Keyboard shortcuts: user/KEYBOARD_SHORTCUTS.md
+  - AI Agent Guide:
+    - Overview: agent/index.md
+    - Using the agent: user/AI_AGENT_GUIDE.md
+    - Agent interface: agent/AGENT_INTERFACE.md
+    - Agent presets: agent/AGENT_PRESETS.md
+    - Custom agents: agent/CUSTOM_AGENTS.md
+    - Tools reference: agent/TOOLS_REFERENCE.md
+    - MCP clients: agent/MCP_CLIENTS.md
+  - API Reference:
+    - Overview: api/index.md
+    - REST: api/REST.md
+    - WebSocket: api/WEBSOCKET.md
+  - Deploy & Operate:
+    - Self-hosting: user/DEPLOY_YOUR_OWN.md
+    - Desktop (Tauri): user/RUNNING_TAURI.md
+    - Command line: user/CLI.md
+    - Data storage: user/DATA_STORAGE.md
+    - Troubleshooting: user/TROUBLESHOOTING.md
+
+validation:
+  nav:
+    omitted_files: ignore
+    not_found: warn
+    absolute_links: ignore
+  links:
+    absolute_links: ignore
+    unrecognized_links: ignore
+    not_found: warn
+    anchors: warn
+
+# Exclude contributor- and reference-only files from the published user
+# site. They stay in the repo for people reading the source.
+exclude_docs: |
+  architecture/
+  user/README.md
+  DEVELOPMENT.md
+  THIRD_PARTY_NOTICES.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/nbharathik/ifc-atlas
+  generator: false
+
+extra_css:
+  - stylesheets/extra.css

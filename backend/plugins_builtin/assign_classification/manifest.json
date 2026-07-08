@@ -1,0 +1,36 @@
+{
+  "id": "assign_classification",
+  "name": "Assign Classification",
+  "description": "Attach a classification reference (system + code) to every element whose IFC type matches a regular expression.",
+  "version": "1.0.0",
+  "params": [
+    {
+      "name": "pattern",
+      "label": "IFC type pattern (regex)",
+      "type": "string",
+      "default": "IfcWall.*",
+      "required": false
+    },
+    {
+      "name": "system",
+      "label": "Classification system",
+      "type": "string",
+      "default": "Uniclass",
+      "required": false
+    },
+    {
+      "name": "code",
+      "label": "Reference code",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "title",
+      "label": "Reference title",
+      "type": "string",
+      "default": "",
+      "required": false
+    }
+  ],
+  "requires_write": true
+}

@@ -1,0 +1,341 @@
+/* Quantity Takeoff floating panel - mirrors the Model Health panel chrome
+   (fixed top-right overlay, header + actions, scrollable body) using Atlas
+   tokens. BEM, .qto-panel prefix. */
+
+.qto-panel-overlay {
+  position: fixed;
+  top: 48px;
+  right: 12px;
+  z-index: 700;
+  width: 560px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 64px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.qto-panel {
+  background: var(--s-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  max-height: calc(100vh - 64px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* Header */
+
+.qto-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-default);
+  flex-shrink: 0;
+}
+
+.qto-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--f-0);
+  white-space: nowrap;
+}
+
+.qto-panel-actions {
+  display: flex;
+  gap: var(--space-1h);
+  align-items: center;
+}
+
+.qto-panel-btn {
+  font-size: 12px;
+  padding: var(--space-0h) var(--space-1h);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--f-1);
+  cursor: pointer;
+  line-height: 1.5;
+  transition: color 0.1s, border-color 0.1s, background 0.15s;
+}
+.qto-panel-btn:hover:not(:disabled) {
+  color: var(--f-0);
+  border-color: var(--b-3);
+}
+.qto-panel-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.qto-panel-btn--accent {
+  border-color: var(--acc);
+  color: var(--acc);
+}
+.qto-panel-btn--accent:hover:not(:disabled) {
+  background: var(--acc-dim);
+  color: var(--acc);
+  border-color: var(--acc);
+}
+
+/* Group-by chips */
+
+.qto-panel-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1h);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.qto-panel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 11px;
+  padding: var(--space-0h) var(--space-2);
+  border-radius: var(--r-full);
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--f-1);
+  cursor: pointer;
+  transition: color 0.1s, border-color 0.1s, background 0.15s;
+}
+.qto-panel-chip:hover {
+  color: var(--f-0);
+  border-color: var(--b-3);
+}
+.qto-panel-chip--on {
+  background: var(--acc-dim);
+  border-color: var(--acc-bord);
+  color: var(--f-0);
+}
+
+.qto-panel-chip-order {
+  font-size: 9px;
+  font-weight: 600;
+  min-width: 12px;
+  height: 12px;
+  line-height: 12px;
+  text-align: center;
+  border-radius: var(--r-full);
+  background: var(--acc);
+  color: var(--status-fg);
+}
+
+/* States: error / loading / empty */
+
+.qto-panel-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: var(--space-2) var(--space-3);
+  padding: var(--space-1h) var(--space-2);
+  border: 1px solid var(--err-bord);
+  border-radius: var(--r-md);
+  background: var(--err-dim);
+  flex-shrink: 0;
+}
+
+.qto-panel-error-msg {
+  color: var(--red);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.qto-panel-skeleton {
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.qto-panel-skeleton-row {
+  height: 14px;
+  border-radius: var(--r-sm);
+  background: var(--s-4);
+  animation: qto-panel-pulse 1.2s ease-in-out infinite;
+}
+.qto-panel-skeleton-row:nth-child(even) {
+  animation-delay: 0.3s;
+}
+
+@keyframes qto-panel-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
+.qto-panel-empty {
+  padding: var(--space-6) var(--space-4);
+  margin: 0;
+  text-align: center;
+  color: var(--f-2);
+  font-size: 12px;
+}
+
+/* Results table */
+
+.qto-panel-table-wrap {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+.qto-panel-table-wrap--loading {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.qto-panel-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.qto-panel-th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--s-3);
+  border-bottom: 1px solid var(--border-default);
+  padding: 0;
+  text-align: left;
+  font-weight: 500;
+  color: var(--f-1);
+  white-space: nowrap;
+}
+.qto-panel-th--group {
+  padding: var(--space-1h) var(--space-3);
+}
+.qto-panel-th--num {
+  text-align: right;
+}
+
+.qto-panel-sort-btn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  padding: var(--space-1h) var(--space-2);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  color: var(--f-1);
+  white-space: nowrap;
+  transition: color 0.1s;
+}
+.qto-panel-sort-btn:hover {
+  color: var(--f-0);
+}
+.qto-panel-sort-btn--on {
+  color: var(--f-0);
+}
+
+.qto-panel-sort-arrow {
+  font-size: 9px;
+  width: 10px;
+  color: var(--acc);
+}
+
+.qto-panel-row {
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.qto-panel-row:hover {
+  background: var(--bg-hover);
+}
+.qto-panel-row:focus-visible {
+  outline: 1px solid var(--acc);
+  outline-offset: -1px;
+}
+.qto-panel-row--active {
+  background: var(--acc-dim);
+}
+.qto-panel-row--active:hover {
+  background: var(--acc-dim);
+}
+
+.qto-panel-td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--f-0);
+  vertical-align: middle;
+}
+.qto-panel-td--group {
+  padding-left: var(--space-3);
+  max-width: 0;
+  width: 42%;
+}
+
+/* Flex wrapper inside the group cell: a display:flex td would stop
+   participating in table layout, so the flex row lives one level down. */
+.qto-panel-group-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.qto-panel-td--num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.qto-panel-group-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qto-panel-isolate {
+  flex-shrink: 0;
+  padding: 0 var(--space-1);
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--f-1);
+  font-size: 13px;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s;
+}
+.qto-panel-row:hover .qto-panel-isolate,
+.qto-panel-row:focus-visible .qto-panel-isolate {
+  opacity: 1;
+}
+.qto-panel-isolate:hover {
+  color: var(--acc);
+}
+
+.qto-panel-total-row .qto-panel-td {
+  position: sticky;
+  bottom: 0;
+  background: var(--s-3);
+  border-top: 1px solid var(--border-default);
+  border-bottom: none;
+  font-weight: 600;
+}
+
+/* Caption */
+
+.qto-panel-caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1h) var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+  color: var(--f-2);
+  flex-shrink: 0;
+}
+
+.qto-panel-trunc {
+  color: var(--amber);
+}

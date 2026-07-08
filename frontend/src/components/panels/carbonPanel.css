@@ -1,0 +1,260 @@
+/* Embodied-carbon panel - docked in the Tools tab (embedded-native). Atlas
+   tokens, .carbon-panel prefix. Structurally parallel to costPanel.css. */
+
+.carbon-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.carbon-panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-default);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.carbon-panel-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.carbon-panel-chip {
+  font-size: 11px;
+  padding: var(--space-0h) var(--space-1h);
+  border-radius: var(--r-full);
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--f-1);
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.carbon-panel-chip:hover {
+  background: var(--s-3);
+}
+
+.carbon-panel-chip--on {
+  background: var(--acc-dim);
+  color: var(--acc-hi);
+  border-color: var(--acc-bord);
+}
+
+.carbon-panel-chip--fixed {
+  cursor: default;
+  color: var(--f-2);
+  border-style: dashed;
+}
+
+.carbon-panel-editing-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--f-0);
+}
+
+.carbon-panel-actions {
+  display: flex;
+  gap: var(--space-1h);
+  align-items: center;
+}
+
+.carbon-panel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: var(--space-0h) var(--space-1h);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--f-1);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background-color 120ms ease;
+}
+
+.carbon-panel-btn:hover:not(:disabled) {
+  background: var(--s-3);
+}
+
+.carbon-panel-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.carbon-panel-btn--accent {
+  background: var(--accent-primary, #ededed);
+  color: #000;
+  border-color: transparent;
+}
+
+.carbon-panel-btn--icon {
+  padding: var(--space-0h);
+  width: 26px;
+}
+
+.carbon-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.carbon-panel-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.carbon-panel-table--loading {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.carbon-panel-th {
+  position: sticky;
+  top: 0;
+  background: var(--s-2);
+  text-align: left;
+  font-weight: 600;
+  color: var(--f-2);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border-default);
+  white-space: nowrap;
+  z-index: 1;
+}
+
+.carbon-panel-th--num {
+  text-align: right;
+}
+
+.carbon-panel-row {
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.carbon-panel-row:hover {
+  background: var(--s-3);
+}
+
+.carbon-panel-row--active {
+  background: var(--acc-dim);
+}
+
+.carbon-panel-row--unfactored {
+  color: var(--f-3);
+}
+
+.carbon-panel-td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: middle;
+}
+
+.carbon-panel-td--num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.carbon-panel-td--group {
+  max-width: 0;
+  width: 50%;
+}
+
+.carbon-panel-group-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.carbon-panel-group-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.carbon-panel-isolate {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--space-1);
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--f-1);
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s;
+}
+
+.carbon-panel-row:hover .carbon-panel-isolate,
+.carbon-panel-row:focus-visible .carbon-panel-isolate {
+  opacity: 1;
+}
+
+.carbon-panel-isolate:hover {
+  color: var(--acc);
+}
+
+.carbon-panel-total-row .carbon-panel-td {
+  position: sticky;
+  bottom: 0;
+  background: var(--s-3);
+  border-top: 1px solid var(--border-default);
+  border-bottom: none;
+  font-weight: 600;
+}
+
+.carbon-panel-input {
+  width: 100%;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-default);
+  background: var(--s-5, var(--bg-input, #0a0a0a));
+  color: var(--f-0);
+  font-family: inherit;
+}
+
+.carbon-panel-input--num {
+  text-align: right;
+  max-width: 120px;
+}
+
+.carbon-panel-caption {
+  padding: var(--space-2) var(--space-3);
+  font-size: 11px;
+  color: var(--f-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.carbon-panel-empty,
+.carbon-panel-quiet {
+  padding: var(--space-3);
+  font-size: 12px;
+  color: var(--f-3);
+}
+
+.carbon-panel-error {
+  margin: var(--space-2) var(--space-3);
+  padding: var(--space-2);
+  border-radius: var(--r-md);
+  border: 1px solid var(--status-error, #F44747);
+  color: var(--status-error, #F44747);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}

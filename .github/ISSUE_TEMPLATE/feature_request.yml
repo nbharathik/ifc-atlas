@@ -1,0 +1,40 @@
+name: Feature request
+description: Suggest an idea or improvement for IFC Atlas
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem would this feature solve? What is the use case?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What you would like to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches or workarounds you have tried or considered.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - 3D viewer
+        - Properties / model tree / search
+        - AI chat / agents
+        - IDS validation
+        - Editing
+        - Desktop app
+        - Backend API / MCP
+        - Documentation
+        - Other
+    validations:
+      required: true

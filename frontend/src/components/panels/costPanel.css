@@ -1,0 +1,261 @@
+/* 5D cost panel - docked in the Tools tab (embedded-native: fills
+   .tool-embed-body and owns its own scroll, no floating overlay). Atlas tokens,
+   .cost-panel prefix. */
+
+.cost-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cost-panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-default);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.cost-panel-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.cost-panel-chip {
+  font-size: 11px;
+  padding: var(--space-0h) var(--space-1h);
+  border-radius: var(--r-full);
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--f-1);
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.cost-panel-chip:hover {
+  background: var(--s-3);
+}
+
+.cost-panel-chip--on {
+  background: var(--acc-dim);
+  color: var(--acc-hi);
+  border-color: var(--acc-bord);
+}
+
+.cost-panel-chip--fixed {
+  cursor: default;
+  color: var(--f-2);
+  border-style: dashed;
+}
+
+.cost-panel-editing-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--f-0);
+}
+
+.cost-panel-actions {
+  display: flex;
+  gap: var(--space-1h);
+  align-items: center;
+}
+
+.cost-panel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: var(--space-0h) var(--space-1h);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--f-1);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background-color 120ms ease;
+}
+
+.cost-panel-btn:hover:not(:disabled) {
+  background: var(--s-3);
+}
+
+.cost-panel-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.cost-panel-btn--accent {
+  background: var(--accent-primary, #ededed);
+  color: #000;
+  border-color: transparent;
+}
+
+.cost-panel-btn--icon {
+  padding: var(--space-0h);
+  width: 26px;
+}
+
+.cost-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.cost-panel-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.cost-panel-table--loading {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.cost-panel-th {
+  position: sticky;
+  top: 0;
+  background: var(--s-2);
+  text-align: left;
+  font-weight: 600;
+  color: var(--f-2);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border-default);
+  white-space: nowrap;
+  z-index: 1;
+}
+
+.cost-panel-th--num {
+  text-align: right;
+}
+
+.cost-panel-row {
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.cost-panel-row:hover {
+  background: var(--s-3);
+}
+
+.cost-panel-row--active {
+  background: var(--acc-dim);
+}
+
+.cost-panel-row--unpriced {
+  color: var(--f-3);
+}
+
+.cost-panel-td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: middle;
+}
+
+.cost-panel-td--num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cost-panel-td--group {
+  max-width: 0;
+  width: 50%;
+}
+
+.cost-panel-group-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.cost-panel-group-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cost-panel-isolate {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--space-1);
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--f-1);
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s;
+}
+
+.cost-panel-row:hover .cost-panel-isolate,
+.cost-panel-row:focus-visible .cost-panel-isolate {
+  opacity: 1;
+}
+
+.cost-panel-isolate:hover {
+  color: var(--acc);
+}
+
+.cost-panel-total-row .cost-panel-td {
+  position: sticky;
+  bottom: 0;
+  background: var(--s-3);
+  border-top: 1px solid var(--border-default);
+  border-bottom: none;
+  font-weight: 600;
+}
+
+.cost-panel-input {
+  width: 100%;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-default);
+  background: var(--s-5, var(--bg-input, #0a0a0a));
+  color: var(--f-0);
+  font-family: inherit;
+}
+
+.cost-panel-input--num {
+  text-align: right;
+  max-width: 120px;
+}
+
+.cost-panel-caption {
+  padding: var(--space-2) var(--space-3);
+  font-size: 11px;
+  color: var(--f-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.cost-panel-empty,
+.cost-panel-quiet {
+  padding: var(--space-3);
+  font-size: 12px;
+  color: var(--f-3);
+}
+
+.cost-panel-error {
+  margin: var(--space-2) var(--space-3);
+  padding: var(--space-2);
+  border-radius: var(--r-md);
+  border: 1px solid var(--status-error, #F44747);
+  color: var(--status-error, #F44747);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}

@@ -1,0 +1,33 @@
+[package]
+name = "ifc-atlas"
+version = "1.0.0"
+description = "IFC Atlas desktop app"
+authors = ["Bharathi"]
+license = "MPL-2.0"
+edition = "2021"
+
+[lib]
+name = "ifc_viewer_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri enables the webview inspector in debug builds. Release builds keep the
+# inspector disabled by leaving the `devtools` feature off.
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-process = "2"
+# Desktop-app platform plugins: single-instance routes
+# second-launch argv (file associations) into the running window, window-state
+# restores size/position, updater pulls signed builds from GitHub Releases.
+tauri-plugin-single-instance = "2"
+tauri-plugin-window-state = "2"
+tauri-plugin-updater = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

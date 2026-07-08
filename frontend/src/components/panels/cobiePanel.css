@@ -1,0 +1,179 @@
+/* COBie data-handover panel - docked in the Tools tab (embedded-native). */
+
+.cobie-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cobie-panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-default);
+  flex-shrink: 0;
+}
+
+.cobie-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--f-0);
+}
+
+.cobie-panel-actions {
+  display: flex;
+  gap: var(--space-1h);
+  align-items: center;
+}
+
+.cobie-panel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: var(--space-0h) var(--space-1h);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--f-1);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background-color 120ms ease;
+}
+
+.cobie-panel-btn:hover:not(:disabled) {
+  background: var(--s-3);
+}
+
+.cobie-panel-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.cobie-panel-btn--icon {
+  padding: var(--space-0h);
+  width: 26px;
+}
+
+.cobie-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+
+.cobie-panel-section-label {
+  font: 600 9.5px/1 var(--font-ui);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--f-3);
+  margin: var(--space-2) 0 var(--space-1h);
+}
+
+.cobie-panel-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  gap: var(--space-2);
+}
+
+.cobie-panel-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2);
+  border: 1px solid var(--b-1);
+  border-radius: var(--r-md);
+  background: var(--s-1);
+}
+
+.cobie-panel-stat-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--f-0);
+  font-variant-numeric: tabular-nums;
+}
+
+.cobie-panel-stat-label {
+  font-size: 10.5px;
+  color: var(--f-3);
+}
+
+.cobie-panel-bars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.cobie-panel-bar-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: 11px;
+  margin-bottom: 3px;
+}
+
+.cobie-panel-bar-label {
+  color: var(--f-1);
+}
+
+.cobie-panel-bar-value {
+  color: var(--f-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cobie-panel-bar-track {
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--s-3);
+  overflow: hidden;
+}
+
+.cobie-panel-bar-fill {
+  height: 100%;
+  border-radius: var(--r-full);
+  transition: width 200ms ease;
+}
+
+.cobie-panel-bar-fill--good {
+  background: var(--green-live, #22c55e);
+}
+
+.cobie-panel-bar-fill--mid {
+  background: var(--warn, #CD9731);
+}
+
+.cobie-panel-bar-fill--low {
+  background: var(--red, #F44747);
+}
+
+.cobie-panel-caption {
+  margin-top: var(--space-3);
+  font-size: 11px;
+  color: var(--f-3);
+}
+
+.cobie-panel-empty,
+.cobie-panel-quiet {
+  padding: var(--space-3);
+  font-size: 12px;
+  color: var(--f-3);
+}
+
+.cobie-panel-error {
+  margin: var(--space-2) 0;
+  padding: var(--space-2);
+  border-radius: var(--r-md);
+  border: 1px solid var(--status-error, #F44747);
+  color: var(--status-error, #F44747);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}

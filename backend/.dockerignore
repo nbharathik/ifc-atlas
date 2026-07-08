@@ -1,0 +1,43 @@
+# Docker build context is ./backend (see docker-compose). The Dockerfile's
+# `COPY . .` would otherwise bake secrets, user data, caches, tests and build
+# artifacts into the image. Keep them out.
+
+# Secrets & local environment - NEVER bake into an image
+.env
+.env.*
+
+# Runtime / user data (created or mounted at runtime, never baked)
+uploads/
+snapshots/
+fragments/
+ifc_history/
+data/aabb-cache/
+data/ifc-index/
+data/doc_index/
+data/budget_state.json
+data/tool_settings.json
+
+# Python caches & build outputs
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+
+# Tests & dev-only assets (not needed in a runtime image)
+tests/
+sidecar/test/
+sidecar/node_modules/
+
+# Large local IFC fixtures
+*.ifc
+
+# VCS / OS noise
+.git/
+.DS_Store
+Thumbs.db

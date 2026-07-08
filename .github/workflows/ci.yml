@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend - typecheck + vitest + build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript typecheck
+        run: npx tsc --noEmit --project tsconfig.app.json
+
+      - name: Unit tests (vitest)
+        run: npm test -- --run
+
+      - name: Build (vite)
+        run: npx vite build
+
+  backend:
+    name: Backend - pytest (pure tests, no IfcOpenShell file I/O)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Backend smoke test
+        run: |
+          python -c "
+          from app.services.agent_registry import agent_registry
+          from app.services.ids_service import validate_ids
+          from app.services.mcp_registry import mcp_registry
+          print('smoke ok')
+          "
+
+      - name: Fast unit tests (no IfcOpenShell file load, no sandbox subprocess)
+        run: |
+          python -m pytest -q -m "not requires_ifc_load and not subprocess_sandbox" --tb=short
+
+  backend-full:
+    name: Backend - full pytest suite (Linux, IfcOpenShell safe)
+    runs-on: ubuntu-latest
+    # Only on pushes to master (not on PRs) to save CI minutes
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      # The IFC-load tests need the sample model, which is a release asset,
+      # not a tracked file. conftest skips those tests when the download is
+      # unavailable (e.g. before the first release exists).
+      - name: Fetch sample model
+        working-directory: .
+        continue-on-error: true
+        run: bash scripts/fetch-sample.sh
+
+      - name: Full test suite
+        run: python -m pytest -q --tb=short

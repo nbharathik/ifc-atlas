@@ -1,0 +1,229 @@
+/* Working-vs-original diff panel - docked in the Tools tab (embedded-native). */
+
+.diff-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.diff-panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-default);
+  flex-shrink: 0;
+}
+
+.diff-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--f-0);
+}
+
+.diff-panel-actions {
+  display: flex;
+  gap: var(--space-1h);
+  align-items: center;
+}
+
+.diff-panel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: var(--space-0h) var(--space-1h);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--f-1);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background-color 120ms ease;
+}
+
+.diff-panel-btn:hover:not(:disabled) {
+  background: var(--s-3);
+}
+
+.diff-panel-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.diff-panel-btn--icon {
+  padding: var(--space-0h);
+  width: 26px;
+}
+
+.diff-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+
+.diff-panel-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+}
+
+/* Button reset (the added/changed stats are clickable highlight buttons). */
+.diff-panel-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2);
+  border: 1px solid var(--b-1);
+  border-left-width: 3px;
+  border-radius: var(--r-md);
+  background: var(--s-1);
+  font-family: inherit;
+  text-align: left;
+}
+
+button.diff-panel-stat {
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+button.diff-panel-stat:hover:not(:disabled) {
+  background: var(--s-3);
+}
+
+button.diff-panel-stat:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.diff-panel-stat--added {
+  border-left-color: var(--green-live, #22c55e);
+}
+
+.diff-panel-stat--changed {
+  border-left-color: var(--warn, #CD9731);
+}
+
+.diff-panel-stat--removed {
+  border-left-color: var(--red, #F44747);
+}
+
+.diff-panel-stat-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--f-0);
+  font-variant-numeric: tabular-nums;
+}
+
+.diff-panel-stat-label {
+  font-size: 10.5px;
+  color: var(--f-3);
+}
+
+.diff-panel-section-label {
+  font: 600 9.5px/1 var(--font-ui);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--f-3);
+  margin: var(--space-3) 0 var(--space-1h);
+}
+
+.diff-panel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.diff-panel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-1h);
+  border: none;
+  border-left: 3px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--f-1);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+button.diff-panel-row:hover {
+  background: var(--s-3);
+}
+
+.diff-panel-row--added {
+  border-left-color: var(--green-live, #22c55e);
+}
+
+.diff-panel-row--changed {
+  border-left-color: var(--warn, #CD9731);
+}
+
+.diff-panel-row--removed-li {
+  border-left-color: var(--red, #F44747);
+  cursor: default;
+  color: var(--f-2);
+}
+
+.diff-panel-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-panel-row-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--f-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.diff-panel-row-detail {
+  padding: 2px var(--space-2) var(--space-1) calc(var(--space-1h) + 3px);
+  font-size: 11px;
+  color: var(--f-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.diff-panel-caption {
+  margin-top: var(--space-3);
+  font-size: 11px;
+  color: var(--f-3);
+}
+
+.diff-panel-empty,
+.diff-panel-quiet {
+  padding: var(--space-3);
+  font-size: 12px;
+  color: var(--f-3);
+}
+
+.diff-panel-error {
+  margin: var(--space-2) 0;
+  padding: var(--space-2);
+  border-radius: var(--r-md);
+  border: 1px solid var(--red, #F44747);
+  color: var(--red, #F44747);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}

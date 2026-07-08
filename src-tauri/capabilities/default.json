@@ -1,0 +1,18 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/schema/capabilities.json",
+  "identifier": "default",
+  "description": "Default capabilities for the IFC Atlas desktop app",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        { "name": "binaries/ifc-backend", "sidecar": true, "args": true }
+      ]
+    },
+    "dialog:allow-open",
+    "process:allow-exit",
+    "process:allow-restart"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "comment": "Copy this file to mcp_servers.json to enable MCP servers. The backend reads it on startup and (when enabled=true on a server) exposes its tools to the chat LLM through the normal tool pipeline. Nothing is contacted until 'enabled' flips to true; this file is safe to commit without live credentials.",
+  "servers": [
+    {
+      "name": "filesystem",
+      "enabled": false,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "./"],
+      "description": "Read-only access to the backend uploads directory."
+    },
+    {
+      "name": "ifc-docs",
+      "enabled": false,
+      "transport": "http",
+      "url": "http://localhost:8811/mcp",
+      "description": "Example remote MCP server serving IFC schema documentation."
+    }
+  ]
+}

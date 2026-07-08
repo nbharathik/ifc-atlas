@@ -1,0 +1,38 @@
+# Production Caddyfile for IFC Atlas
+# Deploy: place behind a domain name, Caddy handles HTTPS automatically.
+#
+# Usage with docker-compose.prod.yml:
+#   DOMAIN=your-domain.com docker compose -f docker-compose.prod.yml up -d
+
+{$DOMAIN:localhost} {
+
+    # Required headers for SharedArrayBuffer + WASM threads (@thatopen/components).
+    # COEP "credentialless" matches the Vite dev/preview servers: cross-origin
+    # resources (e.g. fonts) load without per-resource CORP headers.
+    header {
+        Cross-Origin-Opener-Policy "same-origin"
+        Cross-Origin-Embedder-Policy "credentialless"
+        Cross-Origin-Resource-Policy "same-origin"
+        Permissions-Policy "interest-cohort=()"
+        # Remove server fingerprint
+        -Server
+        defer
+    }
+
+    # Backend REST API + WebSockets (chat WS at /api/chat/ws, sync WS at /api/ifc/sync/ws)
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+
+    # Optional MCP server (SSE at /mcp/sse, messages at /mcp/messages/)
+    handle /mcp* {
+        reverse_proxy backend:8000
+    }
+
+    # Frontend SPA - serve static assets, fallback to index.html
+    handle {
+        root * /srv/frontend
+        try_files {path} /index.html
+        file_server
+    }
+}

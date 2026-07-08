@@ -1,0 +1,15 @@
+{
+  "id": "set_storey_elevations",
+  "name": "Set Storey Elevations",
+  "description": "Update the Elevation attribute and placement Z coordinate of named building storeys from a JSON map of storey name to new elevation.",
+  "version": "1.0.0",
+  "params": [
+    {
+      "name": "elevations_json",
+      "label": "JSON map of storey name to new elevation (m)",
+      "type": "string",
+      "required": true
+    }
+  ],
+  "requires_write": true
+}

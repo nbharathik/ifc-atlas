@@ -1,0 +1,31 @@
+{
+  "name": "ifc-atlas-desktop",
+  "private": true,
+  "version": "1.0.0",
+  "license": "MPL-2.0",
+  "description": "IFC Atlas desktop app (Tauri v2 wrapper)",
+  "scripts": {
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "node scripts/tauri-build.mjs",
+    "dev:web": "npm --prefix frontend run dev:web",
+    "build:web": "npm --prefix frontend run build:web",
+    "preview:web": "npm --prefix frontend run preview:web",
+    "install:frontend": "cd frontend && npm install",
+    "install:all": "npm install && cd frontend && npm install",
+    "verify:backend:tests": "cd backend && python -m pytest -q -m \"not requires_ifc_load and not subprocess_sandbox\"",
+    "verify:backend:smoke": "cd backend && python -c \"from app.services.agent_registry import agent_registry; from app.services.ids_service import validate_ids; from app.services.mcp_registry import mcp_registry; print('ok')\"",
+    "verify:backend": "npm run verify:backend:tests && npm run verify:backend:smoke",
+    "verify:frontend:typecheck": "npm --prefix frontend run typecheck",
+    "verify:frontend:tests": "npm --prefix frontend test",
+    "verify:frontend:build": "npm --prefix frontend run build",
+    "verify:frontend": "npm run verify:frontend:typecheck && npm run verify:frontend:tests && npm run verify:frontend:build",
+    "verify:sidecar": "npm --prefix backend/sidecar run typecheck",
+    "verify:docs:generated": "python scripts/generate_api_doc.py --check && python scripts/generate_tools_doc.py --check",
+    "verify:docs": "npm run verify:docs:generated && python -m mkdocs build --strict",
+    "verify": "npm run verify:backend && npm run verify:frontend && npm run verify:sidecar && npm run verify:docs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

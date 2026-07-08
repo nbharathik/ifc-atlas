@@ -1,0 +1,31 @@
+fastapi==0.115.6
+starlette>=0.40,<1.0
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+ifcopenshell>=0.8.3
+pydantic==2.10.4
+websockets==14.1
+httpx==0.28.1
+python-dotenv==1.0.1
+anthropic==0.109.1
+openai==2.41.0
+# SDK majors match the LangChain 1.x integrations and the Responses API path.
+langgraph==1.0.9
+langchain==1.0.8
+langchain-openai==1.1.10
+langchain-anthropic==1.3.1
+mcp>=1.7,<2
+gitpython>=3.1,<4
+# IDS 1.0 validation (buildingSMART reference engine). ids_service falls back
+# to a minimal v0 parser without it, but the full facet engine + the IDS test
+# suite require it.
+ifctester>=0.8
+# PDF text extraction for the document index. document_index_service degrades
+# to raw-text handling without it, which produces useless PDF snippets.
+pypdf>=5,<7
+
+# Optional: local semantic search in document_index_service.
+# Install both for offline BM25+semantic hybrid search (no API key needed).
+# fastembed downloads a ~25 MB ONNX model on first use (BAAI/bge-small-en-v1.5).
+# fastembed>=0.8
+# hnswlib>=0.8

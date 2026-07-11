@@ -5,6 +5,7 @@ dev/
 .agents/
 .claude/
 .codex/
+memory/
 CLAUDE.md
 AGENTS.md
 dev.py

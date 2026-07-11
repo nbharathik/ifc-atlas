@@ -60,6 +60,8 @@ function modelToPayload(m: ModelEntry): ModelPayload {
     supports_structured_output: m.supports_structured_output,
     cost_tier: m.cost_tier,
     speed_tier: m.speed_tier,
+    input_cost_per_1m: m.input_cost_per_1m,
+    output_cost_per_1m: m.output_cost_per_1m,
     notes: m.notes,
     enabled: m.enabled,
   };
@@ -80,6 +82,8 @@ function blankDraft(): ModelPayload {
     supports_structured_output: true,
     cost_tier: 'medium',
     speed_tier: 'medium',
+    input_cost_per_1m: null,
+    output_cost_per_1m: null,
     notes: '',
     enabled: true,
   };
@@ -585,6 +589,26 @@ function ModelEditor({
                   >
                     {SPEED_TIERS.map((s) => <option key={s} value={s}>{s}</option>)}
                   </select>
+                </label>
+                <label className="cm-config-field">
+                  <span className="cm-config-label">$ / 1M input <span className="cm-model-hint">· estimate</span></span>
+                  <input
+                    className="cm-config-input"
+                    type="number" min={0} step={0.05}
+                    value={draft.input_cost_per_1m ?? ''}
+                    placeholder="unknown"
+                    onChange={(e) => patch({ input_cost_per_1m: numOrNull(e.target.value) })}
+                  />
+                </label>
+                <label className="cm-config-field">
+                  <span className="cm-config-label">$ / 1M output <span className="cm-model-hint">· estimate</span></span>
+                  <input
+                    className="cm-config-input"
+                    type="number" min={0} step={0.05}
+                    value={draft.output_cost_per_1m ?? ''}
+                    placeholder="unknown"
+                    onChange={(e) => patch({ output_cost_per_1m: numOrNull(e.target.value) })}
+                  />
                 </label>
               </div>
 

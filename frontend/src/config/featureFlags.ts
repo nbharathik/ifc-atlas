@@ -4,19 +4,14 @@
  * Plain build-time constants keep release-gated surfaces explicit.
  */
 
-/**
- * EDIT_MODE_ENABLED gates the LLM "Edit" surface:
- *   - the `Edit` chat-mode pill in the chat panel (Ask is the only mode),
- *   - the `edit-assistant` agent in the Chat Manager > Agents tab,
- *   - the `write_edit`-tier tools in the Chat Manager > Tools registry
- *     (only the query/read tools stay visible).
- *
- * The backend `EDIT_MODE_ENABLED=1` setting must also be enabled before the
- * write-tool tier is offered to the LLM.
+/*
+ * Edit-mode gating note: the edit surface (Edit toggle, editable properties,
+ * New Project, write-tool tiers, undo/redo UI) is NOT a build-time flag. It
+ * gates on the BACKEND's EDIT_MODE_ENABLED setting, probed at runtime from
+ * `/api/ifc/edit-state` into the store's `editModeAvailable` - so a backend
+ * with editing on lights the UI up with no rebuild, and the two sides can
+ * never disagree (ADR 003 phased flip).
  */
-// Typed as `boolean` (not the literal `false`) so the gated branches across the
-// app don't read as unreachable / always-false to the type-checker and linter.
-export const EDIT_MODE_ENABLED: boolean = false;
 
 /**
  * BROWSER_ONLY - static viewer-only bundle for public hosting (GitHub Pages

@@ -101,9 +101,9 @@ All CSV, Markdown, and PNG exports land in your downloads folder with an ISO tim
 
 ### Ask mode
 
-The chat panel runs in **Ask** mode: read-only questions and viewer commands. Write tools are blocked at the API layer regardless of the active agent, so a prompt cannot trick a conversation into making edits.
+The chat panel runs in **Ask** mode by default: read-only questions and viewer commands. In Ask mode write tools are blocked at the API layer regardless of the active agent, so a prompt cannot trick a conversation into making edits.
 
-An experimental **Edit** mode exists behind the `EDIT_MODE_ENABLED` feature flag (off by default on both backend and frontend). This release ships with it disabled; see [Model editing](#model-editing-experimental-disabled-by-default) below.
+Switch the chat to **Edit** mode to stage model changes - every AI write is sandboxed and diff-previewed before you apply it. See [Model editing](#model-editing-native-ifc-on-by-default) below.
 
 ### Built-in agents
 
@@ -165,21 +165,27 @@ Open Chat Manager → **Documents** (or press `Ctrl+Shift+I`). Drag a PDF, Markd
 
 ---
 
-## Model editing (experimental, disabled by default)
+## Model editing (native IFC — on by default)
 
-The editing pipeline below ships in the codebase but is **disabled in this release**: the `EDIT_MODE_ENABLED` flag defaults to off on both the backend and the frontend, which hides the Edit pill and hard-blocks every write tool at the API layer. The description is included for completeness.
+IFC Atlas edits **native IFC** through one audited operation layer shared by
+the editor UI, the AI assistant, and MCP clients. See the full guide:
+[Editing models](EDITING.md). Set `EDIT_MODE_ENABLED=0` on the backend for a
+read-only deployment (the whole edit surface — UI, AI write tools, MCP direct
+ops — disappears together; the frontend probes the flag at runtime).
 
 | Feature | Description |
 |---|---|
-| **Sandboxed writes** | Every write call runs inside a copy of the loaded IFC file. Nothing touches the live model until you approve. |
-| **Diff Preview panel** | Per-element before-and-after view, with **Apply** and **Discard** buttons. Covers `IfcRelDefinesByProperties` churn (attach / detach a Pset) and non-single-value property types. |
-| **Inverse-delta undo** | `Ctrl+Z` rolls back the most recent committed edit. The `undo_last_edit` and `get_edit_history` tools expose the same stack to agents. |
-| **Bulk operations** | `rename_elements_batch` and `update_properties_batch` change N elements in one atomic step. The chat panel shows a compact "N changed / N skipped / N failed" badge. |
-| **Wall creation** | `create_wall_from_ends` builds a swept-solid wall between two XY coordinates on a chosen storey at a chosen height. |
-| **Element deletion** | `delete_element` removes an element by Express ID. The Diff Preview warns that the deletion is irreversible after Apply. |
-| **Script sandbox** | In Ask mode, `execute_ifc_query_code` runs read-only IfcOpenShell analyses. In Edit mode, `execute_ifc_code` produces edit-capable diffs that flow through Diff Preview. |
-| **Git-backed checkpoints** | `Shift+H` opens the Checkpoints panel. Every applied edit creates a git snapshot. Click **Restore** to roll back; click **Diff** to see what changed since. |
-| **Live sync** | When a write commits, the backend broadcasts a typed `ifc_patch` event over WebSocket. The viewer updates the spatial tree, hides removed elements, and logs each change to the activity log without a full reload. |
+| **Edit mode** | View/Edit toggle in the top bar. Inline-editable Name and property values in the Properties panel, with type validation and instant refresh. |
+| **Operation layer** | Every mutation — human, AI, or MCP — is a named, validated, actor-attributed, logged, undoable operation over `ifcopenshell.api` (ADR 003). |
+| **Creation ops** | `create_wall` (two-point, storey work plane), `create_slab` (polygon), `create_storey`, `assign_to_storey`, `set_storey_elevation`, `delete_element` — available from the UI, the AI, the REST API, and MCP. |
+| **Wall drawing** | In Edit mode, draw walls with two clicks on the storey work plane: live preview line, length label, grid snap, height/thickness/storey controls. |
+| **Undo / redo** | `Ctrl+Z` / `Ctrl+Y` (also status-bar buttons and the Edit menu), backed by the operation log. Creation undo removes the created elements; deletion undo restores an exact pre-delete snapshot (express IDs preserved). |
+| **Save** | File → Save writes edits back to the loaded file with stable IDs; unsaved-changes badge, close guards, and a browser warning protect against data loss. Save-As still downloads a copy. |
+| **AI edits stay previewed** | Every AI write is staged in a sandbox and presented as a before/after diff with **Apply** / **Discard** — plus an automatic **verifier verdict** (model health delta + geometry sanity) so broken proposals are flagged before you apply them. |
+| **Bulk operations** | `rename_elements_batch` and `update_properties_batch` change N elements in one atomic, one-undo step. |
+| **Script sandbox** | In Ask mode, `execute_ifc_query_code` runs read-only IfcOpenShell analyses. In Edit mode, `execute_ifc_code` produces edit-capable diffs that flow through Diff Preview — with docs-grounded codegen (the agent consults `get_docs` before writing `ifcopenshell.api` code). |
+| **Timeline** | `Shift+H` opens the Timeline: every operation with its actor (you / AI / MCP) merged with automatic git checkpoints; two-point semantic compare (ifcdiff, including property changes); restore any checkpoint. |
+| **Live sync** | Applied changes broadcast to every open viewer: metadata patches update in place; structural changes trigger a debounced, camera-preserving model refresh. |
 
 ---
 

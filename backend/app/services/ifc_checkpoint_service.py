@@ -45,6 +45,10 @@ class IFCCheckpointService:
     """
 
     def __init__(self, repo_dir: Path) -> None:
+        # *repo_dir* is the BASE directory; rebind() nests one repo per model
+        # under it so history survives reloads of the same file (ADR 004).
+        # Until the first rebind the base itself is the repo (legacy layout).
+        self._base_dir = repo_dir
         self._repo_dir = repo_dir
         self._repo: Optional[object] = None  # git.Repo when available
         self._edit_count = 0
@@ -287,8 +291,25 @@ class IFCCheckpointService:
             "entries": entries,
         }
 
+    def rebind(self, model_key: str) -> None:
+        """Point the store at the per-model repo for *model_key*.
+
+        Called on every model load. Deletes NOTHING: reloading the same file
+        rebinds to the same repo, so checkpoints persist across sessions
+        (ADR 004's "git across sessions" — the old behavior rmtree'd the one
+        global repo on every load, destroying all history). Distinct models
+        get distinct repos, so histories can't interleave.
+        """
+        safe = "".join(c for c in model_key if c.isalnum() or c in "-_")[:64] or "default"
+        new_dir = self._base_dir / safe
+        if new_dir != self._repo_dir:
+            self._repo_dir = new_dir
+            self._repo = None
+        self._edit_count = 0
+
     def reset(self) -> None:
-        """Wipe history and reset state (called on new model load)."""
+        """Wipe the CURRENT model's history (explicit destructive action -
+        no longer part of the model-load path, which uses rebind())."""
         self._edit_count = 0
         self._repo = None
         if self._repo_dir.exists():

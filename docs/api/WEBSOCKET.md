@@ -194,4 +194,4 @@ Server -> client. An error occurred (invalid chat payload, in-band stream error,
 
 ---
 
-_Last regenerated: 2026-07-07. Run `python scripts/generate_api_doc.py` to refresh._
+_Last regenerated: 2026-07-11. Run `python scripts/generate_api_doc.py` to refresh._

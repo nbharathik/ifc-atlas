@@ -91,6 +91,7 @@ Start a measurement from the toolbar ruler icon, the command palette, or the sho
 | Key | Action |
 |---|---|
 | `Ctrl+Z` | Undo the most recent committed IFC edit |
+| `Ctrl+Y` | Redo the most recently undone edit (also `Ctrl+Shift+Z`) |
 | `Ctrl+Shift+C` | Copy details (type, name, Express ID, GlobalId, storey) for the current selection |
 
 ---

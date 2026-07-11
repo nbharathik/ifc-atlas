@@ -324,6 +324,10 @@ class ModelRequest(BaseModel):
     supports_structured_output: bool = True
     cost_tier: str = "medium"         # free | low | medium | high
     speed_tier: str = "medium"        # slow | medium | fast
+    # Approximate USD per 1M tokens; drives cost telemetry + budget caps.
+    # None = unknown (cost omitted from usage events).
+    input_cost_per_1m: float | None = None
+    output_cost_per_1m: float | None = None
     notes: str = ""
     enabled: bool = True
 
@@ -485,6 +489,40 @@ async def set_tool_settings(payload: ToolSettingsPayload):
     return {"disabled_tools": sorted(updated)}
 
 
+def _selection_context_block(selected_ids: list[int], cap: int = 20) -> str:
+    """Markdown block describing the user's CURRENT viewer selection (D6).
+
+    Client-authoritative ids enriched with type/name from the loaded model
+    when available. Empty string when nothing is selected. Never raises -
+    selection context is a convenience, not a dependency.
+    """
+    if not selected_ids:
+        return ""
+    lines: list[str] = []
+    try:
+        model = ifc_service.model if ifc_service.is_loaded else None
+    except Exception:  # noqa: BLE001
+        model = None
+    for eid in selected_ids[:cap]:
+        try:
+            entity = model.by_id(int(eid)) if model is not None else None
+        except (RuntimeError, ValueError, TypeError):
+            entity = None
+        if entity is None:
+            lines.append(f"- #{eid}")
+            continue
+        name = getattr(entity, "Name", None) or "Unnamed"
+        lines.append(f"- #{eid} {entity.is_a()} '{name}'")
+    suffix = ""
+    if len(selected_ids) > cap:
+        suffix = f"\n(+{len(selected_ids) - cap} more selected)"
+    return (
+        "## Current selection (3D viewer)\n"
+        "The user has these elements selected right now; \"the selected "
+        "element/wall/etc.\" refers to them:\n" + "\n".join(lines) + suffix
+    )
+
+
 @router.get("/context")
 async def get_model_context():
     """Return the context block currently injected into agent system prompts.
@@ -619,6 +657,38 @@ async def doc_semantic_status():
     """
     from app.services.document_index_service import document_index_service
     return document_index_service.semantic_status()
+
+
+@router.get("/reference-docs/status")
+async def reference_docs_status():
+    """Status of the AI reference-docs index (IfcOpenShell API, IFC schema).
+
+    Drives the Chat Manager "Knowledge" tab: how many reference documents are
+    indexed and whether semantic search is active. Distinct from ``/docs`` which
+    manages the *user's* uploaded documents; reference docs are the API/schema
+    knowledge the ``get_docs`` tool consults.
+    """
+    from app.services.reference_docs_service import reference_docs_service
+    return reference_docs_service.status()
+
+
+@router.post("/reference-docs/fetch")
+async def reference_docs_fetch(source: str = "ifcopenshell"):
+    """(Re)build the reference-docs index from installed sources.
+
+    Currently indexes the installed IfcOpenShell Python API docstrings (grouped
+    per API domain). Runs off the event loop - importing and walking the package
+    takes a few seconds - so the chat WebSocket stays responsive. Returns the
+    index result (indexed domain count, ifcopenshell version). Idempotent: a
+    re-fetch clears and rebuilds.
+    """
+    import asyncio
+
+    from app.services.reference_docs_service import reference_docs_service
+
+    if source not in ("ifcopenshell", "all"):
+        return {"ok": False, "error": f"unknown source '{source}'. Use 'ifcopenshell' or 'all'."}
+    return await asyncio.to_thread(reference_docs_service.index_ifcopenshell_api)
 
 
 # How long a single client-executed tool call may take before the
@@ -863,7 +933,12 @@ async def chat_websocket(websocket: WebSocket):
                 # "hybrid" leaves `target` at whatever the tool declared.
                 if target == "client":
                     return await call_client_tool(name, arguments)
-                result = execute_tool(name, arguments)
+                # Off-loop so slow tools (bSDD WAN calls, sandbox runs) don't
+                # freeze the chat WebSocket; write tools serialize on the
+                # shared edit lock inside the wrapper.
+                from app.services.tools import execute_tool_off_loop
+
+                result = await execute_tool_off_loop(name, arguments)
 
                 # Sandbox-first edit contract: when a write tool stages a sandboxed diff,
                 # fan a `pending_edit` event out on the model-sync WS so
@@ -899,6 +974,16 @@ async def chat_websocket(websocket: WebSocket):
                         _context_block + "\n\n" + _mem_block
                         if _context_block
                         else _mem_block
+                    )
+                # Current viewer selection (D6): per-turn, client-authoritative,
+                # NOT cached with the per-model context (selection changes
+                # every click).
+                _sel_block = _selection_context_block(request.selected_ids)
+                if _sel_block:
+                    _context_block = (
+                        _context_block + "\n\n" + _sel_block
+                        if _context_block
+                        else _sel_block
                     )
                 async for event in stream_chat(
                     message=request.message,

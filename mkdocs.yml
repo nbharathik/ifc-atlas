@@ -74,6 +74,7 @@ nav:
   - Getting Started:
     - Quick start: user/GETTING_STARTED.md
     - Features: user/FEATURES.md
+    - Editing models: user/EDITING.md
     - Keyboard shortcuts: user/KEYBOARD_SHORTCUTS.md
   - AI Agent Guide:
     - Overview: agent/index.md

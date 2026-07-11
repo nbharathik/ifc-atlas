@@ -287,7 +287,7 @@ def test_execute_tool_returns_warming_envelope_without_running(monkeypatch):
 
     raw_called = []
 
-    def _raw(name, args):
+    def _raw(name, args, **kwargs):
         raw_called.append(name)
         return {"ok": True}
 

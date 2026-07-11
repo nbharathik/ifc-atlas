@@ -4,6 +4,7 @@ import { useIfcUpload } from '../../hooks/useIfcUpload';
 import { saveIfcAs } from '../../services/ifc/saveAs';
 import { getEditState } from '../../services/api';
 import { BROWSER_ONLY } from '../../config/featureFlags';
+import { useNewProject, type NewProjectTemplate } from '../../hooks/useNewProject';
 import { apiUrl, invokeCommand, isDesktop } from '../../lib/platform';
 import Icon from '../ui/Icon';
 
@@ -39,6 +40,13 @@ export default function Menubar({
 }: MenubarProps) {
   const project = useStore((s) => s.project);
   const modelLoaded = useStore((s) => s.modelLoaded);
+  const editModeAvailable = useStore((s) => s.editModeAvailable);
+  const editMode = useStore((s) => s.editMode);
+  const modelDirty = useStore((s) => s.modelDirty);
+  const refreshEditState = useStore((s) => s.refreshEditState);
+  const toggleEditMode = useStore((s) => s.toggleEditMode);
+  const undoLastEdit = useStore((s) => s.undoLastEdit);
+  const redoLastEdit = useStore((s) => s.redoLastEdit);
   const reset = useStore((s) => s.reset);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
   const setAgentManagerOpen = useStore((s) => s.setAgentManagerOpen);
@@ -62,6 +70,8 @@ export default function Menubar({
   const openTool = useStore((s) => s.openTool);
 
   const upload = useIfcUpload();
+  const createProject = useNewProject();
+  const addToast = useStore((s) => s.addToast);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
@@ -107,6 +117,34 @@ export default function Menubar({
     close();
   }, [close]);
 
+  const confirmDiscardIfDirty = useCallback((): boolean => {
+    const dirty = useStore.getState().modelDirty;
+    if (!dirty) return true;
+    return window.confirm(
+      'You have unsaved changes. Discard them?\n\n'
+      + 'Use File → Save (or Save as IFC…) first to keep your edits.',
+    );
+  }, []);
+
+  const startNewProject = useCallback(async (template: NewProjectTemplate) => {
+    close();
+    if (!confirmDiscardIfDirty()) return;
+    const result = await createProject(template);
+    if (result.ok === false) addToast(result.error, 'error');
+  }, [close, createProject, addToast, confirmDiscardIfDirty]);
+
+  const runSave = useCallback(async () => {
+    close();
+    try {
+      const { saveModel } = await import('../../services/api');
+      const out = await saveModel();
+      addToast(`Saved ${out.filename}`, 'success');
+      refreshEditState();
+    } catch (err) {
+      addToast(`Save failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
+    }
+  }, [close, addToast, refreshEditState]);
+
   const promptSaveView = useCallback(() => {
     const name = window.prompt('Name this view');
     if (name) onSaveViewpoint(name);
@@ -148,22 +186,59 @@ export default function Menubar({
 
   const fileItems: MenuItem[] = [
     { label: 'Open IFC…', onClick: openFilePicker },
+    // Create a fresh IFC project (plan A3). Editor feature, needs a backend
+    // with editing enabled (runtime /edit-state probe). All three backend
+    // templates are reachable, not just the single-storey default.
+    ...(editModeAvailable && !BROWSER_ONLY ? [
+      { label: 'New project (single storey)…', onClick: () => { void startNewProject('single_storey'); } },
+      { label: 'New project (two storeys)…', onClick: () => { void startNewProject('two_storey'); } },
+      { label: 'New project (empty)…', onClick: () => { void startNewProject('empty'); } },
+    ] satisfies MenuItem[] : []),
     // Save-As round-trips the edited model through the backend - not
     // available in the static viewer-only build (which also has no edits).
     ...(BROWSER_ONLY ? [] : [
+      // In-place Save (A7): working copy → the loaded file. Only offered when
+      // the backend has editing on (there is nothing to save otherwise).
+      ...(editModeAvailable ? [
+        {
+          label: modelDirty ? 'Save (unsaved changes)' : 'Save',
+          onClick: () => { void runSave(); },
+          disabled: !modelLoaded || !modelDirty,
+        },
+      ] satisfies MenuItem[] : []),
       { label: 'Save as IFC…', onClick: () => { void runSaveAs(false); }, disabled: !modelLoaded },
       { label: 'Save as and close…', onClick: () => { void runSaveAs(true); }, disabled: !modelLoaded },
       // BCF topics live on the backend, keyed by the loaded model.
       { label: 'Import BCF topics…', onClick: () => { openTool('bcf'); close(); }, disabled: !modelLoaded },
       { label: 'Export BCF topics', onClick: downloadBcfExport, disabled: !modelLoaded },
     ] satisfies MenuItem[]),
-    { label: 'Close model', onClick: () => { reset(); close(); }, disabled: !modelLoaded },
+    {
+      label: 'Close model',
+      onClick: () => {
+        close();
+        if (!confirmDiscardIfDirty()) return;
+        reset();
+      },
+      disabled: !modelLoaded,
+    },
     { separator: true, label: '' },
     { label: 'Screenshot', kbd: 'S', onClick: () => { onScreenshot(); close(); }, disabled: !modelLoaded },
     { label: 'Save viewpoint…', kbd: 'V', onClick: () => { promptSaveView(); close(); }, disabled: !modelLoaded },
   ];
 
   const editItems: MenuItem[] = [
+    // Edit-mode entry points (B2 discoverability): mode toggle + undo/redo,
+    // shown only when the backend reports editing enabled.
+    ...(editModeAvailable && !BROWSER_ONLY ? [
+      {
+        label: editMode ? 'Exit Edit mode' : 'Enter Edit mode',
+        onClick: () => { toggleEditMode(); close(); },
+        disabled: !modelLoaded,
+      },
+      { label: 'Undo', kbd: 'Ctrl+Z', onClick: () => { void undoLastEdit(); close(); }, disabled: !modelLoaded },
+      { label: 'Redo', kbd: 'Ctrl+Y', onClick: () => { void redoLastEdit(); close(); }, disabled: !modelLoaded },
+      { separator: true, label: '' },
+    ] satisfies MenuItem[] : []),
     { label: 'Clear selection', kbd: 'Esc', onClick: () => { selectElement(null); close(); }, disabled: !modelLoaded },
     { label: 'Clear highlights', onClick: () => { setHighlightedIds([]); close(); }, disabled: !modelLoaded },
     { label: 'Show all elements', kbd: 'A', onClick: () => { clearVisibility(); close(); }, disabled: !modelLoaded },

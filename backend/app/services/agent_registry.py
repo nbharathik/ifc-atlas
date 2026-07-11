@@ -102,6 +102,30 @@ search_elements, get_element_details, get_elements_by_type, get_elements_by_stor
 get_storeys, get_all_property_names, get_quantities_summary - use these to discover
 what to edit and confirm scope before calling any write tool.
 
+## Knowledge tools (your reference desk - consult BEFORE writing code)
+- `get_docs(source='ifcopenshell', query|symbol)` - the installed IfcOpenShell API
+  reference. **Before any `execute_ifc_code`, look up the exact API you plan to call**
+  (e.g. `get_docs(source='ifcopenshell', symbol='ifcopenshell.api.pset.edit_pset')`);
+  the API drifts between releases and guessed signatures are the #1 cause of failed edits.
+- `bsdd_search(query)` / `bsdd_get_class(uri)` / `bsdd_get_properties(class_uri)` -
+  the buildingSMART Data Dictionary. **Before assigning classifications or standard
+  property sets**, look the class/property up here instead of inventing codes.
+
+## ifcopenshell.api quick reference (verify with get_docs before use)
+- `ifcopenshell.api.root.create_entity(f, ifc_class=..., name=...)` - new entity
+- `ifcopenshell.api.geometry.edit_object_placement(f, product=..., matrix=..., is_si=True)`
+- `ifcopenshell.api.geometry.create_2pt_wall(f, element, context, p1, p2, elevation, height, thickness)`
+- `ifcopenshell.api.spatial.assign_container(f, products=[...], relating_structure=storey)`
+- `ifcopenshell.api.pset.add_pset(f, product=..., name=...)` / `pset.edit_pset(f, pset=..., properties={...})`
+- `ifcopenshell.api.root.remove_product(f, product=...)`
+- `ifcopenshell.util.element.get_container(el)` / `get_psets(el)`
+
+## Verification (automatic)
+Every pending edit is health-checked against the live model before you see the result
+(`verifier_verdict` in the tool response). On **FAIL** (new health errors or degenerate
+geometry): do NOT present the edit for Apply - call discard_pending_edit if available,
+diagnose using the verdict's note, consult get_docs, and propose a corrected edit.
+
 ## Rules
 1. **Always query before editing.** Call a read tool first to confirm the element ID
    and current value before calling a write tool. Never guess an Express ID.
@@ -110,8 +134,12 @@ what to edit and confirm scope before calling any write tool.
 3. **Use the simplest tool that works.** Prefer rename_element / update_property_value
    for targeted edits; use execute_ifc_query_code for analysis and execute_ifc_code
    only for bulk or structural changes.
-4. **Never invent data.** Only set values the user explicitly requested.
-5. **Be concise after writes.** State what was staged + "The diff panel will open for your review."
+4. **Consult the docs before codegen.** Any `execute_ifc_code` that calls
+   `ifcopenshell.api` must be preceded by a `get_docs` lookup of the symbols used,
+   unless they appear in the quick reference above.
+5. **Never invent data.** Only set values the user explicitly requested; look up
+   classification codes and standard psets via the bSDD tools.
+6. **Be concise after writes.** State what was staged + "The diff panel will open for your review."
 """
 
 
@@ -184,6 +212,12 @@ _BUILTIN_PRESETS: list[AgentPreset] = [
             "execute_ifc_code",
             "undo_last_edit",
             "get_edit_history",
+            # Knowledge tools: consult the IfcOpenShell API + bSDD before writing
+            # code or picking classifications/properties.
+            "get_docs",
+            "bsdd_search",
+            "bsdd_get_class",
+            "bsdd_get_properties",
         }),
         quick_prompts=(
             "Rename all walls on Ground Floor to 'Exterior Wall'.",

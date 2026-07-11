@@ -1,10 +1,11 @@
 """
 MCP server (viewer-as-server).
 
-Always active: read-only tools from the read_model + validate tiers, plus
-the viewer bridge tools (observe and drive the 3D viewer, including live
-viewport snapshots - presentation only, the model is never modified).
-Gated behind the MCP_ALLOW_WRITES=1 env var: five write tools + three
+Always active: read-only tools from the read_model + validate + read_knowledge
+tiers (knowledge tools answer with no model loaded), plus the viewer bridge
+tools (observe and drive the 3D viewer, including live viewport snapshots -
+presentation only, the model is never modified).
+Gated behind the MCP_ALLOW_WRITES=1 env var: the write tools + three
 management tools.
 
 Viewer bridge tools (always exposed):
@@ -17,21 +18,31 @@ Viewer bridge tools (always exposed):
   waits for the browser to upload the captured image and returns it as
   MCP image content.
 
-Write tools (gated):
-  rename_element, update_property_value, create_wall_from_ends,
-  delete_element, execute_ifc_code.
+Write tools (gated) come in two kinds with DIFFERENT semantics:
+
+* Staged (two-call diff-preview; requires MCP_ALLOW_WRITES=1):
+  create_wall_from_ends, delete_element, execute_ifc_code.
+  1. The tool call returns a pending_edit envelope (edit_id + diff preview).
+  2. Call apply_pending_edit(edit_id) to commit, or discard_pending_edit
+     to abandon. The envelope is published on the model-sync WebSocket so any
+     open DiffPreviewPanel in the viewer lights up and can override the
+     decision in real time.
+
+* Direct operations (apply IMMEDIATELY; require MCP_ALLOW_WRITES=1 AND the
+  backend's EDIT_MODE_ENABLED=1, mirroring the human editor gate):
+  rename_element, update_property_value, undo_last_edit.
+  These route through the operation layer with actor=mcp (audited op log,
+  undo/redo), mutate the live model in one call - do NOT call
+  apply_pending_edit afterwards - and broadcast the same sync events the
+  editor UI emits, so connected viewers update live.
+
+All writes are serialized on the shared edit lock (app.services.edit_lock):
+an MCP write can never interleave with a UI operation or a chat-agent edit.
 
 Management tools (gated):
   apply_pending_edit  - commit a staged edit to the live model.
   discard_pending_edit - abandon a staged edit.
   list_pending_edits  - list all staged edit envelopes.
-
-Two-call diff-preview pattern:
-  1. Call a write tool → returns a pending_edit envelope (edit_id + diff).
-  2. Call apply_pending_edit(edit_id) to commit, or discard_pending_edit(edit_id)
-     to abandon the staged change.
-  The pending_edit envelope is published on the model-sync WebSocket so any open
-  DiffPreviewPanel in the viewer lights up and can override the decision in real time.
 
 Transports:
   - HTTP/SSE:  build_sse_app() → Starlette sub-app; mount at /mcp in main.py.
@@ -67,7 +78,10 @@ logger = logging.getLogger(__name__)
 # Read-only tool selection (always exposed)
 # ---------------------------------------------------------------------------
 
-_EXPOSED_TIERS: frozenset[str] = frozenset({"read_model", "validate"})
+# read_knowledge (bSDD, get_docs) is warming-exempt and answers with no model
+# loaded - exactly what external clients (incl. the stdio process, which has
+# its own empty ifc_service) can use unconditionally. (G3)
+_EXPOSED_TIERS: frozenset[str] = frozenset({"read_model", "validate", "read_knowledge"})
 
 _read_tools: list[dict[str, Any]] = [
     t for t in TOOL_DEFINITIONS if tool_tier(t["name"])[0] in _EXPOSED_TIERS
@@ -83,11 +97,31 @@ _all_tool_names: frozenset[str] = frozenset(t["name"] for t in TOOL_DEFINITIONS)
 # ---------------------------------------------------------------------------
 
 _WRITE_ALLOWLIST: frozenset[str] = frozenset({
-    "rename_element",
-    "update_property_value",
+    # Staged (pending-edit ceremony)
     "create_wall_from_ends",
     "delete_element",
     "execute_ifc_code",
+    "propose_edit",
+    # Direct operations (see _DIRECT_OP_TOOLS)
+    "rename_element",
+    "update_property_value",
+    "rename_elements_batch",
+    "update_properties_batch",
+    "undo_last_edit",
+    # Read-only but edit-surface-scoped (undo-stack listing)
+    "get_edit_history",
+})
+
+# Direct-operation tools mutate the live model immediately (no pending-edit
+# ceremony). They additionally require the backend's EDIT_MODE_ENABLED - the
+# same gate the human editor honours (Invariant 4 dual-mode gating) - so
+# MCP_ALLOW_WRITES alone only unlocks the previewed/staged write path.
+_DIRECT_OP_TOOLS: frozenset[str] = frozenset({
+    "rename_element",
+    "update_property_value",
+    "rename_elements_batch",
+    "update_properties_batch",
+    "undo_last_edit",
 })
 
 _write_tools: list[dict[str, Any]] = [
@@ -507,15 +541,52 @@ async def _call_tool(
 async def _handle_write_tool(
     name: str, args: dict[str, Any]
 ) -> list[types.TextContent]:
-    """Execute a write tool and publish a pending_edit WS event if a diff was staged."""
-    from app.services.model_sync import model_sync_broker
-    from app.services.ifc_service import ifc_service
+    """Execute a write tool with actor=MCP, serialized on the shared edit lock.
+
+    Publishes a pending_edit WS event when a diff was staged, or the same
+    classified operation sync events the editor UI emits when a direct op
+    applied - so connected browser viewers never silently desync from an
+    MCP-originated edit.
+    """
     from app.models.ifc_models import ModelSyncEvent
+    from app.services.edit_lock import edit_lock, publish_operation_events
+    from app.services.ifc_service import ifc_service
+    from app.services.model_sync import model_sync_broker
+    from app.services.operation_service import Actor
     from app.services.sandbox_service import sandbox_service
 
-    result: dict[str, Any] = await asyncio.get_running_loop().run_in_executor(
-        None, execute_tool, name, args
-    )
+    # EDIT_MODE gate for direct ops (staged tools only need MCP_ALLOW_WRITES).
+    if name in _DIRECT_OP_TOOLS:
+        from app.core import config as app_config
+
+        if not app_config.EDIT_MODE_ENABLED:
+            return [types.TextContent(type="text", text=json.dumps({
+                "error": (
+                    f"Tool '{name}' applies immediately to the live model and "
+                    "requires the backend's EDIT_MODE_ENABLED=1 in addition to "
+                    "MCP_ALLOW_WRITES=1. Staged tools (create_wall_from_ends, "
+                    "delete_element, execute_ifc_code) remain available."
+                ),
+            }))]
+
+    # Hold the shared edit lock across the mutation: the tool body runs on a
+    # worker thread (IfcOpenShell is CPU-bound), but the lock guarantees no
+    # UI operation / chat edit / other MCP write runs concurrently.
+    def _run() -> dict[str, Any]:
+        return execute_tool(name, args, actor=Actor.MCP)
+
+    async with edit_lock:
+        result: dict[str, Any] = await asyncio.get_running_loop().run_in_executor(
+            None, _run
+        )
+        # Direct-op result: broadcast the classified sync events (same helper
+        # the editor routes use) while still holding the lock, mirroring
+        # /operations/execute.
+        if result.get("op_id") and result.get("changed"):
+            try:
+                await publish_operation_events(result)
+            except Exception:  # noqa: BLE001
+                logger.exception("MCP op sync publish failed (non-fatal)")
 
     # Mirror chat_routes: publish pending_edit so any open DiffPreviewPanel lights up.
     if result.get("action") == "pending_edit":
@@ -608,18 +679,35 @@ async def _handle_mgmt_tool(
             text=json.dumps({"error": f"Unknown management tool: {name}"}),
         )]
 
-    # apply_pending is synchronous (file swap + IfcOpenShell reload).
+    # apply_pending is synchronous (file swap + IfcOpenShell reload). Runs on
+    # a worker thread but under the shared edit lock, so it can never
+    # interleave with a UI operation or another surface's write.
+    from app.services.edit_lock import edit_lock
+    from app.services.operation_service import Actor, operation_service
+
     def _apply_sync() -> Any:
         return sandbox_service.apply_pending(
             edit_id=edit_id, ifc_service=ifc_service
         )
 
     try:
-        envelope = await asyncio.get_running_loop().run_in_executor(None, _apply_sync)
+        async with edit_lock:
+            envelope = await asyncio.get_running_loop().run_in_executor(None, _apply_sync)
     except ValueError as exc:
         return [types.TextContent(
             type="text", text=json.dumps({"error": str(exc)})
         )]
+
+    # Record the apply in the op log with truthful MCP attribution (mirrors
+    # the REST apply route; also clears any armed redo).
+    operation_service.record_external(
+        name="apply_pending_edit",
+        actor=Actor.MCP,
+        description=envelope.summary or f"Applied pending edit {envelope.edit_id[:8]}",
+        ifc_service=ifc_service,
+        changed_ids=sorted({c.express_id for c in envelope.changes}),
+        edit_id=envelope.edit_id,
+    )
 
     # Fire WS sync events - mirrors ifc_routes.apply_pending_edit exactly.
     try:
@@ -645,7 +733,9 @@ async def _handle_mgmt_tool(
             patch_batch = patch_generator.generate(
                 envelope.changes,
                 source_sha256=contract["model_fingerprint"],
-                actor="mcp_client",
+                # "mcp" matches the op log's Actor.MCP value, so patch
+                # attribution and history attribution agree for one client.
+                actor="mcp",
                 agent_id=None,
             )
             await model_sync_broker.publish(

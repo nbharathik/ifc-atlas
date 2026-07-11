@@ -324,6 +324,38 @@ export default function DiffPreviewPanel() {
             <CountBadge label="created" count={counts.created ?? 0} color={CHANGE_COLORS.created} />
           </div>
 
+          {/* D4 verifier verdict: health delta + geometry sanity computed on
+              the sandbox BEFORE this edit was offered. Advisory - Apply stays
+              enabled, but a fail is loud. */}
+          {envelope.verifier_verdict && (
+            <div
+              title={envelope.verifier_verdict.note ?? ''}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '6px 10px', borderRadius: 6, fontSize: 12,
+                background:
+                  envelope.verifier_verdict.status === 'pass' ? 'color-mix(in srgb, var(--ok, #3a8) 12%, transparent)'
+                  : envelope.verifier_verdict.status === 'warn' ? 'color-mix(in srgb, var(--warn, #ca3) 14%, transparent)'
+                  : 'color-mix(in srgb, var(--err, #c55) 14%, transparent)',
+                color:
+                  envelope.verifier_verdict.status === 'pass' ? 'var(--ok, #3a8)'
+                  : envelope.verifier_verdict.status === 'warn' ? 'var(--warn, #ca3)'
+                  : 'var(--err, #c55)',
+              }}
+            >
+              <Icon
+                name={envelope.verifier_verdict.status === 'pass' ? 'check' : 'alert-circle'}
+                size={13}
+              />
+              <span style={{ fontWeight: 600, textTransform: 'uppercase', fontSize: 10, letterSpacing: 0.4 }}>
+                Verifier: {envelope.verifier_verdict.status}
+              </span>
+              <span style={{ color: 'var(--text-muted)' }}>
+                {envelope.verifier_verdict.note || 'model health checked against the live baseline'}
+              </span>
+            </div>
+          )}
+
           {envelope.changes.length === 0 ? (
             <div
               style={{

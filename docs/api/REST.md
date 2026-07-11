@@ -462,6 +462,42 @@ Delete Prompt
 
 ---
 
+### `POST` `/api/chat/reference-docs/fetch`
+
+Reference Docs Fetch
+
+(Re)build the reference-docs index from installed sources.
+
+Currently indexes the installed IfcOpenShell Python API docstrings (grouped
+per API domain). Runs off the event loop - importing and walking the package
+takes a few seconds - so the chat WebSocket stays responsive. Returns the
+index result (indexed domain count, ifcopenshell version). Idempotent: a
+re-fetch clears and rebuilds.
+
+**Query parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `source` | string |  |  |
+**Response:** Successful Response
+
+---
+
+### `GET` `/api/chat/reference-docs/status`
+
+Reference Docs Status
+
+Status of the AI reference-docs index (IfcOpenShell API, IFC schema).
+
+Drives the Chat Manager "Knowledge" tab: how many reference documents are
+indexed and whether semantic search is active. Distinct from ``/docs`` which
+manages the *user's* uploaded documents; reference docs are the API/schema
+knowledge the ``get_docs`` tool consults.
+
+**Response:** Successful Response
+
+---
+
 ### `GET` `/api/chat/snippets`
 
 Get Snippets
@@ -1064,7 +1100,10 @@ Get Edit State
 Return safe-edit state: dirty flag + original/working filenames.
 
 Used by the Save As menu item to decide whether to show the unsaved
-badge and the post-save "Close model?" prompt.
+badge and the post-save "Close model?" prompt. Also the runtime carrier
+of the backend's EDIT_MODE_ENABLED flag: the frontend gates its whole
+edit surface on this response instead of a compile-time constant, so the
+two sides can never disagree (ADR 003 phased flip).
 
 **Response:** Successful Response
 
@@ -1480,6 +1519,28 @@ Rules checked:
 
 ---
 
+### `GET` `/api/ifc/history/diff`
+
+History Diff
+
+Semantic diff between two history points using ifcdiff (plan C3).
+
+Element-level added/deleted/changed INCLUDING property/pset changes (the
+legacy per-checkpoint diff only compared Name/Description/ObjectType).
+Feeds the Timeline panel's two-point compare. CPU-bound work runs off the
+event loop; results are LRU-cached by content identity.
+
+**Query parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `from_sha` | string | ✓ | Older checkpoint SHA (the diff base). |
+| `to_sha` | string |  | Newer checkpoint SHA; omit to compare against the CURRENT working model. |
+| `limit` | integer |  |  |
+**Response:** Successful Response
+
+---
+
 ### `POST` `/api/ifc/ids-info`
 
 Ids Info Endpoint
@@ -1641,6 +1702,90 @@ by SHA-256 so re-uploads are instant.
 
 ---
 
+### `POST` `/api/ifc/new`
+
+New Project
+
+Create a fresh IFC project from a template and return its bytes (plan A3).
+
+The "create a new IFC file in the viewer" path. A pure generator: it does
+NOT touch the currently-loaded model. The frontend loads the returned bytes
+through the normal upload pipeline, which then makes the new project the
+active model. Runs off the event loop (IfcOpenShell build is CPU-bound).
+
+**Query parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `template` | string |  |  |
+**Response:** Successful Response
+
+---
+
+### `GET` `/api/ifc/operations/catalogue`
+
+Operations Catalogue
+
+List the registered model operations (name, params, tier). Read-only, so
+ungated - lets the editor UI discover what it can do.
+
+**Response:** Successful Response
+
+---
+
+### `POST` `/api/ifc/operations/execute`
+
+Operations Execute
+
+Execute one model operation from the editor UI (a human direct edit).
+
+Routes through the operation layer with actor=USER, then emits the
+classified sync event so open viewers update live. Serialized against
+/edits/apply via the shared edit lock; the mutation runs on the event loop
+(not a thread) to preserve IfcOpenShell's single-writer invariant.
+
+**Request body:** `OperationRequest` (JSON)
+
+**Response:** Successful Response
+
+---
+
+### `GET` `/api/ifc/operations/history`
+
+Operations History
+
+Newest-first, actor-attributed operation log for the current model. Feeds
+the history timeline ('what did the AI change vs what did I change').
+
+**Query parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `limit` | integer |  |  |
+**Response:** Successful Response
+
+---
+
+### `POST` `/api/ifc/operations/redo`
+
+Operations Redo
+
+Redo the most recently undone operation (editor UI). Emits a sync event.
+
+**Response:** Successful Response
+
+---
+
+### `POST` `/api/ifc/operations/undo`
+
+Operations Undo
+
+Undo the most recent operation (editor UI). Emits a sync event.
+
+**Response:** Successful Response
+
+---
+
 ### `GET` `/api/ifc/project`
 
 Get Project
@@ -1663,6 +1808,23 @@ Return warm-up state of the two AI backends.
 
 Available for polling until ``ifcopenshell === "ready"``; transitions
 are also pushed as ``readiness_changed`` WS events.
+
+**Response:** Successful Response
+
+---
+
+### `POST` `/api/ifc/save`
+
+Save Model
+
+Persist working-copy edits back to the ORIGINAL upload path (plan A7).
+
+The counterpart to Save As: instead of downloading a copy, the loaded
+file itself is updated - a warm reload of the same file then opens the
+edited state. Serialized on the edit lock (a save mid-mutation would
+persist a torn state); the ID contract holds (same serializer as Save As,
+covered by test_id_stability_contract). Also snapshots a checkpoint so
+the save is a visible point on the timeline.
 
 **Response:** Successful Response
 
@@ -1803,11 +1965,13 @@ Get Spatial Tree
 
 Undo Last Edit
 
-Revert the most recently applied committed edit.
+Revert the most recently applied committed edit (legacy endpoint).
 
-Pops the top entry off the service undo stack and emits a
-``metadata_changed`` sync event so open viewer sessions update live.
-Returns ``{"undone": false}`` (200) when the stack is already empty.
+Delegates to the operation layer so the undo is serialized on the edit
+lock, recorded in the op log, arms redo, and emits the classified sync
+events - the legacy response shape (``{"undone": ...}``) is preserved
+for existing callers. Returns ``{"undone": false}`` (200) when the stack
+is already empty.
 
 **Response:** Successful Response
 
@@ -2189,4 +2353,4 @@ Upload Snapshot
 
 ---
 
-_Last regenerated: 2026-07-07. Run `python scripts/generate_api_doc.py` to refresh._
+_Last regenerated: 2026-07-11. Run `python scripts/generate_api_doc.py` to refresh._

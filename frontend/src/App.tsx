@@ -33,7 +33,7 @@ const ActivityPanel = lazy(() => import('./components/panels/ActivityPanel'));
 const BudgetDashboardPanel = lazy(() => import('./components/panels/BudgetDashboardPanel').then((m) => ({ default: m.BudgetDashboardPanel })));
 const ChatManagerPanel = lazy(() => import('./components/chat/ChatManagerPanel'));
 const ChatPanel = lazy(() => import('./components/chat/ChatPanel'));
-const CheckpointPanel = lazy(() => import('./components/panels/CheckpointPanel').then((m) => ({ default: m.CheckpointPanel })));
+const TimelinePanel = lazy(() => import('./components/panels/TimelinePanel').then((m) => ({ default: m.TimelinePanel })));
 const CommandPalette = lazy(() => import('./components/layout/CommandPalette'));
 const DiffPreviewPanel = lazy(() => import('./components/edit/DiffPreviewPanel'));
 const Outliner = lazy(() => import('./components/layout/Outliner'));
@@ -431,6 +431,46 @@ export default function App() {
     };
   }, []);
 
+  // Runtime probe of the backend's EDIT_MODE_ENABLED flag. The whole edit
+  // surface (Edit toggle, editable properties, New Project, undo/redo UI)
+  // gates on the store's editModeAvailable instead of a compile-time constant,
+  // so a backend with editing on immediately lights the UI up and the two
+  // sides can never disagree (ADR 003 phased flip).
+  useEffect(() => {
+    if (BROWSER_ONLY) return;
+    let cancelled = false;
+    void import('./services/api').then(({ getEditState }) =>
+      getEditState()
+        .then((s) => {
+          if (!cancelled) {
+            useStore.getState().setEditModeAvailable(Boolean(s.edit_mode_enabled));
+            useStore.setState({ modelDirty: Boolean(s.dirty) });
+          }
+        })
+        .catch(() => {
+          /* backend unreachable - edit surface stays hidden */
+        }),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Data-loss guard (B7): warn before the tab closes while the working copy
+  // has unsaved edits. The browser shows its own generic message; we only
+  // need to flag the event.
+  useEffect(() => {
+    if (BROWSER_ONLY) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (useStore.getState().modelDirty) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
+
   // Model-sync stream for incremental edits and version contract updates.
   useEffect(() => {
     if (!modelLoaded || BROWSER_ONLY) return;
@@ -487,8 +527,22 @@ export default function App() {
         msg.type === 'pending_applied' ||
         msg.type === 'pending_discarded';
 
+      // Operation-layer tier events are serialized under the backend edit
+      // lock and carry the authoritative POST-edit contract - they are how
+      // this client learns the new fingerprint (the op's HTTP response races
+      // this event; whichever lands first updates the contract, the other is
+      // a no-op). Filtering them by the pre-edit fingerprint would drop the
+      // very event describing the edit. rebuild_started is in this set for
+      // the same reason: a structural op's only broadcast is this event, and
+      // it must both update the contract and trigger the geometry reload.
+      const isOperationEvent =
+        msg.type === 'metadata_changed' ||
+        msg.type === 'model_refresh' ||
+        msg.type === 'rebuild_started';
+
       if (
         !isPendingEvent &&
+        !isOperationEvent &&
         state.modelFingerprint &&
         msg.model_fingerprint &&
         msg.model_fingerprint !== state.modelFingerprint &&
@@ -545,14 +599,46 @@ export default function App() {
           const total = Object.values(byType).reduce((sum, v) => sum + v, 0);
           state.setStats({ ...state.stats, by_type: byType, total_elements: total });
         }
+      } else if (msg.type === 'metadata_changed') {
+        // An applied operation (human direct edit, op-layer undo/redo, or the
+        // legacy undo route). The follow-up metadata_patch event carries the
+        // tree-name updates; here we invalidate stale detail caches and log.
+        const op = msg.payload as unknown as {
+          changed_ids?: number[];
+          description?: string;
+          operation?: string;
+          actor?: string;
+        };
+        if (op.changed_ids?.length) {
+          state.invalidateElementDetails(op.changed_ids);
+        }
+        state.logActivity({
+          kind: 'edit',
+          summary: op.description || `Applied ${op.operation ?? 'edit'}`,
+          detail: op.actor ? `actor: ${op.actor}` : '',
+        });
+        state.refreshEditState();
       } else if (msg.type === 'edit_rejected') {
         state.logActivity({
           kind: 'error',
           summary: 'Edit rejected',
           detail: payload.message,
         });
-      } else if (msg.type === 'rebuild_started') {
-        state.logActivity({ kind: 'info', summary: 'Background rebuild started' });
+      } else if (msg.type === 'rebuild_started' || msg.type === 'model_refresh') {
+        // A structural change landed (wall created, element deleted, sandbox
+        // geometry apply, rollback). Correct-first display path: soft-reload
+        // the edited model - debounced, camera-preserving, and WITHOUT
+        // re-uploading (see modelRefresh.ts). Incremental frag deltas replace
+        // this for touched-products-only updates when A5 lands.
+        const why =
+          (msg.payload as { reason?: string; description?: string }).description ||
+          (msg.payload as { reason?: string }).reason ||
+          'structural edit';
+        state.logActivity({ kind: 'edit', summary: `Structural change: ${why}` });
+        state.refreshEditState();
+        void import('./services/ifc/modelRefresh').then((m) =>
+          m.requestModelRefresh(why),
+        );
       } else if (msg.type === 'rebuild_ready') {
         state.logActivity({ kind: 'info', summary: 'Background rebuild ready' });
       } else if (msg.type === 'ifc_patch') {
@@ -772,7 +858,7 @@ export default function App() {
       <ToastStack />
       {!BROWSER_ONLY && <AgentManagerPanelWrapper />}
       <Suspense fallback={null}>
-        {checkpointPanelOpen && !BROWSER_ONLY && <CheckpointPanel />}
+        {checkpointPanelOpen && !BROWSER_ONLY && <TimelinePanel />}
         {budgetPanelOpen && !BROWSER_ONLY && <BudgetDashboardPanel />}
         {snippetPanelOpen && !BROWSER_ONLY && <PromptSnippetPanel />}
         {/* Quantity takeoff, IDS, BCF, plugins, statistics, element filter and

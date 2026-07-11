@@ -124,6 +124,7 @@ export interface ModelSyncEvent {
     | 'native_index_ready'
     | 'readiness_changed'
     | 'metadata_changed'
+    | 'model_refresh'
     | 'viewer_command';
   model_version: number;
   model_fingerprint: string;
@@ -166,6 +167,38 @@ export interface PendingEditEnvelope {
   operations: Record<string, unknown>[];
   changes: PendingEditElement[];
   counts: Record<string, number>;
+  /** D4 verifier: health delta vs the live baseline + geometry sanity,
+   *  computed on the sandbox before this edit was presented. Null/absent =
+   *  verifier skipped (older backend or verification error). */
+  verifier_verdict?: {
+    status: 'pass' | 'warn' | 'fail';
+    new_errors: number;
+    new_warnings: number;
+    geometry?: { checked: number; failures: Array<{ express_id: number; reason: string }> };
+    note?: string;
+  } | null;
+}
+
+/** Result of one operation-layer call (backend OperationResult.to_public_dict).
+ *  Human direct edits from the editor UI go through /api/ifc/operations/*. */
+export interface OperationResult {
+  op_id: string;
+  operation: string;
+  actor: 'user' | 'agent' | 'mcp' | 'system';
+  ok: boolean;
+  changed: boolean;
+  changed_ids: number[];
+  patch_tier: 'none' | 'metadata' | 'transform' | 'geometry' | 'bulk';
+  description: string;
+  edit_id?: string;
+  error?: string;
+  /** Fresh model contract after an applied op (present when changed=true).
+   *  Applied ops re-fingerprint the working file; adopting this immediately
+   *  keeps the sync-event stale filter from dropping this edit's events. */
+  model_version?: number;
+  model_fingerprint?: string;
+  /** Whether a redo is armed after this operation (drives the Redo buttons). */
+  can_redo?: boolean;
 }
 
 export interface AggregateResult {
@@ -353,6 +386,10 @@ export interface ModelEntry {
   supports_structured_output: boolean;
   cost_tier: ModelCostTier;
   speed_tier: ModelSpeedTier;
+  /** Approximate USD per 1M tokens (editable estimates; null = unknown).
+   *  Feeds the usage chip's cost figure and monthly budget enforcement. */
+  input_cost_per_1m: number | null;
+  output_cost_per_1m: number | null;
   notes: string;
   enabled: boolean;
   sort_order: number;

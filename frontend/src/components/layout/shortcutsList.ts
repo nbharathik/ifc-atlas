@@ -66,6 +66,7 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { key: 'Shift+L', label: 'Shift+L', description: 'Copy share link (camera + highlights)', category: 'Capture' },
   // Edit
   { key: 'Ctrl+Z', label: 'Ctrl+Z', description: 'Undo last committed edit', category: 'Edit' },
+  { key: 'Ctrl+Y', label: 'Ctrl+Y', description: 'Redo the most recently undone edit (also Ctrl+Shift+Z)', category: 'Edit' },
   { key: 'Ctrl+Shift+C', label: 'Ctrl+Shift+C', description: 'Copy selected element details (type, name, Express ID, GlobalId, storey)', category: 'Edit' },
   // General
   { key: 'Ctrl/Cmd+K', label: 'Ctrl+K', description: 'Open command palette', category: 'General' },

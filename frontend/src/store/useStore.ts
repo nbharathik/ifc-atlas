@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 import type {
   ProjectInfo, SpatialNode, ElementDetail, ModelStats, ChatMessage, ToolCall, Viewpoint,
-  AgentPreset, ChatAttachment, PendingEditEnvelope,
+  AgentPreset, ChatAttachment, PendingEditEnvelope, OperationResult,
 } from '../types/ifc';
 import type { ServerConvertCapabilities } from '../services/ifc/serverConvert';
 import {
@@ -21,7 +21,12 @@ import {
   writeMutedKindsToStorage,
   type ActivityKind,
 } from '../components/panels/activityFilterHelpers';
-import { undoLastEdit as apiUndoLastEdit } from '../services/api';
+import {
+  undoLastEdit as apiUndoLastEdit,
+  executeOperation as apiExecuteOperation,
+  undoOperation as apiUndoOperation,
+  redoOperation as apiRedoOperation,
+} from '../services/api';
 import type { ReadinessStatusDto } from '../services/api';
 import {
   EMPTY_HISTORY,
@@ -788,6 +793,38 @@ interface AppState {
   /** Invoke backend undo, show a toast, and emit metadata_changed to update tree/props. */
   undoLastEdit: () => Promise<void>;
 
+  // Editor (operation layer) - human direct edits (ADR 003, Invariant 12).
+  // Gated by the BACKEND's EDIT_MODE_ENABLED flag, probed at runtime via
+  // /api/ifc/edit-state into editModeAvailable, so the two sides can never
+  // disagree (the old compile-time frontend constant could).
+  /** Backend EDIT_MODE_ENABLED (runtime probe). False until the probe lands;
+   *  always false in BROWSER_ONLY builds (no backend to probe). */
+  editModeAvailable: boolean;
+  setEditModeAvailable: (v: boolean) => void;
+  /** True when the working copy has unsaved edits (backend dirty flag,
+   *  refreshed after every mutation). Drives the Save badge + close guards. */
+  modelDirty: boolean;
+  /** Debounced re-probe of /api/ifc/edit-state → editModeAvailable +
+   *  modelDirty. Call after anything that may change the dirty flag. */
+  refreshEditState: () => void;
+  /** True when the editor is in Edit mode (editable fields, gizmos). */
+  editMode: boolean;
+  setEditMode: (v: boolean) => void;
+  toggleEditMode: () => void;
+  /** Bumped whenever cached details for the SELECTED element are invalidated,
+   *  so PropertiesPanel re-fetches even though selectedElementId is unchanged
+   *  (fixes the blank-panel-after-commit dead end). */
+  detailRefreshSerial: number;
+  /** Whether a redo is currently armed (from the last operation response). */
+  canRedo: boolean;
+  /** Run one model operation as a human direct edit (actor=USER). Returns the
+   *  result, or null on a transport error (403 gated / 400 no model). Adopts
+   *  the fresh model contract from the response; the backend also emits the
+   *  sync event that refreshes the tree + properties. */
+  applyOperation: (operation: string, params: Record<string, unknown>) => Promise<OperationResult | null>;
+  /** Redo the most recently undone operation (op layer; Ctrl+Y). */
+  redoLastEdit: () => Promise<void>;
+
   // Toasts
   toasts: Toast[];
   addToast: (message: string, kind?: Toast['kind']) => void;
@@ -948,6 +985,11 @@ const initialState = {
   activeToolSetId: readPref<string | null>('pref.activeToolSetId', null),
   activePromptId: readPref<string | null>('pref.activePromptId', null),
   pendingEdits: [] as PendingEditEnvelope[],
+  editMode: false,
+  editModeAvailable: false,
+  modelDirty: false,
+  detailRefreshSerial: 0,
+  canRedo: false,
   activePendingEditId: null as string | null,
   budgetWarning: null as import('../types/ifc').BudgetWarning | null,
   activeFallbackModel: null as import('../types/ifc').ModelFallback | null,
@@ -1351,19 +1393,91 @@ export const useStore = create<AppState>()(
       if (s.isUndoing || !s.modelLoaded) return;
       set({ isUndoing: true });
       try {
-        const result = await apiUndoLastEdit();
-        if (result.undone) {
-          useStore.getState().addToast(`Undid: ${result.description ?? 'last edit'}`, 'success');
-          if (result.changed_ids?.length) {
-            useStore.getState().invalidateElementDetails(result.changed_ids);
+        if (s.editModeAvailable) {
+          // Operation-layer undo: recorded in the op log AND arms redo.
+          const result = await apiUndoOperation();
+          adoptOperationContract(result);
+          if (result.changed) {
+            useStore.getState().addToast(`Undid: ${result.description || 'last edit'}`, 'success');
+            if (result.changed_ids?.length) {
+              useStore.getState().invalidateElementDetails(result.changed_ids);
+            }
+          } else {
+            useStore.getState().addToast(result.error ?? 'Nothing to undo', 'info');
           }
         } else {
-          useStore.getState().addToast(result.reason ?? 'Nothing to undo', 'info');
+          // Legacy inverse-delta undo (edit mode off / older backend).
+          const result = await apiUndoLastEdit();
+          if (result.undone) {
+            useStore.getState().addToast(`Undid: ${result.description ?? 'last edit'}`, 'success');
+            if (result.changed_ids?.length) {
+              useStore.getState().invalidateElementDetails(result.changed_ids);
+            }
+          } else {
+            useStore.getState().addToast(result.reason ?? 'Nothing to undo', 'info');
+          }
         }
       } catch (err) {
         useStore.getState().addToast(`Undo failed: ${String(err)}`, 'error');
       } finally {
         set({ isUndoing: false });
+      }
+    },
+    redoLastEdit: async () => {
+      const s = useStore.getState();
+      if (s.isUndoing || !s.modelLoaded || !s.editModeAvailable) return;
+      set({ isUndoing: true });
+      try {
+        const result = await apiRedoOperation();
+        adoptOperationContract(result);
+        if (result.ok && result.changed) {
+          useStore.getState().addToast(`Redid: ${result.description || 'edit'}`, 'success');
+          if (result.changed_ids?.length) {
+            useStore.getState().invalidateElementDetails(result.changed_ids);
+          }
+        } else {
+          useStore.getState().addToast(result.error ?? 'Nothing to redo', 'info');
+        }
+      } catch (err) {
+        useStore.getState().addToast(`Redo failed: ${String(err)}`, 'error');
+      } finally {
+        set({ isUndoing: false });
+      }
+    },
+
+    // Editor - operation layer (human direct edits, actor=USER)
+    setEditModeAvailable: (v) => set({ editModeAvailable: v }),
+    refreshEditState: () => {
+      if (editStateRefreshTimer !== null) clearTimeout(editStateRefreshTimer);
+      editStateRefreshTimer = setTimeout(() => {
+        editStateRefreshTimer = null;
+        void import('../services/api').then(({ getEditState }) =>
+          getEditState()
+            .then((es) => set({
+              editModeAvailable: Boolean(es.edit_mode_enabled),
+              modelDirty: Boolean(es.dirty),
+            }))
+            .catch(() => { /* backend unreachable - keep last known state */ }),
+        );
+      }, 300);
+    },
+    setEditMode: (v) => set({ editMode: v }),
+    toggleEditMode: () => set((s) => ({ editMode: !s.editMode })),
+    applyOperation: async (operation, params) => {
+      try {
+        const result = await apiExecuteOperation(operation, params);
+        adoptOperationContract(result);
+        if (result.ok && result.changed && result.changed_ids?.length) {
+          // Clear the cached detail so the properties panel re-fetches; the
+          // backend's metadata_changed sync event refreshes the tree.
+          useStore.getState().invalidateElementDetails(result.changed_ids);
+        } else if (!result.ok) {
+          useStore.getState().addToast(`Edit failed: ${result.error ?? 'unknown error'}`, 'error');
+        }
+        return result;
+      } catch (err) {
+        useStore.getState().addToast(`Edit failed: ${String(err)}`, 'error');
+        return null;
       }
     },
 
@@ -1716,14 +1830,25 @@ export const useStore = create<AppState>()(
       // keeps the viewer engine out of the store's static chunk so the
       // entry-bundle split is preserved; ModelService is already loaded by the
       // time any edit fires, so this resolves from cache.
-      void import('../services/ifc/ModelService')
+      const cleared = import('../services/ifc/ModelService')
         .then((m) => m.modelService.invalidateElementDetails(changedIds))
         .catch(() => { /* viewer not loaded yet - nothing to invalidate */ });
-      set((s) => {
-        if (s.selectedElementId !== null && changedIds.includes(s.selectedElementId)) {
-          return { selectedElement: null };
-        }
-        return {};
+      // Flip the panel's refresh keys only AFTER the cache clear resolves:
+      // bumping the serial first would let PropertiesPanel's re-fetch peek
+      // the stale cached detail and render pre-edit values.
+      void cleared.then(() => {
+        set((s) => {
+          if (s.selectedElementId !== null && changedIds.includes(s.selectedElementId)) {
+            // The serial is what re-runs PropertiesPanel's fetch effect (the
+            // selection id is unchanged by an edit), fixing the blank panel
+            // that previously persisted until manual re-selection.
+            return {
+              selectedElement: null,
+              detailRefreshSerial: s.detailRefreshSerial + 1,
+            };
+          }
+          return {};
+        });
       });
     },
 
@@ -1772,3 +1897,30 @@ export const useStore = create<AppState>()(
     })),
   })),
 );
+
+// Trailing-debounce handle for refreshEditState (module scope: the store is a
+// singleton and the timer must survive re-renders).
+let editStateRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Adopt the fresh model contract carried on an applied OperationResult.
+ *
+ * Applied operations re-fingerprint the working file server-side; until the
+ * store learns the new fingerprint, the model-sync stale filter would drop the
+ * very events describing this edit. The HTTP response and the WS event race -
+ * whichever lands first updates the contract, the other is a no-op. */
+function adoptOperationContract(result: OperationResult | null | undefined): void {
+  if (result?.changed && result.model_fingerprint) {
+    useStore.getState().setModelContract({
+      model_version: result.model_version ?? 0,
+      model_fingerprint: result.model_fingerprint,
+      edit_id: result.edit_id ?? '',
+    });
+  }
+  if (result && typeof result.can_redo === 'boolean') {
+    useStore.setState({ canRedo: result.can_redo });
+  }
+  // Any applied/undone/redone op may flip the backend dirty flag.
+  if (result?.changed) {
+    useStore.getState().refreshEditState();
+  }
+}

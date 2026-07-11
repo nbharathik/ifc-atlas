@@ -1,7 +1,7 @@
 <h1 align="center">IFC Atlas</h1>
 
 <p align="center">
-  <strong>Open-source IFC viewer for visualizing and inspecting BIM models with built-in AI chat features.</strong><br>
+  <strong>Open-source, AI-native BIM platform: view, inspect, and edit native IFC models — with an AI assistant, git-like history, and an MCP server.</strong><br>
 </p>
 
 <p align="center">
@@ -12,8 +12,10 @@
 
 - **3D viewer.** Selection, isolate / hide, section planes, measurements, camera presets, saved viewpoints, share links.
 - **Inspector.** Properties, quantities, model tree, search, command palette (`Ctrl+K`).
-- **AI chat.** Multi-provider (OpenAI, Anthropic, OpenRouter) with structured tool calls that act directly on the 3D view.
-- **Integrations.** buildingSMART IDS 1.0 validation, MCP client registry, and a built-in MCP server.
+- **Native IFC editing.** Create projects from templates, edit properties inline, draw walls, create slabs and storeys, delete elements — every change is a logged, undoable IfcOpenShell operation on the IFC file itself, saved with stable IDs. ([guide](docs/user/EDITING.md))
+- **AI chat + AI editing.** Multi-provider (OpenAI, Anthropic, OpenRouter) with structured tool calls that act on the 3D view; AI edits are sandboxed, diff-previewed, and health-verified before you apply them.
+- **History.** Automatic git checkpoints per change, an actor-attributed timeline (you / AI / MCP), semantic compare via ifcdiff, undo/redo, rollback.
+- **Integrations.** buildingSMART IDS 1.0 validation, bSDD + IfcOpenShell docs as AI knowledge tools, MCP client registry, and a built-in MCP server through which external agents (e.g. Claude Desktop) can read and edit models.
 - **Deployment.** Desktop app, Docker self-hosting, or a browser-only demo.
 
 Full feature catalogue and shortcuts: [`docs/user/FEATURES.md`](docs/user/FEATURES.md).

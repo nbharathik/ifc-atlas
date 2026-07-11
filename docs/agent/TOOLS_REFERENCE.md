@@ -574,4 +574,61 @@ Delete an IfcProduct element from the model by its Express ID. Only IfcProduct s
 
 ---
 
-_Last regenerated: 2026-07-07. Run `python scripts/generate_tools_doc.py` to refresh._
+## Read - Knowledge
+
+
+
+### `bsdd_search`
+
+Search the buildingSMART Data Dictionary (bSDD) for IFC classifications and properties by free text. bSDD is the authoritative online dictionary of building classification systems (Uniclass, IFC, DIN, etc.). Use it to find the right classification for an element, discover standard property definitions, or answer 'what classification/property should this have?'. Works WITHOUT a loaded model. Returns matching classes/properties with their bSDD URIs - pass a URI to bsdd_get_class / bsdd_get_properties.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `query` | string | ✓ | Free-text search, e.g. 'exterior wall' or 'fire rating'. |
+| `dictionary_uri` | string |  | Optional bSDD dictionary URI to scope the search. |
+| `limit` | integer |  | Maximum results (default 20, max 50). |
+
+---
+
+### `bsdd_get_class`
+
+Fetch the full bSDD definition of one classification by its URI - definition, parent class, and associated properties. Get the URI from bsdd_search first. Works WITHOUT a loaded model.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `uri` | string | ✓ | The bSDD class URI (from bsdd_search results). |
+
+---
+
+### `bsdd_get_properties`
+
+List the standard properties a bSDD classification defines, by class URI - the correct property set + property names and datatypes the classification expects. Get the URI from bsdd_search. No model needed.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `uri` | string | ✓ | The bSDD class URI whose properties to list. |
+
+---
+
+### `get_docs`
+
+Look up reference documentation. Sources: 'ifcopenshell' (the IfcOpenShell Python API - consult BEFORE writing execute_ifc_code so the calls are correct), 'bsdd' (buildingSMART classifications / properties), 'user' (documents the user uploaded), 'ifc-schema' (IFC entity / attribute reference). Returns the most relevant passages with their source. Works WITHOUT a loaded model. If a source isn't indexed yet the result says so and how to index it.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `source` | string | ✓ | Which knowledge source to query. |
+| `query` | string | ✓ | Natural-language question or keywords. |
+| `symbol` | string |  | Optional exact symbol to prioritise, e.g. 'ifcopenshell.api.geometry.edit_object_placement' or a bSDD class URI. |
+| `limit` | integer |  | Maximum passages to return (default 5, max 15). |
+
+---
+
+_Last regenerated: 2026-07-11. Run `python scripts/generate_tools_doc.py` to refresh._

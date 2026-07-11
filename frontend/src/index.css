@@ -11266,3 +11266,98 @@ html[data-theme="light"] .stats-type-row.active { background: rgba(37, 99, 235, 
 @media (prefers-reduced-motion: reduce) {
   .prop-skeleton-shimmer { animation: none; }
 }
+
+/* ───────────── Edit toolbar (B5 wall drawing) ─────────────
+ * Bottom-centre floating toolbar - measurement toolbar sits top-right,
+ * clip-plane bar top-centre, zoom controls bottom-left, so this slot is
+ * free. Shares the AMOLED token vocabulary with .measurement-toolbar.
+ */
+.edit-toolbar {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: rgba(22, 23, 28, 0.82);
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  border: 1px solid var(--b-3);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-md);
+  font: 500 11px/1.2 var(--font-ui);
+  color: var(--f-1);
+  z-index: 6;
+  max-width: calc(100% - 32px);
+  white-space: nowrap;
+}
+
+html[data-theme="light"] .edit-toolbar {
+  background: rgba(242, 237, 228, 0.94);
+  color: var(--f-1);
+  border-color: var(--b-1);
+}
+
+.edit-toolbar-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--b-2, #374151);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--f-1);
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.edit-toolbar-btn:hover {
+  background: var(--s-3, #262e3f);
+}
+
+.edit-toolbar-btn.active {
+  background: var(--accent, #3b82f6);
+  border-color: var(--accent, #3b82f6);
+  color: #fff;
+}
+
+.edit-toolbar-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--f-2, #9ca3af);
+}
+
+.edit-toolbar-field input {
+  width: 52px;
+  padding: 2px 4px;
+  border: 1px solid var(--b-2, #374151);
+  border-radius: 4px;
+  background: var(--s-1, #141a26);
+  color: var(--f-1);
+  font: inherit;
+}
+
+html[data-theme="light"] .edit-toolbar-field input {
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.edit-toolbar-select {
+  max-width: 150px;
+  padding: 2px 4px;
+  border: 1px solid var(--b-2, #374151);
+  border-radius: 4px;
+  background: var(--s-1, #141a26);
+  color: var(--f-1);
+  font: inherit;
+}
+
+html[data-theme="light"] .edit-toolbar-select {
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.edit-toolbar-hint {
+  color: var(--f-2, #9ca3af);
+  font-size: 10.5px;
+  padding-left: 2px;
+}

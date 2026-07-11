@@ -52,6 +52,9 @@ export default function Topbar({
 
   const selectionFocusMode = useStore((s) => s.selectionFocusMode);
   const setSelectionFocusMode = useStore((s) => s.setSelectionFocusMode);
+  const editModeAvailable = useStore((s) => s.editModeAvailable);
+  const editMode = useStore((s) => s.editMode);
+  const toggleEditMode = useStore((s) => s.toggleEditMode);
   const ghostOn = selectionFocusMode === 'ghost';
 
   const hasHidden = isolatedIds.length > 0 || hiddenIds.length > 0;
@@ -184,6 +187,29 @@ export default function Topbar({
           );
         })}
       </div>
+
+      {/* View/Edit mode toggle (B2): the primary edit-mode entry point.
+          Rendered only when the backend reports editing enabled. */}
+      {editModeAvailable && modelLoaded && (
+        <div className="topbar-group" role="toolbar" aria-label="Editor mode">
+          <button
+            className={`topbar-btn${editMode ? ' active' : ''}`}
+            onClick={() => {
+              toggleEditMode();
+              logActivity({
+                kind: 'edit',
+                summary: editMode ? 'Left Edit mode' : 'Entered Edit mode - click a property value to edit it',
+              });
+            }}
+            title={editMode
+              ? 'Edit mode is ON - properties are editable, Ctrl+Z/Ctrl+Y undo/redo. Click to return to View mode.'
+              : 'Switch to Edit mode to edit element properties'}
+            style={editMode ? { background: 'var(--accent, #4a7)', color: '#fff' } : undefined}
+          >
+            <Icon name="pencil" size={12} /> {editMode ? 'Editing' : 'Edit'}
+          </button>
+        </div>
+      )}
 
       <div className="topbar-spacer" />
 

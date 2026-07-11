@@ -57,6 +57,8 @@ export type IconName =
   | 'cube'
   | 'activity'
   | 'refresh'
+  | 'undo'
+  | 'redo'
   | 'folder'
   | 'file'
   | 'column'
@@ -394,6 +396,19 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <path d="M21 12a9 9 0 1 1-3-6.7" />
       <path d="M21 3v6h-6" />
+    </>
+  ),
+  // Undo / redo (lucide undo-2 / redo-2)
+  'undo': (
+    <>
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11" />
+    </>
+  ),
+  'redo': (
+    <>
+      <path d="m15 14 5-5-5-5" />
+      <path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5v0A5.5 5.5 0 0 0 9.5 20H13" />
     </>
   ),
   // Folder

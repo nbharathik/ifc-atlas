@@ -106,6 +106,12 @@ class ModelEntry:
     # Coarse, provider-independent UI signals (separate from $ cost telemetry).
     cost_tier: str = "medium"   # free | low | medium | high
     speed_tier: str = "medium"  # slow | medium | fast
+    # Approximate USD per 1M tokens, editable like every other field. These are
+    # what llm_service._estimate_cost consults first (its static table only
+    # covers legacy ids), so budget caps accrue for registry models. None =
+    # unknown → cost_usd omitted from usage events rather than guessed at 0.
+    input_cost_per_1m: Optional[float] = None
+    output_cost_per_1m: Optional[float] = None
     notes: str = ""
     enabled: bool = True
     sort_order: int = 0
@@ -145,6 +151,7 @@ def _seed(
     supports_tools: bool = True,
     supports_vision: bool = False,
     supports_structured_output: bool = True,
+    rates: Optional[tuple[float, float]] = None,
     notes: str = "",
 ) -> ModelEntry:
     return ModelEntry(
@@ -162,63 +169,73 @@ def _seed(
         supports_structured_output=supports_structured_output,
         cost_tier=cost_tier,
         speed_tier=speed_tier,
+        input_cost_per_1m=rates[0] if rates else None,
+        output_cost_per_1m=rates[1] if rates else None,
         notes=notes,
     )
 
 
+# Seed $ rates are tier-consistent ESTIMATES (USD per 1M tokens) so budget
+# tracking accrues out of the box; verify against the provider's price page and
+# edit in the Models tab. Free-tier entries carry (0, 0) — a genuine $0 turn —
+# not None (unknown).
 _BUILTIN_SEEDS: list[ModelEntry] = [
     # ── OpenAI ──────────────────────────────────────────────────────────────
     _seed("openai", "gpt-5.5", "GPT-5.5", "reasoning", 0.2, "high", "medium",
-          reasoning={"effort": "high"}, supports_vision=True,
+          reasoning={"effort": "high"}, supports_vision=True, rates=(5.0, 20.0),
           notes="Flagship reasoning + tool use. Best for complex BIM analysis."),
     _seed("openai", "gpt-5.5-pro", "GPT-5.5 Pro", "reasoning", 0.2, "high", "slow",
-          reasoning={"effort": "high"}, supports_vision=True,
+          reasoning={"effort": "high"}, supports_vision=True, rates=(20.0, 80.0),
           notes="Deepest reasoning tier. Slow + costly - reserve for hard problems."),
     _seed("openai", "gpt-5.4", "GPT-5.4", "fast_chat", 0.5, "medium", "fast",
-          supports_vision=True, notes="Balanced general-purpose chat."),
+          supports_vision=True, rates=(2.0, 8.0), notes="Balanced general-purpose chat."),
     _seed("openai", "gpt-5.4-mini", "GPT-5.4 mini", "cheap_fallback", 0.3, "low", "fast",
-          supports_vision=True, notes="Fast, cheap fallback for routine queries."),
+          supports_vision=True, rates=(0.4, 1.6), notes="Fast, cheap fallback for routine queries."),
     _seed("openai", "gpt-5.4-nano", "GPT-5.4 nano", "cheap_fallback", 0.3, "free", "fast",
-          notes="Smallest/cheapest tier. Good for classification + extraction."),
+          rates=(0.1, 0.4), notes="Smallest/cheapest tier. Good for classification + extraction."),
     _seed("openai", "gpt-4.1", "GPT-4.1", "coding", 0.2, "medium", "medium",
-          supports_vision=True, notes="Strong coding + tool calling."),
+          supports_vision=True, rates=(2.0, 8.0), notes="Strong coding + tool calling."),
 
     # ── Anthropic ───────────────────────────────────────────────────────────
     _seed("anthropic", "claude-opus-4-7", "Claude Opus 4.7", "reasoning", 0.2, "high", "slow",
           reasoning={"budget_tokens": 8000}, max_output_tokens=16000, supports_vision=True,
+          rates=(15.0, 75.0),
           notes="Flagship Claude. Extended thinking enabled for deep analysis."),
     _seed("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6", "coding", 0.2, "medium", "fast",
-          supports_vision=True, notes="Best Claude for coding + agentic tool use."),
+          supports_vision=True, rates=(3.0, 15.0),
+          notes="Best Claude for coding + agentic tool use."),
     _seed("anthropic", "claude-opus-4-6", "Claude Opus 4.6", "reasoning", 0.2, "high", "slow",
           reasoning={"budget_tokens": 8000}, max_output_tokens=16000, supports_vision=True,
+          rates=(15.0, 75.0),
           notes="Previous Opus flagship. Extended thinking enabled."),
     _seed("anthropic", "claude-opus-4-5", "Claude Opus 4.5", "reasoning", 0.3, "high", "medium",
-          supports_vision=True, notes="Capable all-rounder."),
+          supports_vision=True, rates=(15.0, 75.0), notes="Capable all-rounder."),
     _seed("anthropic", "claude-haiku-4-5", "Claude Haiku 4.5", "fast_chat", 0.4, "low", "fast",
-          supports_vision=True, notes="Fast, inexpensive Claude for everyday chat."),
+          supports_vision=True, rates=(0.8, 4.0),
+          notes="Fast, inexpensive Claude for everyday chat."),
 
     # ── OpenRouter ──────────────────────────────────────────────────────────
     _seed("openrouter", "deepseek/deepseek-v3.2", "DeepSeek V3.2", "fast_chat", 0.4, "low", "medium",
-          notes="Strong open value model."),
+          rates=(0.3, 1.2), notes="Strong open value model."),
     _seed("openrouter", "deepseek/deepseek-v3.2-speciale", "DeepSeek V3.2 Speciale", "coding", 0.2, "low", "medium",
-          notes="Coding-tuned DeepSeek variant."),
+          rates=(0.3, 1.2), notes="Coding-tuned DeepSeek variant."),
     _seed("openrouter", "deepseek/deepseek-r1", "DeepSeek R1", "reasoning", 0.2, "low", "slow",
-          reasoning={"effort": "medium"},
+          reasoning={"effort": "medium"}, rates=(0.5, 2.2),
           notes="Open reasoning model. Low cost for chain-of-thought tasks."),
     _seed("openrouter", "qwen/qwen3-coder-480b-a35b-instruct", "Qwen3 Coder 480B", "coding", 0.2, "medium", "medium",
-          notes="Large MoE coder. Excellent for code + structured output."),
+          rates=(0.4, 1.6), notes="Large MoE coder. Excellent for code + structured output."),
     _seed("openrouter", "qwen/qwen3.6-35b-a3b", "Qwen3.6 35B A3B", "fast_chat", 0.4, "low", "fast",
-          notes="Efficient MoE general chat."),
+          rates=(0.15, 0.6), notes="Efficient MoE general chat."),
     _seed("openrouter", "qwen/qwen3.6-flash", "Qwen3.6 Flash", "cheap_fallback", 0.4, "free", "fast",
-          notes="Fastest/cheapest Qwen tier."),
+          rates=(0.0, 0.0), notes="Fastest/cheapest Qwen tier."),
     _seed("openrouter", "qwen/qwen3.5-plus-2026-04-20", "Qwen3.5 Plus", "fast_chat", 0.4, "low", "medium",
-          notes="Dated Qwen3.5 Plus snapshot."),
+          rates=(0.4, 1.2), notes="Dated Qwen3.5 Plus snapshot."),
     _seed("openrouter", "google/gemma-4-26b-a4b-it", "Gemma 4 26B", "cheap_fallback", 0.4, "free", "fast",
-          notes="Open Google model. Good cheap fallback."),
+          rates=(0.0, 0.0), notes="Open Google model. Good cheap fallback."),
     _seed("openrouter", "moonshotai/kimi-k2", "Kimi K2", "coding", 0.2, "low", "medium",
-          notes="Agentic coding + long-context."),
+          rates=(0.5, 2.0), notes="Agentic coding + long-context."),
     _seed("openrouter", "openrouter/free", "OpenRouter Free (auto)", "cheap_fallback", 0.5, "free", "medium",
-          supports_structured_output=False,
+          supports_structured_output=False, rates=(0.0, 0.0),
           notes="Free auto-routed model. Capabilities vary by what OpenRouter selects."),
 ]
 
@@ -270,6 +287,28 @@ class ModelRegistry:
             self._seeded_ids.add(seed.id)
             next_order += 1
             changed = True
+
+        # Backfill: the $ rate fields were added after many installs first
+        # seeded these ids, and the seed-merge ledger (correctly) never
+        # re-touches them. An entry that has never carried rates (both None,
+        # impossible to have set deliberately before the fields existed)
+        # inherits its seed's estimate so budget tracking starts accruing.
+        seed_by_id = {s.id: s for s in _BUILTIN_SEEDS}
+        for mid, m in list(self._models.items()):
+            seed = seed_by_id.get(mid)
+            if (
+                seed is not None
+                and not m.is_custom
+                and m.input_cost_per_1m is None
+                and m.output_cost_per_1m is None
+                and seed.input_cost_per_1m is not None
+            ):
+                self._models[mid] = replace(
+                    m,
+                    input_cost_per_1m=seed.input_cost_per_1m,
+                    output_cost_per_1m=seed.output_cost_per_1m,
+                )
+                changed = True
 
         if changed or not _MODELS_FILE.exists():
             self._save()
@@ -422,6 +461,13 @@ def _clamp_choice(value: Any, allowed: tuple[str, ...], default: str) -> str:
     return value if isinstance(value, str) and value in allowed else default
 
 
+def _coerce_rate(value: Any) -> Optional[float]:
+    """USD-per-1M-token rate: non-negative number, else None (= unknown)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if value >= 0 else None
+
+
 def _to_dict(m: ModelEntry) -> dict:
     return {
         "id": m.id,
@@ -438,6 +484,8 @@ def _to_dict(m: ModelEntry) -> dict:
         "supports_structured_output": m.supports_structured_output,
         "cost_tier": m.cost_tier,
         "speed_tier": m.speed_tier,
+        "input_cost_per_1m": m.input_cost_per_1m,
+        "output_cost_per_1m": m.output_cost_per_1m,
         "notes": m.notes,
         "enabled": m.enabled,
         "sort_order": m.sort_order,
@@ -473,6 +521,8 @@ def _from_dict(d: dict) -> ModelEntry:
         supports_structured_output=bool(d.get("supports_structured_output", True)),
         cost_tier=_clamp_choice(d.get("cost_tier"), COST_TIERS, "medium"),
         speed_tier=_clamp_choice(d.get("speed_tier"), SPEED_TIERS, "medium"),
+        input_cost_per_1m=_coerce_rate(d.get("input_cost_per_1m")),
+        output_cost_per_1m=_coerce_rate(d.get("output_cost_per_1m")),
         notes=str(d.get("notes") or ""),
         enabled=bool(d.get("enabled", True)),
         sort_order=int(d.get("sort_order") or 0),

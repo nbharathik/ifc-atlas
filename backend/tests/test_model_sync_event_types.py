@@ -82,18 +82,37 @@ class TestAllowedSet:
 
 class TestCallSiteGuard:
     def test_scan_finds_known_call_sites(self):
-        """Sanity-check the regex itself: it must find the publishers we know
-        exist (ifc_routes undo + viewer command bridge). An empty scan would
-        make the guard test below pass vacuously."""
+        """Sanity-check the regex itself: it must find publishers we know
+        exist (ifc_routes pending-edit flow + viewer command bridge). An empty
+        scan would make the guard test below pass vacuously.
+
+        Note: operation-tier events (metadata_changed / rebuild_started /
+        geometry_patch) are no longer literal call sites - they publish via
+        edit_lock._TIER_TO_SYNC_TYPE, covered by the dedicated test below."""
         found_types = {literal for _, literal in _scan_call_sites()}
-        assert "metadata_changed" in found_types, (
-            "Regex scan did not find the known metadata_changed publisher in "
+        assert "pending_applied" in found_types, (
+            "Regex scan did not find the known pending_applied publisher in "
             "app/api/ifc_routes.py - the call-site pattern may have drifted"
         )
         assert "viewer_command" in found_types, (
             "Regex scan did not find the known viewer_command publisher in "
             "app/api/viewer_state_routes.py - the call-site pattern may have drifted"
         )
+
+    def test_shared_tier_map_values_are_allowed(self):
+        """The op-layer publisher resolves its event type through
+        edit_lock._TIER_TO_SYNC_TYPE (a variable, invisible to the literal
+        scan) - every mapped value must be in the model's Literal, plus the
+        fallback used for unmapped tiers."""
+        from app.services.edit_lock import _TIER_TO_SYNC_TYPE
+
+        allowed = _allowed_types()
+        for tier, event_type in _TIER_TO_SYNC_TYPE.items():
+            assert event_type in allowed, (
+                f"edit_lock maps patch tier {tier!r} to unknown sync event "
+                f"type {event_type!r}"
+            )
+        assert "metadata_changed" in allowed  # the unmapped-tier fallback
 
     def test_every_published_type_is_allowed(self):
         """Each ModelSyncEvent(type="X") literal in app/ must be in the model's

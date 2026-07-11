@@ -1,0 +1,93 @@
+/* Knowledge section (Chat Manager → Knowledge tab, plan E4).
+   Follows the cm-docs / cm-mcp visual language in index.css. */
+
+.cm-knowledge { flex: 1; display: flex; flex-direction: column; padding: 20px 24px; min-width: 0; overflow: auto; }
+
+.cm-knowledge-header { margin-bottom: 16px; }
+.cm-knowledge-title { font-size: 14px; font-weight: 700; color: var(--f-0, #eee); margin: 0 0 6px; }
+.cm-knowledge-hint { font-size: 11px; color: var(--f-3, #777); margin: 0; line-height: 1.55; }
+
+.cm-knowledge-card {
+  border: 1px solid var(--b-1, #141414);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  background: var(--s-1, #0a0a0a);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cm-knowledge-card-head { display: flex; align-items: center; gap: 10px; }
+.cm-knowledge-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--warn, #d9a63f); }
+.cm-knowledge-dot--on { background: var(--ok, #4caf7d); }
+.cm-knowledge-card-title-block { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.cm-knowledge-card-title { font-size: 12px; font-weight: 600; color: var(--f-0, #eee); }
+.cm-knowledge-card-status { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--f-3, #777); }
+
+.cm-knowledge-card-desc { font-size: 11px; color: var(--f-2, #999); margin: 0; line-height: 1.55; }
+.cm-knowledge-card-desc code,
+.cm-knowledge-hint code,
+.cm-knowledge-warn-text code,
+.cm-knowledge-footer code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  padding: 1px 4px;
+  background: var(--s-2, #111);
+  border-radius: 3px;
+}
+
+/* Prominent "empty index" call-out - this is the difference between the AI's
+   reference desk working or returning not_indexed. */
+.cm-knowledge-warn {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn, #d9a63f) 45%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warn, #d9a63f) 10%, transparent);
+  color: var(--warn, #d9a63f);
+}
+.cm-knowledge-warn-title { font-size: 11px; font-weight: 700; margin-bottom: 2px; }
+.cm-knowledge-warn-text { font-size: 11px; color: var(--f-1, #bbb); line-height: 1.55; }
+
+.cm-knowledge-chips { margin: 0; }
+
+.cm-knowledge-domains { font-size: 11px; color: var(--f-3, #777); }
+.cm-knowledge-domains summary { cursor: pointer; user-select: none; }
+.cm-knowledge-domains summary:hover { color: var(--f-1, #bbb); }
+.cm-knowledge-domain-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.cm-knowledge-domain {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  padding: 2px 6px;
+  background: var(--s-2, #111);
+  border: 1px solid var(--b-1, #141414);
+  border-radius: 4px;
+  color: var(--f-2, #999);
+}
+
+/* Inline fetch outcome message */
+.cm-knowledge-msg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.cm-knowledge-msg--ok { color: var(--ok, #4caf7d); }
+.cm-knowledge-msg--err { color: var(--err, #e05555); }
+
+.cm-knowledge-footer {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--b-1, #141414);
+  font-size: 10px;
+  color: var(--f-3, #666);
+  line-height: 1.5;
+}
+
+/* Busy spinner on the fetch button's refresh icon */
+.cm-knowledge-spin { animation: cm-knowledge-rotate 0.9s linear infinite; }
+@keyframes cm-knowledge-rotate { to { transform: rotate(360deg); } }

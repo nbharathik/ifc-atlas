@@ -16,7 +16,6 @@ import { exportFilename } from '../../services/exportFilename';
 import { apiUrl, wsUrl as backendWsUrl } from '../../lib/platform';
 import type { ThreadState } from '../../services/api';
 import Icon, { type IconName } from '../ui/Icon';
-import { EDIT_MODE_ENABLED } from '../../config/featureFlags';
 import AiKeysModal from './AiKeysModal';
 import AIReadinessChip from './AIReadinessChip';
 import { formatToolCallClipboard, writeToClipboard } from './chatClipboardHelpers';
@@ -486,6 +485,7 @@ const BOTTOM_PIN_PX = 80;
 export default function ChatPanel({ embedded = false }: ChatPanelProps = {}) {
   const chatMessages = useStore((s) => s.chatMessages);
   const chatLoading = useStore((s) => s.chatLoading);
+  const editModeAvailable = useStore((s) => s.editModeAvailable);
   const chatProvider = useStore((s) => s.chatProvider);
   const chatModel = useStore((s) => s.chatModel);
   const chatTemperature = useStore((s) => s.chatTemperature);
@@ -1275,6 +1275,16 @@ export default function ChatPanel({ embedded = false }: ChatPanelProps = {}) {
       attachments: m.attachments || [],
     }));
 
+    // Current viewer selection, client-authoritative (plan D6): the backend
+    // injects it as a per-turn context block so "the selected wall" resolves
+    // without the agent polling viewer state.
+    const selState = useStore.getState();
+    const selectedIds = selState.selectedIds.length > 0
+      ? selState.selectedIds
+      : selState.selectedElementId !== null
+        ? [selState.selectedElementId]
+        : [];
+
     const payload = {
       message: msg,
       history,
@@ -1289,6 +1299,7 @@ export default function ChatPanel({ embedded = false }: ChatPanelProps = {}) {
       model_registry_id: effectiveRegistryId,
       thread_id: useStore.getState().chatThreadId,
       use_graph: true,
+      selected_ids: selectedIds.slice(0, 50),
     };
 
     try {
@@ -1462,10 +1473,9 @@ export default function ChatPanel({ embedded = false }: ChatPanelProps = {}) {
               <Icon name="message-square" size={12} />
               Ask
             </button>
-            {/* Edit pill - hidden for v1 (EDIT_MODE_ENABLED). The Edit harness,
-                switchToEdit, EDIT_QUICK_ACTIONS and the chatMode==='edit'
-                branches stay in place so flipping the flag re-enables them. */}
-            {EDIT_MODE_ENABLED && (
+            {/* Edit pill - rendered only when the backend reports editing
+                enabled (runtime /edit-state probe into editModeAvailable). */}
+            {editModeAvailable && (
               <button
                 className={`chat-mode-pill${chatMode === 'edit' ? ' chat-mode-pill--active' : ''}`}
                 onClick={switchToEdit}

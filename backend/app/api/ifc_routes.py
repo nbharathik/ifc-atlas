@@ -15,15 +15,18 @@ from typing import Literal, Optional
 
 logger = logging.getLogger(__name__)
 
-# Serialize concurrent /apply calls so two staged edits cannot
-# race the IfcOpenShell model mutation + sync-event broadcast pair. The
-# second concurrent caller gets a structured 409 "edit_in_progress"
+# Serialize concurrent mutations (apply, operations, MCP writes) so two
+# writers cannot race the IfcOpenShell model mutation + sync-event broadcast
+# pair. The lock is shared across REST/chat/MCP via app.services.edit_lock;
+# a second concurrent /apply caller gets a structured 409 "edit_in_progress"
 # response so the client can show a toast + auto-retry.
-_apply_lock: asyncio.Lock = asyncio.Lock()
+from app.services.edit_lock import edit_lock as _apply_lock  # noqa: E402
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel, Field
 
+from app.core import config as app_config
 from app.core.config import FRAGMENT_CACHE_DIR, MAX_IFC_UPLOAD_BYTES, UPLOAD_DIR
 from app.models.ifc_models import (
     AABBBulkRequest,
@@ -72,6 +75,7 @@ from app.services.metadata_index_service import metadata_index_service
 from app.services.model_health import run_health_check
 from app.services.readiness_service import broadcast_readiness_changed, readiness_service
 from app.services.model_sync import model_sync_broker
+from app.services.operation_service import Actor, operation_service
 from app.services.patch_generator import patch_generator
 from app.services.sandbox_service import sandbox_service
 from app.services.sidecar_manager import sidecar_manager
@@ -252,8 +256,11 @@ async def upload_ifc(
         (time.perf_counter() - upload_started) * 1000,
     )
 
-    # Reset checkpoint history and snapshot the initial uploaded state.
-    ifc_checkpoint_service.reset()
+    # Rebind checkpoint history to this model's own repo (history persists
+    # across reloads of the same file) and snapshot the uploaded baseline.
+    # snapshot() dedupes identical content, so re-uploading the same bytes
+    # doesn't create an empty commit.
+    ifc_checkpoint_service.rebind(ifc_service.original_fingerprint or safe_name)
     _snapshot_after_upload(safe_name)
 
     # Fire-and-forget background tasks on upload.
@@ -612,7 +619,7 @@ async def warm_from_cache(
     readiness_service.mark_ifcopenshell_ready()
     await broadcast_readiness_changed()
 
-    ifc_checkpoint_service.reset()
+    ifc_checkpoint_service.rebind(ifc_service.original_fingerprint or matched.name)
     _snapshot_after_upload(matched.name)
 
     meta = _build_meta(include_tree_stats=True)
@@ -952,6 +959,19 @@ async def _apply_pending_edit_locked(edit_id: str) -> PendingEditEnvelope:
     # Git snapshot - fire-and-forget; failure must not break the edit flow.
     _snapshot_after_edit(envelope.summary or f"edit {envelope.edit_id[:8]}")
 
+    # Record the apply in the operation log (plan A6/C1): without this every
+    # AI sandbox edit - the agent's most impactful mutations - was invisible
+    # to /operations/history, and a redo armed before the apply would replay
+    # a stale op onto the post-apply model (record_external clears it).
+    operation_service.record_external(
+        name="apply_pending_edit",
+        actor=Actor.AGENT,
+        description=envelope.summary or f"Applied pending edit {envelope.edit_id[:8]}",
+        ifc_service=ifc_service,
+        changed_ids=sorted({c.express_id for c in envelope.changes}),
+        edit_id=envelope.edit_id,
+    )
+
     return envelope
 
 
@@ -1038,30 +1058,155 @@ async def discard_pending_edit(edit_id: str):
 
 @router.post("/undo")
 async def undo_last_edit():
-    """Revert the most recently applied committed edit.
+    """Revert the most recently applied committed edit (legacy endpoint).
 
-    Pops the top entry off the service undo stack and emits a
-    ``metadata_changed`` sync event so open viewer sessions update live.
-    Returns ``{"undone": false}`` (200) when the stack is already empty.
+    Delegates to the operation layer so the undo is serialized on the edit
+    lock, recorded in the op log, arms redo, and emits the classified sync
+    events - the legacy response shape (``{"undone": ...}``) is preserved
+    for existing callers. Returns ``{"undone": false}`` (200) when the stack
+    is already empty.
     """
     _check_loaded()
-    result = ifc_service.undo_last_edit()
-    if result.get("undone"):
-        contract = ifc_service.get_model_contract()
-        await model_sync_broker.publish(
-            ModelSyncEvent(
-                type="metadata_changed",
-                model_version=contract["model_version"],
-                model_fingerprint=contract["model_fingerprint"],
-                edit_id=result.get("reverted_edit_id", ""),
-                payload={
-                    "changed_ids": result.get("changed_ids", []),
-                    "description": result.get("description", ""),
-                    "issues": result.get("issues", []),
-                },
-            )
+    async with _apply_lock:
+        result = operation_service.undo(ifc_service, actor=Actor.USER)
+        await _publish_operation_result(result)
+    return {
+        "undone": result.changed,
+        "reverted_edit_id": result.detail.get("reverted_edit_id"),
+        "description": result.description,
+        "issues": result.detail.get("issues", []),
+        "changed_ids": result.changed_ids,
+        **({} if result.changed else {"reason": result.error or "Undo stack is empty"}),
+    }
+
+
+# ────────────────────────────────────────────────────────────────────
+# Operation layer - editor UI direct edits (ADR 003, Invariant 12).
+# The editor drives mutations through operation_service with actor=USER:
+# human direct edits take the fast path (no sandbox/Apply ceremony), AI
+# edits keep the diff-preview flow. Every op is logged + emits a sync
+# event. Gated by EDIT_MODE_ENABLED (phased flip per ADR 003).
+# ────────────────────────────────────────────────────────────────────
+
+class OperationRequest(BaseModel):
+    operation: str
+    params: dict = Field(default_factory=dict)
+
+
+async def _publish_operation_result(result) -> None:
+    """Broadcast the classified sync events for an applied operation so open
+    viewers update live. Thin wrapper over the shared publisher in
+    ``app.services.edit_lock`` (also used by the MCP write path), passing this
+    module's (test-patchable) service + broker references."""
+    from app.services.edit_lock import publish_operation_events
+
+    await publish_operation_events(
+        result.to_public_dict(), ifc_service=ifc_service, broker=model_sync_broker,
+    )
+
+
+def _require_edit_mode() -> None:
+    if not app_config.EDIT_MODE_ENABLED:
+        raise HTTPException(
+            403, "Edit mode is disabled. Set EDIT_MODE_ENABLED=1 to enable editing."
         )
-    return result
+
+
+@router.get("/operations/catalogue")
+async def operations_catalogue():
+    """List the registered model operations (name, params, tier). Read-only, so
+    ungated - lets the editor UI discover what it can do."""
+    return {"operations": operation_service.catalogue()}
+
+
+@router.get("/operations/history")
+async def operations_history(limit: int = 100):
+    """Newest-first, actor-attributed operation log for the current model. Feeds
+    the history timeline ('what did the AI change vs what did I change')."""
+    _check_loaded()
+    return {"operations": operation_service.history(ifc_service, limit=min(limit, 500))}
+
+
+@router.post("/operations/execute")
+async def operations_execute(body: OperationRequest):
+    """Execute one model operation from the editor UI (a human direct edit).
+
+    Routes through the operation layer with actor=USER, then emits the
+    classified sync event so open viewers update live. Serialized against
+    /edits/apply via the shared edit lock; the mutation runs on the event loop
+    (not a thread) to preserve IfcOpenShell's single-writer invariant.
+    """
+    _require_edit_mode()
+    _check_loaded()
+    async with _apply_lock:
+        result = operation_service.execute(
+            body.operation, body.params, actor=Actor.USER, ifc_service=ifc_service,
+        )
+        await _publish_operation_result(result)
+    return _operation_response(result)
+
+
+@router.post("/operations/undo")
+async def operations_undo():
+    """Undo the most recent operation (editor UI). Emits a sync event."""
+    _require_edit_mode()
+    _check_loaded()
+    async with _apply_lock:
+        result = operation_service.undo(ifc_service, actor=Actor.USER)
+        await _publish_operation_result(result)
+    return _operation_response(result)
+
+
+@router.post("/operations/redo")
+async def operations_redo():
+    """Redo the most recently undone operation (editor UI). Emits a sync event."""
+    _require_edit_mode()
+    _check_loaded()
+    async with _apply_lock:
+        result = operation_service.redo(ifc_service, actor=Actor.USER)
+        await _publish_operation_result(result)
+    return _operation_response(result)
+
+
+def _operation_response(result) -> dict:
+    """Public op result + the fresh model contract.
+
+    Every applied operation re-fingerprints the working file, so without the
+    new contract in the HTTP response the client's stale-fingerprint filter
+    would drop the very sync events describing this edit (the WS event and
+    this response race; the client takes whichever arrives first).
+    """
+    out = result.to_public_dict()
+    if result.changed:
+        contract = ifc_service.get_model_contract()
+        out["model_version"] = contract["model_version"]
+        out["model_fingerprint"] = contract["model_fingerprint"]
+    # Lets the UI enable/disable its Redo affordances without polling.
+    out["can_redo"] = operation_service.can_redo(ifc_service)
+    return out
+
+
+@router.post("/new")
+async def new_project(template: str = "single_storey"):
+    """Create a fresh IFC project from a template and return its bytes (plan A3).
+
+    The "create a new IFC file in the viewer" path. A pure generator: it does
+    NOT touch the currently-loaded model. The frontend loads the returned bytes
+    through the normal upload pipeline, which then makes the new project the
+    active model. Runs off the event loop (IfcOpenShell build is CPU-bound).
+    """
+    from app.services.project_template_service import create_blank_project
+
+    try:
+        data = await asyncio.to_thread(create_blank_project, template)
+    except Exception as exc:  # genuine IfcOpenShell failure
+        logger.exception("new project creation failed")
+        raise HTTPException(500, f"Failed to create project: {exc}")
+    return Response(
+        content=data,
+        media_type="application/x-ifc",
+        headers={"Content-Disposition": 'attachment; filename="New Project.ifc"'},
+    )
 
 
 @router.get("/edit-history")
@@ -1274,20 +1419,57 @@ async def acknowledge_save_as():
     return {"dirty": ifc_service.dirty}
 
 
+@router.post("/save")
+async def save_model():
+    """Persist working-copy edits back to the ORIGINAL upload path (plan A7).
+
+    The counterpart to Save As: instead of downloading a copy, the loaded
+    file itself is updated - a warm reload of the same file then opens the
+    edited state. Serialized on the edit lock (a save mid-mutation would
+    persist a torn state); the ID contract holds (same serializer as Save As,
+    covered by test_id_stability_contract). Also snapshots a checkpoint so
+    the save is a visible point on the timeline.
+    """
+    _check_loaded()
+    if ifc_service.original_path is None:
+        raise HTTPException(409, "Model has no original file path to save to")
+    async with _apply_lock:
+        try:
+            target = await asyncio.to_thread(ifc_service.save_to_original)
+        except Exception as exc:
+            logger.exception("save_to_original failed")
+            raise HTTPException(500, f"Save failed: {exc}")
+    _snapshot_after_edit(f"Saved to {target.name}")
+    return {
+        "saved": True,
+        "filename": target.name,
+        "dirty": ifc_service.dirty,
+        "model_fingerprint": ifc_service.model_fingerprint,
+    }
+
+
 @router.get("/edit-state")
 async def get_edit_state():
     """Return safe-edit state: dirty flag + original/working filenames.
 
     Used by the Save As menu item to decide whether to show the unsaved
-    badge and the post-save "Close model?" prompt.
+    badge and the post-save "Close model?" prompt. Also the runtime carrier
+    of the backend's EDIT_MODE_ENABLED flag: the frontend gates its whole
+    edit surface on this response instead of a compile-time constant, so the
+    two sides can never disagree (ADR 003 phased flip).
     """
     if not ifc_service.is_loaded:
-        return {"loaded": False, "dirty": False}
+        return {
+            "loaded": False,
+            "dirty": False,
+            "edit_mode_enabled": app_config.EDIT_MODE_ENABLED,
+        }
     original = ifc_service.original_path
     working = ifc_service._file_path  # noqa: SLF001
     return {
         "loaded": True,
         "dirty": ifc_service.dirty,
+        "edit_mode_enabled": app_config.EDIT_MODE_ENABLED,
         "original_filename": ifc_service.original_filename,
         "working_filename": working.name if working else None,
         "original_protected": bool(original and working and original != working),
@@ -2188,10 +2370,26 @@ async def rollback_to_checkpoint(sha: str):
     except Exception as exc:
         raise HTTPException(500, f"Rollback failed: {exc}") from exc
 
+    # Record the rollback in the op log (clears any armed redo - the model
+    # just changed under it) and commit a fresh "Rollback to ..." snapshot so
+    # the newest checkpoint truthfully IS the current state (the panel marks
+    # checkpoints[0] as current).
+    operation_service.record_external(
+        name="rollback",
+        actor=Actor.USER,
+        description=f"Rolled back to checkpoint {sha}",
+        ifc_service=ifc_service,
+    )
+    _snapshot_after_edit(f"Rollback to {sha}")
+
     contract = ifc_service.get_model_contract()
+    # A rollback can change anything, geometry included - broadcast the
+    # structural wire type so connected viewers soft-reload the model (the
+    # legacy metadata_changed under-refreshed: tree/props updated, scene
+    # kept showing pre-rollback geometry).
     await model_sync_broker.publish(
         ModelSyncEvent(
-            type="metadata_changed",
+            type="rebuild_started",
             model_version=contract["model_version"],
             model_fingerprint=contract["model_fingerprint"],
             edit_id=None,
@@ -2203,6 +2401,56 @@ async def rollback_to_checkpoint(sha: str):
         "model_version": contract["model_version"],
         "model_fingerprint": contract["model_fingerprint"],
     }
+
+
+@router.get("/history/diff")
+async def history_diff(
+    from_sha: str = Query(..., description="Older checkpoint SHA (the diff base)."),
+    to_sha: Optional[str] = Query(
+        None, description="Newer checkpoint SHA; omit to compare against the CURRENT working model."
+    ),
+    limit: int = Query(200, ge=1, le=1000),
+):
+    """Semantic diff between two history points using ifcdiff (plan C3).
+
+    Element-level added/deleted/changed INCLUDING property/pset changes (the
+    legacy per-checkpoint diff only compared Name/Description/ObjectType).
+    Feeds the Timeline panel's two-point compare. CPU-bound work runs off the
+    event loop; results are LRU-cached by content identity.
+    """
+    from app.services import history_diff_service
+
+    _check_loaded()
+    if not history_diff_service.is_available():
+        raise HTTPException(503, "ifcdiff is not installed - history compare unavailable")
+
+    old_bytes = ifc_checkpoint_service.restore(from_sha)
+    if old_bytes is None:
+        raise HTTPException(404, f"Checkpoint '{from_sha}' not found")
+
+    if to_sha:
+        new_bytes = ifc_checkpoint_service.restore(to_sha)
+        if new_bytes is None:
+            raise HTTPException(404, f"Checkpoint '{to_sha}' not found")
+        new_key = to_sha
+    else:
+        new_bytes = ifc_service.read_bytes()
+        if new_bytes is None:
+            raise HTTPException(409, "No working model bytes available")
+        new_key = f"current-{ifc_service.model_fingerprint}"
+
+    try:
+        result = await asyncio.to_thread(
+            history_diff_service.compute_diff,
+            old_bytes,
+            new_bytes,
+            old_key=from_sha,
+            new_key=new_key,
+            max_entries=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return {"from_sha": from_sha, "to_sha": to_sha, **result}
 
 
 @router.get("/checkpoints/{sha}/diff", response_model=CheckpointDiffResult)

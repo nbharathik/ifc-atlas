@@ -17,6 +17,9 @@ import {
   type MeasurementSnapshot,
 } from '../../services/viewer/measurementController';
 import { snapToFaceVertex } from '../../services/viewer/vertexSnapHelpers';
+// B5 mount point: wall drawing tool - all logic lives in services/editor/.
+import { WallDrawController } from '../../services/editor/wallDrawController';
+import EditToolbar from './EditToolbar';
 import HighlightBadge from './HighlightBadge';
 import SelectionSummaryChip from './SelectionSummaryChip';
 import PerformanceHud from './PerformanceHud';
@@ -1525,6 +1528,28 @@ export default function ViewerPanel({
     if (!controller) return;
     controller.setMode(measurementMode);
   }, [measurementMode]);
+
+  // B5 mount point: wall drawing tool (Edit mode). ViewerPanel only owns the
+  // instance lifetime - same seam as the MeasurementController above. The ref
+  // feeds the pointer-up click hub; the state feeds the EditToolbar overlay.
+  const wallDrawControllerRef = useRef<WallDrawController | null>(null);
+  const [wallDrawController, setWallDrawController] = useState<WallDrawController | null>(null);
+  useEffect(() => {
+    if (!viewerReady || !viewerRef.current) return;
+    const { world } = viewerRef.current;
+    const controller = new WallDrawController({
+      scene: world.scene.three as THREE.Scene,
+      dom: world.renderer!.three.domElement,
+      getCamera: () => world.camera.three as THREE.Camera,
+    });
+    wallDrawControllerRef.current = controller;
+    setWallDrawController(controller);
+    return () => {
+      controller.dispose();
+      wallDrawControllerRef.current = null;
+      setWallDrawController(null);
+    };
+  }, [viewerReady]);
 
   // Escape cancels pending measurement points, then exits the tool.
   useEffect(() => {
@@ -4418,6 +4443,14 @@ export default function ViewerPanel({
             return;
           }
 
+          // B5 mount point: an armed wall tool consumes non-drag left clicks
+          // ahead of picking/selection (mirrors the measurement hijack below).
+          if (wallDrawControllerRef.current?.isArmed()) {
+            pendingClickPick = null; // drop the prefetched raycast - unused
+            wallDrawControllerRef.current.handleClick(event.clientX, event.clientY);
+            return;
+          }
+
           // Start click-to-highlight timing after drag detection.
           pendingClickStartRef.current = null;
           const tClickStart = performance.now();
@@ -6113,6 +6146,8 @@ export default function ViewerPanel({
           >-</button>
         </div>
       )}
+      {/* B5 mount point: edit-mode drawing toolbar (gates itself on editMode). */}
+      {wallDrawController && <EditToolbar controller={wallDrawController} />}
       <MeasurementControls
         snapshot={measurementSnapshot}
         onFinish={() => measurementControllerRef.current?.commit()}

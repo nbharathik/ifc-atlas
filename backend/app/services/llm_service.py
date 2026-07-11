@@ -24,7 +24,7 @@ from app.services.tool_memo import tool_memo_cache
 from app.services.tools import (
     get_openai_tools,
     get_anthropic_tools,
-    execute_tool,
+    execute_tool_off_loop,
     format_tool_result,
 )
 from app.models.ifc_models import ChatAttachment, ChatMessage
@@ -57,9 +57,31 @@ _COST_PER_1M: dict[str, tuple[float, float]] = {
 }
 
 
+def _registry_rates(model: str) -> Optional[tuple[float, float]]:
+    """Look up $/1M rates for a provider model id in the model registry.
+
+    The registry is UI-editable and covers the models people actually run;
+    the static ``_COST_PER_1M`` table only knows a handful of legacy ids.
+    Registry entries are keyed by slug but priced per ``model_id`` — when
+    several entries share a model_id the first priced one wins.
+    """
+    try:
+        from app.services.model_registry import model_registry
+        for entry in model_registry.all():
+            if (
+                entry.model_id == model
+                and entry.input_cost_per_1m is not None
+                and entry.output_cost_per_1m is not None
+            ):
+                return (entry.input_cost_per_1m, entry.output_cost_per_1m)
+    except Exception:  # pragma: no cover - registry must never break costing
+        return None
+    return None
+
+
 def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     """Return approximate USD cost for a turn. Returns -1.0 when rates unknown."""
-    rates = _COST_PER_1M.get(model)
+    rates = _registry_rates(model) or _COST_PER_1M.get(model)
     if rates is None:
         return -1.0
     in_rate, out_rate = rates
@@ -532,7 +554,7 @@ async def stream_openai(
             if tool_executor is not None:
                 result = await tool_executor(name, args)
             else:
-                result = execute_tool(name, args)
+                result = await execute_tool_off_loop(name, args)
             if not isinstance(result, dict):
                 result = {"result": result}
 
@@ -664,7 +686,7 @@ async def stream_anthropic(
                 if tool_executor is not None:
                     result = await tool_executor(name, args)
                 else:
-                    result = execute_tool(name, args)
+                    result = await execute_tool_off_loop(name, args)
                 if not isinstance(result, dict):
                     result = {"result": result}
 
@@ -836,7 +858,7 @@ async def stream_openrouter(
             if tool_executor is not None:
                 result = await tool_executor(name, args)
             else:
-                result = execute_tool(name, args)
+                result = await execute_tool_off_loop(name, args)
             if not isinstance(result, dict):
                 result = {"result": result}
 
@@ -1166,6 +1188,40 @@ async def stream_via_langgraph(
     _yielded_any = False
     _retried = False
 
+    # Token usage accumulated across every model round in the turn (a ReAct
+    # turn is many model calls). Emitted as ONE usage event before every exit
+    # path so the ChatUsageChip and budget enforcement see graph-path turns —
+    # without this only the fallback streamers reported usage, i.e. budget caps
+    # silently never accrued on the primary path. Accumulators deliberately
+    # survive the transient retry below: the failed attempt's tokens were still
+    # billed.
+    _usage_in = 0
+    _usage_out = 0
+    _cache_read = 0
+    _cache_creation = 0
+
+    def _accumulate_usage(ev_data: dict) -> None:
+        nonlocal _usage_in, _usage_out, _cache_read, _cache_creation
+        out_msg = ev_data.get("output")
+        usage = getattr(out_msg, "usage_metadata", None)
+        if not isinstance(usage, dict):
+            return
+        try:
+            _usage_in += int(usage.get("input_tokens") or 0)
+            _usage_out += int(usage.get("output_tokens") or 0)
+            details = usage.get("input_token_details") or {}
+            _cache_read += int(details.get("cache_read") or 0)
+            _cache_creation += int(details.get("cache_creation") or 0)
+        except (TypeError, ValueError):  # pragma: no cover - malformed provider data
+            pass
+
+    def _final_usage_event() -> Optional[dict]:
+        if _usage_in or _usage_out:
+            return _usage_event(
+                model, provider, _usage_in, _usage_out, _cache_read, _cache_creation
+            )
+        return None
+
     while True:
         try:
             # LangGraph's default recursion_limit is 25 supersteps (~12 tool
@@ -1249,6 +1305,13 @@ async def stream_via_langgraph(
                         "executed_on": executed_on,
                     }
 
+                elif ev_name == "on_chat_model_end":
+                    # Each model round reports usage on its final AIMessage.
+                    _accumulate_usage(ev_data)
+
+            usage_ev = _final_usage_event()
+            if usage_ev is not None:
+                yield usage_ev
             return  # turn completed
 
         except Exception as exc:
@@ -1290,6 +1353,10 @@ async def stream_via_langgraph(
                 else:
                     logger.exception("stream_via_langgraph error for provider=%s", provider)
                     yield {"type": "error", "message": "Agent stream interrupted; response may be incomplete."}
+                # Tokens consumed before the failure were still billed.
+                usage_ev = _final_usage_event()
+                if usage_ev is not None:
+                    yield usage_ev
                 return
             if friendly:
                 # Recognised provider error (quota/billing/auth/rate-limit) with
@@ -1301,6 +1368,9 @@ async def stream_via_langgraph(
                     provider, friendly, type(exc).__name__,
                 )
                 yield {"type": "error", "message": friendly}
+                usage_ev = _final_usage_event()
+                if usage_ev is not None:
+                    yield usage_ev
                 return
             # Unrecognised failure with nothing sent yet - the graph itself may have
             # been the problem, so fall back to the provider-specific path (which
@@ -1309,6 +1379,12 @@ async def stream_via_langgraph(
                 "stream_via_langgraph failed pre-stream (provider=%s); trying raw path: %s",
                 provider, _exc_line(exc),
             )
+            # Report any tokens the aborted graph attempt burned before handing
+            # over; the fallback streamers emit their own usage events and the
+            # consumer sums all usage events in a turn.
+            usage_ev = _final_usage_event()
+            if usage_ev is not None:
+                yield usage_ev
             async for ev in _fallback_stream():
                 yield ev
             return

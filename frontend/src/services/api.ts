@@ -2,7 +2,7 @@ import type {
   ProjectInfo, SpatialNode, ElementSummary, ElementDetail,
   ModelStats, ModelMeta, SearchResult, EditApplyRequest, EditApplyResponse,
   AgentPreset, AgentCreatePayload, McpServerConfig,
-  PendingEditEnvelope, AggregateResult,
+  PendingEditEnvelope, AggregateResult, OperationResult,
 } from '../types/ifc';
 import type { HealthCheckResult } from '../store/useStore';
 import { exportFilename } from './exportFilename';
@@ -78,6 +78,143 @@ export async function applyIfcEdits(request: EditApplyRequest): Promise<EditAppl
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Operation layer - editor UI direct edits (ADR 003). Every call goes through
+// /api/ifc/operations/* with actor=USER; the backend logs it and emits the
+// sync event so the viewer updates. A 403 means edit mode is disabled.
+// ---------------------------------------------------------------------------
+
+export interface OperationCatalogueEntry {
+  name: string;
+  summary: string;
+  writes: boolean;
+  required: Record<string, string>;
+  optional: Record<string, string>;
+  default_tier: string;
+}
+
+export async function executeOperation(
+  operation: string,
+  params: Record<string, unknown>,
+): Promise<OperationResult> {
+  return fetchJson<OperationResult>('/ifc/operations/execute', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ operation, params }),
+  });
+}
+
+export async function undoOperation(): Promise<OperationResult> {
+  return fetchJson<OperationResult>('/ifc/operations/undo', { method: 'POST' });
+}
+
+export async function redoOperation(): Promise<OperationResult> {
+  return fetchJson<OperationResult>('/ifc/operations/redo', { method: 'POST' });
+}
+
+export async function getOperationsCatalogue(): Promise<OperationCatalogueEntry[]> {
+  const r = await fetchJson<{ operations: OperationCatalogueEntry[] }>(
+    '/ifc/operations/catalogue',
+  );
+  return r.operations;
+}
+
+export async function getOperationsHistory(limit = 100): Promise<Record<string, unknown>[]> {
+  const r = await fetchJson<{ operations: Record<string, unknown>[] }>(
+    `/ifc/operations/history?limit=${limit}`,
+  );
+  return r.operations;
+}
+
+// ---------------------------------------------------------------------------
+// History timeline - semantic compare between checkpoints (ifcdiff, plan C3)
+// ---------------------------------------------------------------------------
+
+export interface HistoryDiffEntry {
+  global_id: string;
+  express_id: number | null;
+  ifc_type: string | null;
+  name: string | null;
+  change: 'added' | 'deleted' | 'changed';
+  detail?: Record<string, unknown>;
+}
+
+export interface HistoryDiffResult {
+  from_sha: string;
+  to_sha: string | null;
+  added: number;
+  deleted: number;
+  changed: number;
+  total: number;
+  truncated: boolean;
+  entries: HistoryDiffEntry[];
+}
+
+/** Semantic diff between two checkpoints; omit `toSha` to compare against the
+ *  current working model. Element-level, including property/pset changes. */
+export async function getHistoryDiff(fromSha: string, toSha?: string | null): Promise<HistoryDiffResult> {
+  const params = new URLSearchParams({ from_sha: fromSha });
+  if (toSha) params.set('to_sha', toSha);
+  return fetchJson<HistoryDiffResult>(`/ifc/history/diff?${params}`);
+}
+
+// ---------------------------------------------------------------------------
+// Reference-docs knowledge index (Chat Manager → Knowledge tab, plan E4)
+// ---------------------------------------------------------------------------
+
+/** Semantic-search state embedded in the reference-docs status payload
+ *  (backend `DocumentIndexService.semantic_status()`). */
+export interface ReferenceDocsSemanticStatus {
+  /** fastembed + hnswlib importable in the backend environment. */
+  available: boolean;
+  /** Hybrid (semantic) index actually built for the current chunks. */
+  built: boolean;
+  /** Embedding model id, informational. */
+  model: string;
+  /** Total indexed text chunks across all reference documents. */
+  chunk_count: number;
+  /** BM25/semantic mixing weight, informational. */
+  alpha: number;
+}
+
+/** Payload of GET /chat/reference-docs/status - mirrors the backend
+ *  `ReferenceDocsService.status()` exactly. One document per IfcOpenShell
+ *  API domain (wall, pset, geometry, ...), so `doc_count` == domain count. */
+export interface ReferenceDocsStatus {
+  indexed: boolean;
+  doc_count: number;
+  /** Document names, e.g. "ifcopenshell.api.wall". */
+  documents: Array<string | null>;
+  semantic: ReferenceDocsSemanticStatus;
+}
+
+export async function getReferenceDocsStatus(): Promise<ReferenceDocsStatus> {
+  return fetchJson<ReferenceDocsStatus>('/chat/reference-docs/status');
+}
+
+export async function fetchReferenceDocs(source: 'ifcopenshell' | 'all' = 'ifcopenshell'): Promise<Record<string, unknown>> {
+  return fetchJson<Record<string, unknown>>(`/chat/reference-docs/fetch?source=${source}`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Create a fresh IFC project from a template (plan A3) and return the raw .ifc
+ * bytes. The caller loads them through the normal upload pipeline, which makes
+ * the new project the active model. Templates: 'empty' | 'single_storey' |
+ * 'two_storey'.
+ */
+export async function newProject(template = 'single_storey'): Promise<ArrayBuffer> {
+  const res = await fetch(apiUrl(`${BASE}/ifc/new?template=${encodeURIComponent(template)}`), {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`API error ${res.status}: ${body}`);
+  }
+  return res.arrayBuffer();
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +391,9 @@ export function getIfcFileUrl(): string {
 export interface EditStateDto {
   loaded: boolean;
   dirty: boolean;
+  /** Backend EDIT_MODE_ENABLED flag - the runtime gate for the whole edit
+   *  surface (Edit toggle, editable properties, New Project, write tools). */
+  edit_mode_enabled?: boolean;
   original_filename?: string;
   working_filename?: string;
   original_protected?: boolean;
@@ -263,6 +403,17 @@ export interface EditStateDto {
 
 export async function getEditState(): Promise<EditStateDto> {
   return fetchJson<EditStateDto>('/ifc/edit-state');
+}
+
+/** Persist working-copy edits back to the original upload path (plan A7).
+ *  The server-side counterpart to Save As; resets the dirty flag. */
+export async function saveModel(): Promise<{
+  saved: boolean;
+  filename: string;
+  dirty: boolean;
+  model_fingerprint: string;
+}> {
+  return fetchJson('/ifc/save', { method: 'POST' });
 }
 
 export function getIfcSaveAsUrl(filename: string): string {
@@ -659,6 +810,8 @@ export interface ModelPayload {
   supports_structured_output?: boolean;
   cost_tier?: ModelT['cost_tier'];
   speed_tier?: ModelT['speed_tier'];
+  input_cost_per_1m?: number | null;
+  output_cost_per_1m?: number | null;
   notes?: string;
   enabled?: boolean;
 }

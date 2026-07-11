@@ -280,7 +280,9 @@ def test_delete_element_where_is_server():
 
 
 # ---------------------------------------------------------------------------
-# sandbox_service._find_storey (pure unit - no IFC file)
+# element_factory.find_storey (pure unit - no IFC file). The sandbox wall /
+# delete recipes now delegate to element_factory, the single shared authoring
+# code path for AI-staged and human/MCP direct edits.
 # ---------------------------------------------------------------------------
 
 def _make_storey(name: str, elevation: float = 0.0) -> SimpleNamespace:
@@ -289,54 +291,54 @@ def _make_storey(name: str, elevation: float = 0.0) -> SimpleNamespace:
 
 
 def test_find_storey_exact_match():
-    from app.services.sandbox_service import _find_storey
+    from app.services.element_factory import find_storey
 
     storeys = [_make_storey("Ground Floor"), _make_storey("First Floor")]
     model = MagicMock()
     model.by_type.return_value = storeys
 
-    result = _find_storey(model, "Ground Floor", 0)
+    result = find_storey(model, "Ground Floor")
     assert result.Name == "Ground Floor"
 
 
 def test_find_storey_case_insensitive():
-    from app.services.sandbox_service import _find_storey
+    from app.services.element_factory import find_storey
 
     storeys = [_make_storey("Ground Floor")]
     model = MagicMock()
     model.by_type.return_value = storeys
 
-    result = _find_storey(model, "ground floor", 0)
+    result = find_storey(model, "ground floor")
     assert result.Name == "Ground Floor"
 
 
 def test_find_storey_fuzzy_contains():
-    from app.services.sandbox_service import _find_storey
+    from app.services.element_factory import find_storey
 
     storeys = [_make_storey("Level 0 - Ground"), _make_storey("Level 1 - First")]
     model = MagicMock()
     model.by_type.return_value = storeys
 
-    result = _find_storey(model, "First", 0)
+    result = find_storey(model, "First")
     assert "First" in result.Name
 
 
-def test_find_storey_none_returns_first():
-    from app.services.sandbox_service import _find_storey
+def test_find_storey_none_returns_lowest_elevation():
+    from app.services.element_factory import find_storey
 
-    storeys = [_make_storey("Level 0"), _make_storey("Level 1")]
+    storeys = [_make_storey("Level 1", 3.0), _make_storey("Level 0", 0.0)]
     model = MagicMock()
     model.by_type.return_value = storeys
 
-    result = _find_storey(model, None, 0)
-    assert result.Name == "Level 0"
+    result = find_storey(model, None)
+    assert result.Name == "Level 0", "default storey is the lowest elevation, deterministically"
 
 
 def test_find_storey_no_storeys_raises():
-    from app.services.sandbox_service import _find_storey
+    from app.services.element_factory import find_storey
 
     model = MagicMock()
     model.by_type.return_value = []
 
     with pytest.raises(ValueError, match="no IfcBuildingStorey"):
-        _find_storey(model, None, 0)
+        find_storey(model, None)

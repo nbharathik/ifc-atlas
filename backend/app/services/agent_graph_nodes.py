@@ -192,7 +192,7 @@ def make_langchain_tools(
         allowed_tools: frozenset of allowed tool names; None = all tools.
         tool_executor_fn: async (name, args_dict) → dict.  None = sync fallback.
     """
-    from app.services.tools import TOOL_DEFINITIONS, execute_tool
+    from app.services.tools import TOOL_DEFINITIONS, execute_tool_off_loop
     from langchain_core.tools import StructuredTool
     from pydantic import create_model
 
@@ -203,7 +203,7 @@ def make_langchain_tools(
             if exec_fn is not None:
                 result = await exec_fn(tname, kw)
             else:
-                result = execute_tool(tname, kw)
+                result = await execute_tool_off_loop(tname, kw)
             if not isinstance(result, dict):
                 result = {"result": result}
             return json.dumps(result)

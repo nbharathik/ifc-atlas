@@ -131,7 +131,7 @@ async def _lifespan(_: FastAPI):
 app = FastAPI(
     title="IFC Atlas",
     description="IFC Atlas with Multi-LLM Agent Interface",
-    version="1.0.0",
+    version="1.1.0",
     lifespan=_lifespan,
 )
 
@@ -226,4 +226,4 @@ app.mount("/mcp", build_sse_app(token=_mcp_token))
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "1.0.0"}
+    return {"status": "ok", "version": "1.1.0"}

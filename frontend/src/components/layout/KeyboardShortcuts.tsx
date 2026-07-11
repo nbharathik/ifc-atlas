@@ -66,6 +66,7 @@ export default function KeyboardShortcuts({
   const measurementPanelOpen = useStore((s) => s.measurementPanelOpen);
   const setMeasurementPanelOpen = useStore((s) => s.setMeasurementPanelOpen);
   const undoLastEdit = useStore((s) => s.undoLastEdit);
+  const redoLastEdit = useStore((s) => s.redoLastEdit);
   const isUndoing = useStore((s) => s.isUndoing);
   const navigateSelectionHistory = useStore((s) => s.navigateSelectionHistory);
 
@@ -102,9 +103,21 @@ export default function KeyboardShortcuts({
 
       // Ctrl+Z - undo last committed edit (guard: not already in-flight).
       // Edits only exist with a backend; skip in the viewer-only build.
+      // Routes through the operation layer when the backend reports editing
+      // enabled (arming redo), else the legacy inverse-delta undo.
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z') && !BROWSER_ONLY) {
         e.preventDefault();
         if (modelLoaded && !isUndoing) void undoLastEdit();
+        return;
+      }
+
+      // Ctrl+Y / Ctrl+Shift+Z - redo the most recently undone operation.
+      if (
+        (e.ctrlKey || e.metaKey) && !BROWSER_ONLY &&
+        ((e.key === 'y' || e.key === 'Y') || (e.shiftKey && (e.key === 'z' || e.key === 'Z')))
+      ) {
+        e.preventDefault();
+        if (modelLoaded && !isUndoing) void redoLastEdit();
         return;
       }
 
@@ -491,7 +504,7 @@ export default function KeyboardShortcuts({
       setCommandPaletteOpen, setSettingsOpen, setPerfHudVisible,
       toggleClipPlane,
       measurementPanelOpen, setMeasurementPanelOpen,
-      undoLastEdit, isUndoing,
+      undoLastEdit, redoLastEdit, isUndoing,
       navigateSelectionHistory,
       onCameraView, onFitModel, onScreenshot, onSaveViewpoint,
     ],

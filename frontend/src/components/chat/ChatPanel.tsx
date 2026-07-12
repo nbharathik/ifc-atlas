@@ -19,6 +19,7 @@ import Icon, { type IconName } from '../ui/Icon';
 import AiKeysModal from './AiKeysModal';
 import AIReadinessChip from './AIReadinessChip';
 import { formatToolCallClipboard, writeToClipboard } from './chatClipboardHelpers';
+import { buildMessageParts } from './chatMessageParts';
 import {
   getTopBarOverflowActions,
   nextIndexForKey,
@@ -162,15 +163,160 @@ function BatchEditSummary({ result }: { result: Record<string, unknown> }) {
   );
 }
 
+/** Compact "3 created · 1 renamed" summary from a pending-edit counts map. */
+const PENDING_COUNT_LABELS: Array<[string, string]> = [
+  ['created', 'created'],
+  ['deleted', 'deleted'],
+  ['renamed', 'renamed'],
+  ['retyped', 'retyped'],
+  ['property_changed', 'properties changed'],
+];
+function summarizeCounts(counts?: Record<string, number>): string {
+  if (!counts) return '';
+  const parts: string[] = [];
+  for (const [key, label] of PENDING_COUNT_LABELS) {
+    const n = counts[key];
+    if (typeof n === 'number' && n > 0) parts.push(`${n} ${label}`);
+  }
+  return parts.join('  ·  ');
+}
+
+/**
+ * Inline Approve / Discard for a staged AI edit, shown below its tool call in
+ * the chat (replaces the modal Diff Preview that used to pop over the 3D
+ * viewer). In 'auto' approval mode the edit is applied automatically.
+ */
+function PendingEditApproval({
+  editId,
+  counts,
+}: {
+  editId: string;
+  counts?: Record<string, number>;
+}) {
+  const pendingEdits = useStore((s) => s.pendingEdits);
+  const outcome = useStore((s) => s.pendingEditOutcomes[editId]);
+  const approvalMode = useStore((s) => s.editApprovalMode);
+  const resolvePendingEdit = useStore((s) => s.resolvePendingEdit);
+  const [busy, setBusy] = useState<null | 'apply' | 'discard'>(null);
+  const autoTriggered = useRef(false);
+
+  const isPending = !outcome && pendingEdits.some((e) => e.edit_id === editId);
+
+  // Auto-approve: apply once when the edit is pending and the mode is 'auto'.
+  useEffect(() => {
+    if (approvalMode === 'auto' && isPending && !autoTriggered.current) {
+      autoTriggered.current = true;
+      void resolvePendingEdit(editId, 'apply');
+    }
+  }, [approvalMode, isPending, editId, resolvePendingEdit]);
+
+  const act = async (action: 'apply' | 'discard') => {
+    setBusy(action);
+    try {
+      await resolvePendingEdit(editId, action);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (outcome === 'applied') {
+    return (
+      <div className="tc-approval tc-approval--applied">
+        <Icon name="check" size={12} strokeWidth={2.2} /> Applied
+      </div>
+    );
+  }
+  if (outcome === 'discarded') {
+    return (
+      <div className="tc-approval tc-approval--discarded">
+        <Icon name="x" size={12} strokeWidth={2} /> Discarded
+      </div>
+    );
+  }
+
+  const summary = summarizeCounts(counts);
+
+  if (!isPending && outcome === undefined) {
+    // Resolved elsewhere (e.g. evicted on reload) - nothing to approve.
+    return null;
+  }
+
+  if (approvalMode === 'auto' && isPending) {
+    return (
+      <div className="tc-approval">
+        <span className="tc-spin"><Icon name="loader" size={12} strokeWidth={2} /></span>
+        Auto-approving…
+      </div>
+    );
+  }
+
+  // 'ask' mode (or an errored auto-apply): inline Approve / Discard.
+  return (
+    <div className="tc-approval tc-approval--ask">
+      <div className="tc-approval-info">
+        <span className="tc-approval-label">Review edit</span>
+        {summary && <span className="tc-approval-counts">{summary}</span>}
+        {outcome === 'error' && <span className="tc-approval-err">Apply failed — retry?</span>}
+      </div>
+      <div className="tc-approval-actions">
+        <button
+          className="tc-approve-btn"
+          onClick={() => { void act('apply'); }}
+          disabled={busy !== null}
+        >
+          {busy === 'apply' ? 'Applying…' : 'Approve'}
+        </button>
+        <button
+          className="tc-discard-btn"
+          onClick={() => { void act('discard'); }}
+          disabled={busy !== null}
+        >
+          {busy === 'discard' ? 'Discarding…' : 'Discard'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+type ToolStatus = 'running' | 'done' | 'error' | 'pending' | 'blocked';
+
+const TOOL_STATUS_ICON: Record<ToolStatus, IconName> = {
+  running: 'loader',
+  done: 'check',
+  error: 'alert-circle',
+  pending: 'pencil',
+  blocked: 'lock',
+};
+
+/** Pretty-print a tool result: JSON gets indented, everything else is raw. */
+function prettyResult(raw: string): string {
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
+}
+
+/** Compact single-line preview of a tool call's arguments for the header. */
+function toolArgsPreview(args: Record<string, unknown>): string {
+  const entries = Object.entries(args);
+  if (entries.length === 0) return '';
+  return entries
+    .map(([k, v]) => {
+      const val = typeof v === 'string' ? v : JSON.stringify(v);
+      const short = val && val.length > 42 ? `${val.slice(0, 41)}…` : val;
+      return `${k}: ${short}`;
+    })
+    .join('  ·  ');
+}
+
 function ToolCallDisplay({ tc }: { tc: ToolCall }) {
   const [expanded, setExpanded] = useState(false);
   const [idsDownloading, setIdsDownloading] = useState(false);
   const [idsError, setIdsError] = useState(false);
   const [copyState, setCopyState] = useState<'idle' | 'ok' | 'err'>('idle');
-  const setActivePendingEditId = useStore((s) => s.setActivePendingEditId);
   const modelLoaded = useStore((s) => s.modelLoaded);
 
-  // Detect pending-edit result so we can surface a "Review Diff" chip
   const parsedResult = (() => {
     if (!tc.result) return null;
     try { return JSON.parse(tc.result); } catch { return null; }
@@ -181,6 +327,18 @@ function ToolCallDisplay({ tc }: { tc: ToolCall }) {
   const editId: string | undefined = parsedResult?.edit_id;
   const isBlockedByMode = parsedResult?.blocked_by_mode === true;
   const isMemoCached = parsedResult?._memo === true;
+  const hasError = parsedResult != null &&
+    (parsedResult.error !== undefined || parsedResult.action === 'execute_rejected');
+
+  const status: ToolStatus = isBlockedByMode
+    ? 'blocked'
+    : isPendingEdit
+      ? 'pending'
+      : hasError
+        ? 'error'
+        : tc.result
+          ? 'done'
+          : 'running';
 
   // IDS validate - show "Download failures CSV" when the tool produced results
   const isIdsValidate = tc.name === 'ids_validate' && !!tc.result;
@@ -228,74 +386,73 @@ function ToolCallDisplay({ tc }: { tc: ToolCall }) {
     window.setTimeout(() => setCopyState('idle'), 1500);
   };
 
+  const argsText = toolArgsPreview(tc.arguments);
+  const hasArgs = Object.keys(tc.arguments).length > 0;
+
   return (
-    <div className={`tool-call-block${isBlockedByMode ? ' tool-call-block--blocked' : ''}`}>
+    <div className={`tc-card tc-card--${status}`}>
       <button
-        className="tool-call-header"
+        className="tc-head"
         onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
       >
-        <span className="tool-call-icon">
-          {isBlockedByMode ? '🔒' : isPendingEdit ? '📝' : tc.result ? '✅' : '⏳'}
+        <span className={`tc-status tc-status--${status}`}>
+          <span className={status === 'running' ? 'tc-spin' : undefined}>
+            <Icon name={TOOL_STATUS_ICON[status]} size={13} strokeWidth={2} />
+          </span>
         </span>
-        <span className="tool-call-name">{tc.name}</span>
+        <span className="tc-name">{tc.name}</span>
         {isMemoCached && (
-          <span className="tool-call-memo-badge" title="Result served from memo cache (same args within this turn)">
-            ⚡
+          <span className="tc-badge tc-badge--memo" title="Served from this turn's memo cache (same args)">
+            <Icon name="zap" size={9} strokeWidth={2} /> cached
           </span>
         )}
         {tc.executedOn && (
-          <span className="tool-call-name" title={`Executed on ${tc.executedOn}`}>
-            [{tc.executedOn}]
-          </span>
+          <span className="tc-badge" title={`Executed on ${tc.executedOn}`}>{tc.executedOn}</span>
         )}
-        {!isBlockedByMode && (
-          <span className="tool-call-args">
-            ({Object.entries(tc.arguments).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(', ')})
-          </span>
-        )}
-        <span
-          role="button"
-          tabIndex={0}
-          aria-label={copyState === 'ok' ? 'Tool call copied' : 'Copy tool call as JSON'}
-          className={`tool-call-copy tool-call-copy--${copyState}`}
-          onClick={(e) => { void handleCopyToolCall(e); }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              void handleCopyToolCall(e as unknown as React.MouseEvent);
+        {argsText && !isBlockedByMode && <span className="tc-args">{argsText}</span>}
+        <span className="tc-actions">
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label={copyState === 'ok' ? 'Tool call copied' : 'Copy tool call as JSON'}
+            className={`tc-icon-btn tc-copy--${copyState}`}
+            onClick={(e) => { void handleCopyToolCall(e); }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                void handleCopyToolCall(e as unknown as React.MouseEvent);
+              }
+            }}
+            title={
+              copyState === 'ok' ? 'Copied!' :
+              copyState === 'err' ? 'Copy failed' :
+              'Copy tool call (name + arguments + result) as JSON'
             }
-          }}
-          title={
-            copyState === 'ok' ? 'Copied!' :
-            copyState === 'err' ? 'Copy failed' :
-            'Copy tool call (name + arguments + result) as JSON'
-          }
-        >
-          {copyState === 'ok' ? '✓' : copyState === 'err' ? '⚠' : '📋'}
+          >
+            <Icon name={copyState === 'ok' ? 'check' : 'clipboard-list'} size={12} strokeWidth={1.9} />
+          </span>
+          <span className={`tc-chevron${expanded ? ' tc-chevron--open' : ''}`}>
+            <Icon name="chevron-down" size={13} strokeWidth={2} />
+          </span>
         </span>
-        <span className="tool-call-expand">{expanded ? '▲' : '▼'}</span>
       </button>
+
       {isBlockedByMode && (
-        <div className="tool-call-blocked-bar">
-          <Icon name="lock" size={11} />
+        <div className="tc-note tc-note--warn">
+          <Icon name="lock" size={11} strokeWidth={2} />
           <span>Write tool blocked. Switch to <strong>Edit</strong> mode to make changes.</span>
         </div>
       )}
       {isPendingEdit && editId && (
-        <button
-          className="tool-call-pending-edit-btn"
-          onClick={() => setActivePendingEditId(editId)}
-          title="Open diff preview panel"
-        >
-          📋 Edit staged · review diff →
-        </button>
+        <PendingEditApproval editId={editId} counts={parsedResult?.counts} />
       )}
       {isBatchEdit && parsedResult && (
         <BatchEditSummary result={parsedResult as Record<string, unknown>} />
       )}
       {isIdsValidate && idsBase64 && (
         <button
-          className={`tool-call-ids-csv-btn${idsError ? ' ids-csv-error' : ''}${!modelLoaded ? ' ids-csv-no-model' : ''}`}
+          className={`tc-action-btn${idsError ? ' tc-action-btn--error' : ''}${!modelLoaded ? ' tc-action-btn--muted' : ''}`}
           onClick={() => { void handleIdsDownloadCsv(); }}
           disabled={idsDownloading || !modelLoaded}
           title={getIdsCsvButtonTitle(idsBtnState)}
@@ -303,8 +460,22 @@ function ToolCallDisplay({ tc }: { tc: ToolCall }) {
           {getIdsCsvButtonLabel(idsBtnState)}
         </button>
       )}
-      {expanded && tc.result && (
-        <pre className="tool-call-result">{tc.result}</pre>
+
+      {expanded && (hasArgs || tc.result) && (
+        <div className="tc-body">
+          {hasArgs && (
+            <div className="tc-field">
+              <div className="tc-field-label">Arguments</div>
+              <pre className="tc-code">{JSON.stringify(tc.arguments, null, 2)}</pre>
+            </div>
+          )}
+          {tc.result && (
+            <div className="tc-field">
+              <div className="tc-field-label">Result</div>
+              <pre className={`tc-code${hasError ? ' tc-code--error' : ''}`}>{prettyResult(tc.result)}</pre>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -425,6 +596,10 @@ const ChatMessageRow = memo(function ChatMessageRow({
   msg: ChatMessage;
   isStreaming: boolean;
 }) {
+  // Interleave text and tool calls in true transcript order (fixes tool calls
+  // all stacking at the top). Legacy/restored messages without offsets fall
+  // back to tools-first automatically (see buildMessageParts).
+  const parts = buildMessageParts(msg.content, msg.toolCalls);
   return (
     <div className={`chat-bubble ${msg.role}`}>
       {msg.attachments && msg.attachments.length > 0 && (
@@ -450,23 +625,20 @@ const ChatMessageRow = memo(function ChatMessageRow({
           ))}
         </div>
       )}
-      {msg.toolCalls && msg.toolCalls.length > 0 && (
-        <div className="tool-calls-container">
-          {msg.toolCalls.map((tc, j) => (
-            <ToolCallDisplay key={j} tc={tc} />
-          ))}
-        </div>
-      )}
-      {msg.content ? (
-        msg.role === 'assistant' ? (
-          <MarkdownContent content={msg.content} />
-        ) : (
-          msg.content
+      {parts.length > 0 ? (
+        parts.map((part) =>
+          part.type === 'tool' ? (
+            <ToolCallDisplay key={part.key} tc={part.toolCall} />
+          ) : msg.role === 'assistant' ? (
+            <MarkdownContent key={part.key} content={part.text} />
+          ) : (
+            <span key={part.key} className="chat-user-text">{part.text}</span>
+          ),
         )
       ) : (
         isStreaming ? (
           <span className="loading-spinner" style={{ width: 14, height: 14 }} />
-        ) : ''
+        ) : null
       )}
       {msg.role === 'assistant' && msg.usage && <ChatUsageChip usage={msg.usage} messageContent={msg.content} />}
     </div>
@@ -486,6 +658,8 @@ export default function ChatPanel({ embedded = false }: ChatPanelProps = {}) {
   const chatMessages = useStore((s) => s.chatMessages);
   const chatLoading = useStore((s) => s.chatLoading);
   const editModeAvailable = useStore((s) => s.editModeAvailable);
+  const editApprovalMode = useStore((s) => s.editApprovalMode);
+  const setEditApprovalMode = useStore((s) => s.setEditApprovalMode);
   const chatProvider = useStore((s) => s.chatProvider);
   const chatModel = useStore((s) => s.chatModel);
   const chatTemperature = useStore((s) => s.chatTemperature);
@@ -890,7 +1064,13 @@ export default function ChatPanel({ embedded = false }: ChatPanelProps = {}) {
         });
       }
     } else if (data.type === 'tool_call') {
-      state.addToolCallToLastMessage({
+      // Commit any buffered text into the message BEFORE recording the tool
+      // call, so its contentOffset reflects the text that preceded it and the
+      // transcript renders in true order (text → tool → text).
+      if (streamBufRef.current !== null) {
+        useStore.getState().updateLastAssistantMessage(streamBufRef.current);
+      }
+      useStore.getState().addToolCallToLastMessage({
         name: data.name,
         arguments: data.arguments || {},
       });
@@ -1300,6 +1480,9 @@ export default function ChatPanel({ embedded = false }: ChatPanelProps = {}) {
       thread_id: useStore.getState().chatThreadId,
       use_graph: true,
       selected_ids: selectedIds.slice(0, 50),
+      // Edit scope: 'semantic' strips the AI's structural (geometry) write
+      // tools so metadata edits never reload the viewer (dev/docs/EDIT_SCOPES).
+      edit_scope: selState.editScope,
     };
 
     try {
@@ -1544,6 +1727,31 @@ export default function ChatPanel({ embedded = false }: ChatPanelProps = {}) {
             </select>
           )}
 
+          {/* Edit-approval selector: how AI edits get approved. Shown only in
+              Edit chat mode, next to the model dropdown. Ask = inline
+              Approve/Discard below each tool; Auto = apply automatically. */}
+          {chatMode === 'edit' && editModeAvailable && (
+            <div className="chat-approval-seg" role="group" aria-label="Edit approval mode">
+              <Icon name="shield" size={12} strokeWidth={1.9} />
+              <button
+                type="button"
+                className={`chat-approval-opt${editApprovalMode === 'ask' ? ' active' : ''}`}
+                onClick={() => setEditApprovalMode('ask')}
+                title="Ask: approve each staged edit inline in the chat before it applies"
+              >
+                Ask
+              </button>
+              <button
+                type="button"
+                className={`chat-approval-opt${editApprovalMode === 'auto' ? ' active' : ''}`}
+                onClick={() => setEditApprovalMode('auto')}
+                title="Auto: apply every staged edit automatically, no confirmation"
+              >
+                Auto
+              </button>
+            </div>
+          )}
+
           <span className="embedded-toolbar-spacer" />
 
           {/* Right icon-only buttons */}
@@ -1562,10 +1770,21 @@ export default function ChatPanel({ embedded = false }: ChatPanelProps = {}) {
               {sessionMemoryFacts.length}
             </span>
           )}
+            {/* New chat - promoted out of the overflow menu so it's one click
+              from anywhere (the most common action). */}
+          <button
+            className="chat-icon-btn"
+            onClick={handleNewChat}
+            disabled={chatLoading || chatMessages.length === 0}
+            title="New chat"
+            aria-label="Start a new chat"
+          >
+            <Icon name="plus" size={15} />
+          </button>
             {/* Compact chat actions
               (export MD/JSON · clear · new-chat · chat-manager)
               folded into a single `⋯` overflow menu so the toolbar reads
-              as: mode pills · model · stop? · memory? · ⋯ · detach.
+              as: mode pills · model · stop? · memory? · + · ⋯ · detach.
               Stop / memory badge / detach stay visible (status / layout). */}
           <div className="chat-overflow-wrap" ref={overflowMenuRef}>
             <button

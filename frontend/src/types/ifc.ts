@@ -238,6 +238,10 @@ export interface ToolCall {
   arguments: Record<string, unknown>;
   result?: string;
   executedOn?: 'client' | 'server';
+  /** Number of assistant-text characters emitted BEFORE this tool call, so the
+   *  UI can render text and tool calls in true transcript order. Absent on
+   *  messages restored from history (they fall back to tools-first layout). */
+  contentOffset?: number;
 }
 
 export type ChatAttachmentKind = 'image' | 'text' | 'ids' | 'other';

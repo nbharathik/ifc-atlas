@@ -998,6 +998,7 @@ async def chat_websocket(websocket: WebSocket):
                     tool_set_id=request.tool_set_id,
                     prompt_id=request.prompt_id,
                     model_registry_id=request.model_registry_id,
+                    edit_scope=request.edit_scope,
                 ):
                     event_type = event.get("type")
 

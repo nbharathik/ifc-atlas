@@ -26,6 +26,8 @@ import {
   executeOperation as apiExecuteOperation,
   undoOperation as apiUndoOperation,
   redoOperation as apiRedoOperation,
+  applyPendingEditWithRetry as apiApplyPendingEdit,
+  discardPendingEdit as apiDiscardPendingEdit,
 } from '../services/api';
 import type { ReadinessStatusDto } from '../services/api';
 import {
@@ -357,8 +359,20 @@ interface AppState {
   // newest-first.  Cleared when a model is reloaded.
   pendingEdits: PendingEditEnvelope[];
   /** Id of the pending edit currently being reviewed (opens the modal);
-   *  null = panel dismissed / nothing to review. */
+   *  null = panel dismissed / nothing to review. Legacy modal path; the chat
+   *  now approves edits inline (see resolvePendingEdit). */
   activePendingEditId: string | null;
+  /** Approval mode for AI edits (persisted). 'ask' = the chat shows an inline
+   *  Approve/Discard below the tool call; 'auto' = staged edits are applied
+   *  automatically. Selected from the icon next to the model dropdown. */
+  editApprovalMode: 'ask' | 'auto';
+  setEditApprovalMode: (mode: 'ask' | 'auto') => void;
+  /** Resolution per pending edit id, so an inline approval widget can show the
+   *  outcome even after the edit leaves `pendingEdits`. */
+  pendingEditOutcomes: Record<string, 'applied' | 'discarded' | 'error'>;
+  /** Apply or discard a pending edit inline (no modal). Shared by the inline
+   *  Approve/Discard buttons and the auto-approve path. Idempotent per id. */
+  resolvePendingEdit: (editId: string, action: 'apply' | 'discard') => Promise<void>;
 
   // UI
   settingsOpen: boolean;
@@ -811,6 +825,12 @@ interface AppState {
   editMode: boolean;
   setEditMode: (v: boolean) => void;
   toggleEditMode: () => void;
+  /** Edit scope (see dev/docs/EDIT_SCOPES.md). 'semantic' (default) = metadata
+   *  edits only, which update the viewer in place with NO reload. 'structural'
+   *  (beta) = also geometry edits (walls, delete), which reload the 3D viewer.
+   *  Gates the wall-draw tool and the AI's structural write tools; persisted. */
+  editScope: 'semantic' | 'structural';
+  setEditScope: (scope: 'semantic' | 'structural') => void;
   /** Bumped whenever cached details for the SELECTED element are invalidated,
    *  so PropertiesPanel re-fetches even though selectedElementId is unchanged
    *  (fixes the blank-panel-after-commit dead end). */
@@ -985,8 +1005,11 @@ const initialState = {
   activeToolSetId: readPref<string | null>('pref.activeToolSetId', null),
   activePromptId: readPref<string | null>('pref.activePromptId', null),
   pendingEdits: [] as PendingEditEnvelope[],
+  editApprovalMode: readPref<'ask' | 'auto'>('pref.editApprovalMode', 'ask'),
+  pendingEditOutcomes: {} as Record<string, 'applied' | 'discarded' | 'error'>,
   editMode: false,
   editModeAvailable: false,
+  editScope: readPref<'semantic' | 'structural'>('pref.editScope', 'semantic'),
   modelDirty: false,
   detailRefreshSerial: 0,
   canRedo: false,
@@ -1313,7 +1336,12 @@ export const useStore = create<AppState>()(
         const last = msgs[msgs.length - 1];
         if (last && last.role === 'assistant') {
           const existing = last.toolCalls || [];
-          msgs[msgs.length - 1] = { ...last, toolCalls: [...existing, toolCall] };
+          // Stamp the tool call's position in the transcript: the amount of
+          // assistant text emitted so far. The caller flushes the token buffer
+          // into `content` first, so this offset is accurate. Enables the
+          // chronological text↔tool interleaving in buildMessageParts.
+          const stamped = { ...toolCall, contentOffset: last.content.length };
+          msgs[msgs.length - 1] = { ...last, toolCalls: [...existing, stamped] };
         }
         return { chatMessages: msgs };
       }),
@@ -1363,17 +1391,40 @@ export const useStore = create<AppState>()(
         next[existing] = envelope;
         return { pendingEdits: next };
       }
-      return {
-        pendingEdits: [envelope, ...s.pendingEdits],
-        // Auto-focus the freshly-proposed edit so the panel pops on top.
-        activePendingEditId: envelope.edit_id,
-      };
+      // Do NOT auto-open the modal: the chat now shows an inline Approve /
+      // Discard below the tool call (or auto-applies). The modal was
+      // disruptive over the 3D viewer.
+      return { pendingEdits: [envelope, ...s.pendingEdits] };
     }),
     removePendingEdit: (editId: string) => set((s) => ({
       pendingEdits: s.pendingEdits.filter((e) => e.edit_id !== editId),
       activePendingEditId: s.activePendingEditId === editId ? null : s.activePendingEditId,
     })),
     setActivePendingEditId: (id: string | null) => set({ activePendingEditId: id }),
+    setEditApprovalMode: (mode) => { writePref('pref.editApprovalMode', mode); set({ editApprovalMode: mode }); },
+    resolvePendingEdit: async (editId, action) => {
+      const s = useStore.getState();
+      if (s.pendingEditOutcomes[editId]) return; // already applied/discarded
+      try {
+        if (action === 'apply') {
+          await apiApplyPendingEdit(editId);
+          set((st) => ({ pendingEditOutcomes: { ...st.pendingEditOutcomes, [editId]: 'applied' } }));
+          useStore.getState().logActivity({ kind: 'edit', summary: 'Applied edit' });
+        } else {
+          await apiDiscardPendingEdit(editId);
+          set((st) => ({ pendingEditOutcomes: { ...st.pendingEditOutcomes, [editId]: 'discarded' } }));
+          useStore.getState().logActivity({ kind: 'edit', summary: 'Discarded edit' });
+        }
+        useStore.getState().removePendingEdit(editId);
+        useStore.getState().refreshEditState();
+      } catch (err) {
+        set((st) => ({ pendingEditOutcomes: { ...st.pendingEditOutcomes, [editId]: 'error' } }));
+        useStore.getState().addToast(
+          `Edit ${action === 'apply' ? 'apply' : 'discard'} failed: ${err instanceof Error ? err.message : String(err)}`,
+          'error',
+        );
+      }
+    },
     setSettingsOpen: (v) => set({ settingsOpen: v }),
     setCommandPaletteOpen: (v) => set({ commandPaletteOpen: v }),
     setShortcutsHelpOpen: (v) => set({ shortcutsHelpOpen: v }),
@@ -1463,6 +1514,7 @@ export const useStore = create<AppState>()(
     },
     setEditMode: (v) => set({ editMode: v }),
     toggleEditMode: () => set((s) => ({ editMode: !s.editMode })),
+    setEditScope: (scope) => { writePref('pref.editScope', scope); set({ editScope: scope }); },
     applyOperation: async (operation, params) => {
       try {
         const result = await apiExecuteOperation(operation, params);

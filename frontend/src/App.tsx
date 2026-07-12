@@ -3,6 +3,7 @@ import { applyIfcPatchBatch } from './services/viewer/patchApplier';
 import type { IfcPatch } from './types/ifcPatch';
 
 import DemoModeBanner from './components/layout/DemoModeBanner';
+import EditScopeBanner from './components/layout/EditScopeBanner';
 import KeyboardShortcuts from './components/layout/KeyboardShortcuts';
 import Menubar from './components/layout/Menubar';
 import { applyAccentPreset } from './utils/accentPreset';
@@ -721,6 +722,7 @@ export default function App() {
         onScreenshot={handleScreenshot}
         onCameraView={handleCameraView}
       />
+      <EditScopeBanner />
 
       <div className="app-shell-workspace">
         {modelLoaded && leftSidebarOpen && !rightSidebarExpanded && (

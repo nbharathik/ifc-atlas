@@ -902,6 +902,9 @@ async def _apply_pending_edit_locked(edit_id: str) -> PendingEditEnvelope:
     # Pick the cheapest sync tier per Invariant 5.
     # Only metadata → metadata_patch; any geometry churn → bootstrap reload.
     if has_geometry:
+        # Warm the fragment cache for the new fingerprint so the reload the
+        # rebuild_started event triggers is a fast cache hit, not a reconvert.
+        _prewarm_fragments_after_geometry_edit()
         await model_sync_broker.publish(
             ModelSyncEvent(
                 type="rebuild_started",
@@ -1035,6 +1038,77 @@ def _snapshot_after_upload(filename: str) -> None:
         logger.exception("Git baseline snapshot after upload failed")
 
 
+# Fragment cache profile to pre-warm after an edit. The viewer's production
+# default graphics profile; a client on a different profile just gets a cache
+# miss and reconverts (no worse than today).
+_PREWARM_PROFILE = "balanced"
+
+
+def _prewarm_fragments_after_geometry_edit() -> None:
+    """Warm the server fragment cache for the freshly-edited model (plan A5-lite).
+
+    A structural edit changes the working file's SHA, so the viewer's post-edit
+    reload would otherwise reconvert the WHOLE model from scratch ("the IFC
+    loads again and again"). Converting it once here, in the background and
+    keyed by the new fingerprint, means the reload hits the fast
+    ``fragment-manifest`` path instead. Entirely best-effort: a sidecar that is
+    down, a browser-only client, or a profile mismatch just falls back to the
+    existing reconvert - never worse than before. Fire-and-forget; the reload
+    is debounced client-side so it naturally waits for a warm cache when ready.
+    """
+    try:
+        fingerprint = ifc_service.model_fingerprint
+        ifc_bytes = ifc_service.read_bytes()
+    except Exception:  # pragma: no cover - defensive
+        return
+    if not fingerprint or not ifc_bytes:
+        return
+
+    cache_path = FRAGMENT_CACHE_DIR / f"{fingerprint}-{_PREWARM_PROFILE}.frag"
+    if cache_path.exists():
+        return  # already warm (e.g. an undo back to a prior state)
+
+    async def _run() -> None:
+        # Dedupe against a concurrent /convert or a prior prewarm for this sha.
+        existing = fragment_prebuild_service.get_status(fingerprint, _PREWARM_PROFILE)
+        if existing.status == "inflight":
+            return
+        await fragment_prebuild_service.register_inflight(fingerprint, _PREWARM_PROFILE)
+        try:
+            FRAGMENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            frag_bytes, _ = await sidecar_manager.convert(
+                ifc_bytes=ifc_bytes,
+                profile=_PREWARM_PROFILE,
+                model_id=f"{fingerprint[:12]}-{_PREWARM_PROFILE}",
+            )
+            if len(frag_bytes) < 4 * 1024:  # same empty-stub guard as /convert
+                await fragment_prebuild_service.mark_failed(
+                    fingerprint, _PREWARM_PROFILE, error="empty fragment"
+                )
+                return
+            cache_path.write_bytes(frag_bytes)
+            await fragment_prebuild_service.mark_complete(
+                fingerprint, _PREWARM_PROFILE, size_bytes=len(frag_bytes)
+            )
+            logger.info(
+                "Pre-warmed fragment cache after edit: sha=%s size=%s B",
+                fingerprint[:12], len(frag_bytes),
+            )
+        except Exception as exc:  # noqa: BLE001 - best-effort
+            logger.info("post-edit fragment prewarm skipped: %s", exc)
+            try:
+                await fragment_prebuild_service.mark_failed(
+                    fingerprint, _PREWARM_PROFILE, error=str(exc)
+                )
+            except Exception:  # pragma: no cover
+                pass
+
+    try:
+        asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:  # pragma: no cover - no loop (sync test context)
+        pass
+
+
 @router.post("/edits/pending/{edit_id}/discard", response_model=PendingEditEnvelope)
 async def discard_pending_edit(edit_id: str):
     _check_loaded()
@@ -1103,6 +1177,10 @@ async def _publish_operation_result(result) -> None:
     await publish_operation_events(
         result.to_public_dict(), ifc_service=ifc_service, broker=model_sync_broker,
     )
+    # Geometry/bulk edits trigger a viewer reload; warm the cache so it's fast.
+    if getattr(result, "changed", False) and getattr(result, "patch_tier", None) is not None:
+        if result.patch_tier.value in ("bulk", "geometry"):
+            _prewarm_fragments_after_geometry_edit()
 
 
 def _require_edit_mode() -> None:

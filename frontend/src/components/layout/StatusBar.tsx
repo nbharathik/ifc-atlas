@@ -16,12 +16,7 @@ export default function StatusBar() {
   const isolatedIds = useStore((s) => s.isolatedIds);
   const nativeIndex = useStore((s) => s.nativeIndexReady);
   const editModeAvailable = useStore((s) => s.editModeAvailable);
-  const editMode = useStore((s) => s.editMode);
   const modelDirty = useStore((s) => s.modelDirty);
-  const isUndoing = useStore((s) => s.isUndoing);
-  const canRedo = useStore((s) => s.canRedo);
-  const undoLastEdit = useStore((s) => s.undoLastEdit);
-  const redoLastEdit = useStore((s) => s.redoLastEdit);
 
   const dotClass = loading ? 'warn' : modelLoaded ? '' : 'off';
   const statusLabel = loading ? 'Loading...' : modelLoaded ? 'Ready' : 'No model';
@@ -50,43 +45,8 @@ export default function StatusBar() {
         </>
       )}
 
-      {/* Undo/redo (C2): visible while in Edit mode so the escape hatch is
-          always one click away. Buttons drive the operation layer. */}
-      {editModeAvailable && editMode && modelLoaded && (
-        <>
-          <span className="status-item" title="Edit mode is on">
-            <Icon name="pencil" size={12} />
-            Editing
-          </span>
-          <button
-            type="button"
-            className="status-item"
-            onClick={() => { void undoLastEdit(); }}
-            disabled={isUndoing}
-            title="Undo last edit (Ctrl+Z)"
-            style={{ cursor: 'pointer', background: 'none', border: 'none', font: 'inherit', color: 'inherit' }}
-          >
-            <Icon name="undo" size={12} />
-            Undo
-          </button>
-          <button
-            type="button"
-            className="status-item"
-            onClick={() => { void redoLastEdit(); }}
-            disabled={isUndoing || !canRedo}
-            title={canRedo ? 'Redo (Ctrl+Y)' : 'Nothing to redo'}
-            style={{
-              cursor: canRedo ? 'pointer' : 'default',
-              background: 'none', border: 'none', font: 'inherit', color: 'inherit',
-              opacity: canRedo ? 1 : 0.5,
-            }}
-          >
-            <Icon name="redo" size={12} />
-            Redo
-          </button>
-          <span className="stats-separator" />
-        </>
-      )}
+      {/* Undo/redo live in the Topbar next to the Edit toggle (C2) for
+          discoverability - not duplicated here at the bottom. */}
 
       {/* Show native index status when geometry is still loading */}
       {nativeIndex && !modelLoaded && (

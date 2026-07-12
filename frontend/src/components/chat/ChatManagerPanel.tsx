@@ -522,6 +522,32 @@ function AgentRosterDetail({
       </div>
 
       <div className="cm-skills-detail-body">
+        {agent.id === 'edit-assistant' && (
+          <div className="cm-editscope-note">
+            <span className="cm-skills-section-title">Edit scopes — what it can change</span>
+            <div className="cm-editscope-row">
+              <span className="cm-editscope-badge cm-editscope-badge--semantic">Semantic</span>
+              <span>
+                Names, property &amp; pset values, classifications. Updates the 3D
+                viewer <strong>in place — no reload</strong>. Safe to run in bulk.
+                The default scope.
+              </span>
+            </div>
+            <div className="cm-editscope-row">
+              <span className="cm-editscope-badge cm-editscope-badge--structural">Structural · beta</span>
+              <span>
+                Create walls / slabs, delete elements, run IFC code. Changes
+                geometry, so it <strong>reloads the 3D viewer</strong>. Enable it
+                with the scope toggle in the top edit bar.
+              </span>
+            </div>
+            <p className="cm-editscope-hint">
+              In semantic scope the structural tools are removed from the agent
+              entirely, so property editing never triggers a reload. See
+              <code> dev/docs/EDIT_SCOPES.md</code>.
+            </p>
+          </div>
+        )}
         <div className="cm-skills-chips">
           <span className="cm-skills-chip">
             <span className="cm-skills-chip-label">Tools</span>

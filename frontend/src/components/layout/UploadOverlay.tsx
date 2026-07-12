@@ -3,6 +3,7 @@ import { useIfcUpload } from '../../hooks/useIfcUpload';
 import { useNewProject, type NewProjectTemplate } from '../../hooks/useNewProject';
 import { BROWSER_ONLY } from '../../config/featureFlags';
 import { useStore } from '../../store/useStore';
+import Icon from '../ui/Icon';
 
 export default function UploadOverlay() {
   const upload = useIfcUpload();
@@ -48,53 +49,39 @@ export default function UploadOverlay() {
   return (
     <div className="upload-overlay">
       <div className="upload-ambient-grid" aria-hidden="true" />
-      <div
-        className={`upload-zone ${dragging ? 'dragging' : ''}`}
-        onDrop={onDrop}
-        onDragOver={onDragOver}
-        onDragLeave={onDragLeave}
-        onClick={() => inputRef.current?.click()}
-      >
-        <div className="upload-eyebrow">Workspace Ready</div>
-        <h2>Open IFC File</h2>
-        <p>Drag and drop an .ifc file here, or click to browse</p>
-        {error && <p style={{ color: 'var(--danger)', marginTop: 12 }}>{error}</p>}
-      </div>
-      {editModeAvailable && !BROWSER_ONLY && (
-        <div className="upload-new-project" style={{ marginTop: 18, textAlign: 'center' }}>
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 8 }}>
-            or start a new empty project
+      <div className="upload-panel">
+        <div
+          className={`upload-zone ${dragging ? 'dragging' : ''}`}
+          onDrop={onDrop}
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          onClick={() => inputRef.current?.click()}
+        >
+          <div className="upload-zone-icon" aria-hidden="true">
+            <Icon name="upload" size={22} strokeWidth={1.6} />
           </div>
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+          <div className="upload-eyebrow">Workspace Ready</div>
+          <h2>Open IFC File</h2>
+          <p>Drag and drop an .ifc file here, or click to browse</p>
+        </div>
+
+        {error && <div className="upload-error">{error}</div>}
+
+        {editModeAvailable && !BROWSER_ONLY && (
+          <>
+            <div className="upload-divider"><span>or</span></div>
             <button
               type="button"
+              className="upload-new-btn"
               onClick={() => startNew('single_storey')}
               disabled={creating}
-              style={{
-                fontSize: 13, padding: '6px 14px', borderRadius: 6,
-                cursor: creating ? 'default' : 'pointer', opacity: creating ? 0.6 : 1,
-                border: '1px solid var(--border, #333)',
-                background: 'var(--surface, #1a1a1a)', color: 'var(--text, #ddd)',
-              }}
             >
+              <Icon name="plus" size={14} strokeWidth={2} />
               {creating ? 'Creating…' : 'New Project'}
             </button>
-            <button
-              type="button"
-              onClick={() => startNew('two_storey')}
-              disabled={creating}
-              style={{
-                fontSize: 13, padding: '6px 14px', borderRadius: 6,
-                cursor: creating ? 'default' : 'pointer', opacity: creating ? 0.6 : 1,
-                border: '1px solid var(--border, #333)',
-                background: 'transparent', color: 'var(--text-muted, #999)',
-              }}
-            >
-              New 2-Storey
-            </button>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </div>
       <input
         ref={inputRef}
         type="file"

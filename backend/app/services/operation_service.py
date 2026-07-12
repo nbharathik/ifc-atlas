@@ -287,7 +287,13 @@ class OperationService:
         return self._registry.get(name)
 
     def catalogue(self) -> list[dict[str, Any]]:
-        """Machine-readable list of registered ops (for docs / tool wiring)."""
+        """Machine-readable list of registered ops (for docs / tool wiring).
+
+        Each entry carries ``reloads_viewer`` and ``scope`` derived from the
+        op's patch tier so the UI/agent can tell which edits reload the 3D
+        viewer (geometry/bulk) vs update in place (metadata) - see
+        dev/docs/EDIT_SCOPES.md.
+        """
         return [
             {
                 "name": s.name,
@@ -296,6 +302,8 @@ class OperationService:
                 "required": {k: ("any" if v is ANY else _type_name(v)) for k, v in s.required.items()},
                 "optional": {k: ("any" if v is ANY else _type_name(v)) for k, v in s.optional.items()},
                 "default_tier": s.default_tier.value,
+                "reloads_viewer": _tier_reloads_viewer(s.default_tier),
+                "scope": "structural" if _tier_reloads_viewer(s.default_tier) else "semantic",
             }
             for s in sorted(self._registry.values(), key=lambda s: s.name)
         ]
@@ -513,6 +521,15 @@ def _type_name(expected: Any) -> str:
     if isinstance(expected, tuple):
         return "/".join(t.__name__ for t in expected)
     return getattr(expected, "__name__", str(expected))
+
+
+def _tier_reloads_viewer(tier: "PatchTier") -> bool:
+    """Whether applying an op of this tier forces a 3D viewer reload.
+
+    METADATA (names/props) and TRANSFORM (matrix-only) update in place;
+    GEOMETRY and BULK change shapes and trigger the reload path.
+    """
+    return tier in (PatchTier.GEOMETRY, PatchTier.BULK)
 
 
 def _is_int(x: Any) -> bool:

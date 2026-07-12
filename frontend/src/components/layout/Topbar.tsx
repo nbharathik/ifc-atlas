@@ -54,7 +54,13 @@ export default function Topbar({
   const setSelectionFocusMode = useStore((s) => s.setSelectionFocusMode);
   const editModeAvailable = useStore((s) => s.editModeAvailable);
   const editMode = useStore((s) => s.editMode);
+  const editScope = useStore((s) => s.editScope);
+  const setEditScope = useStore((s) => s.setEditScope);
   const toggleEditMode = useStore((s) => s.toggleEditMode);
+  const isUndoing = useStore((s) => s.isUndoing);
+  const canRedo = useStore((s) => s.canRedo);
+  const undoLastEdit = useStore((s) => s.undoLastEdit);
+  const redoLastEdit = useStore((s) => s.redoLastEdit);
   const ghostOn = selectionFocusMode === 'ghost';
 
   const hasHidden = isolatedIds.length > 0 || hiddenIds.length > 0;
@@ -188,8 +194,9 @@ export default function Topbar({
         })}
       </div>
 
-      {/* View/Edit mode toggle (B2): the primary edit-mode entry point.
-          Rendered only when the backend reports editing enabled. */}
+      {/* View/Edit mode toggle + undo/redo (B2/C2): the primary edit-mode
+          entry point, kept together at the top for discoverability. Rendered
+          only when the backend reports editing enabled. */}
       {editModeAvailable && modelLoaded && (
         <div className="topbar-group" role="toolbar" aria-label="Editor mode">
           <button
@@ -208,6 +215,46 @@ export default function Topbar({
           >
             <Icon name="pencil" size={12} /> {editMode ? 'Editing' : 'Edit'}
           </button>
+          {editMode && (
+            <>
+              <button
+                className="topbar-icon-btn"
+                onClick={() => { void undoLastEdit(); }}
+                disabled={isUndoing}
+                title="Undo last edit (Ctrl+Z)"
+                aria-label="Undo last edit"
+              >
+                <Icon name="undo" size={14} />
+              </button>
+              <button
+                className="topbar-icon-btn"
+                onClick={() => { void redoLastEdit(); }}
+                disabled={isUndoing || !canRedo}
+                title={canRedo ? 'Redo (Ctrl+Y)' : 'Nothing to redo'}
+                aria-label="Redo"
+              >
+                <Icon name="redo" size={14} />
+              </button>
+              {/* Edit scope: semantic (no reload) vs structural (reloads). */}
+              <div className="edit-scope-seg" role="group" aria-label="Edit scope">
+                <button
+                  className={`edit-scope-opt${editScope === 'semantic' ? ' active' : ''}`}
+                  onClick={() => setEditScope('semantic')}
+                  title="Semantic edits: names, properties, classifications. Updates the viewer in place — no reload."
+                >
+                  Semantic
+                </button>
+                <button
+                  className={`edit-scope-opt${editScope === 'structural' ? ' active' : ''}`}
+                  onClick={() => setEditScope('structural')}
+                  title="Structural edits (beta): create walls / slabs, delete elements. Reloads the 3D viewer."
+                >
+                  Structural
+                  <span className="edit-scope-beta">beta</span>
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 

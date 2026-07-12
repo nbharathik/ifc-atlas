@@ -1325,6 +1325,31 @@ def write_edit_tool_names() -> frozenset[str]:
     )
 
 
+# ── Edit scope: semantic (no viewer reload) vs structural (reloads) ──────────
+# Semantic write tools change only metadata (names, property/pset values) and
+# update the viewer IN PLACE - no 3D reload. Structural write tools change
+# geometry (create/delete elements) or run arbitrary code that can, so applying
+# them reloads the 3D viewer. The Edit surface's default "semantic" scope strips
+# the structural set, so property/classification editing never reloads and the
+# LLM stays constrained to safe, fast edits. See dev/docs/EDIT_SCOPES.md.
+STRUCTURAL_WRITE_TOOLS: frozenset[str] = frozenset({
+    "create_wall_from_ends",   # adds swept-solid geometry
+    "delete_element",          # removes geometry
+    "execute_ifc_code",        # arbitrary code - may create/delete geometry
+    "propose_edit",            # generic op runner - may include create/delete
+})
+
+
+def structural_write_tool_names() -> frozenset[str]:
+    """Write tools whose edits change geometry and therefore reload the viewer."""
+    return STRUCTURAL_WRITE_TOOLS & write_edit_tool_names()
+
+
+def semantic_write_tool_names() -> frozenset[str]:
+    """Write tools whose edits are metadata-only (no viewer reload)."""
+    return write_edit_tool_names() - STRUCTURAL_WRITE_TOOLS
+
+
 # Tools that DON'T need IfcOpenShell can run during warm-up.
 # Everything else gets a synthetic "warming up" envelope instead of failing.
 # Native-fast-path tools are also exempt - they read the

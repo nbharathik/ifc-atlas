@@ -20,6 +20,7 @@ import AiKeysModal from './AiKeysModal';
 import AIReadinessChip from './AIReadinessChip';
 import { formatToolCallClipboard, writeToClipboard } from './chatClipboardHelpers';
 import { buildMessageParts } from './chatMessageParts';
+import { toolActivityPresentation } from './toolActivityPresentation';
 import {
   getTopBarOverflowActions,
   nextIndexForKey,
@@ -81,14 +82,18 @@ const DEFAULT_QUICK_ACTIONS = [
   { label: 'Find All Doors', prompt: 'Show me all doors in this model and highlight them.' },
   { label: 'Find All Windows', prompt: 'Find all windows and highlight them in the viewer.' },
   { label: 'Material Breakdown', prompt: 'What materials are used in this model? Give me a breakdown.' },
+  { label: 'Model Completeness', prompt: 'Run a model audit and summarize missing names, storey assignments, and common property gaps. Highlight the most important issues.' },
+  { label: 'Fire Door Review', prompt: 'Find IfcDoor elements that appear to be fire doors and report which ones are missing a fire rating. Highlight the results.' },
+  { label: 'Space Review', prompt: 'Summarize spaces by storey, including names and available area quantities, and flag incomplete space metadata.' },
 ];
 
 const EDIT_QUICK_ACTIONS = [
   { label: 'Rename Walls', prompt: "Rename all IfcWall elements on the ground floor to 'Exterior Wall - GF'." },
-  { label: 'Add IsExternal', prompt: "Add IsExternal = true to Pset_WallCommon on all IfcWall elements." },
+  { label: 'Update IsExternal', prompt: "Find walls that already have Pset_WallCommon.IsExternal and preview setting the appropriate exterior walls to true." },
   { label: 'Fix Empty Names', prompt: "Find all elements with empty or null names and rename them to '<Type> - <ExpressId>'." },
-  { label: 'Bulk Rename Doors', prompt: "Rename all IfcDoor elements to 'Door - <storey> - <index>' using execute_ifc_code." },
-  { label: 'Set Fire Rating', prompt: "Add FireRating = '60' to Pset_WallCommon on all exterior walls." },
+  { label: 'Bulk Rename Doors', prompt: "Preview renaming all IfcDoor elements to 'Door - <storey> - <index>' using the structured batch rename tool." },
+  { label: 'Set Descriptions', prompt: "Preview setting the Description attribute of the selected elements to a concise, type-appropriate description." },
+  { label: 'Update Fire Rating', prompt: "Find exterior walls that already have a FireRating property and preview setting it to '60'. Report walls where the property is missing." },
   { label: 'Edit History', prompt: 'Show the edit history for this session using get_edit_history.' },
   { label: 'Undo Last Edit', prompt: 'Undo the last edit I made to this model.' },
   { label: 'What Can Be Edited', prompt: 'What elements can I rename or update properties on? Give me a summary of editable fields.' },
@@ -388,6 +393,7 @@ function ToolCallDisplay({ tc }: { tc: ToolCall }) {
 
   const argsText = toolArgsPreview(tc.arguments);
   const hasArgs = Object.keys(tc.arguments).length > 0;
+  const activity = toolActivityPresentation(tc);
 
   return (
     <div className={`tc-card tc-card--${status}`}>
@@ -402,6 +408,12 @@ function ToolCallDisplay({ tc }: { tc: ToolCall }) {
           </span>
         </span>
         <span className="tc-name">{tc.name}</span>
+        <span
+          className={`tc-badge tc-badge--${activity.tone}`}
+          title={activity.description}
+        >
+          {activity.label}
+        </span>
         {isMemoCached && (
           <span className="tc-badge tc-badge--memo" title="Served from this turn's memo cache (same args)">
             <Icon name="zap" size={9} strokeWidth={2} /> cached
@@ -1073,6 +1085,11 @@ export default function ChatPanel({ embedded = false }: ChatPanelProps = {}) {
       useStore.getState().addToolCallToLastMessage({
         name: data.name,
         arguments: data.arguments || {},
+        tier: typeof data.tier === 'string' ? data.tier : undefined,
+        tierLabel: typeof data.tier_label === 'string' ? data.tier_label : undefined,
+        activityKind: typeof data.activity_kind === 'string'
+          ? data.activity_kind as ToolCall['activityKind']
+          : undefined,
       });
       state.logActivity({
         kind: 'tool',

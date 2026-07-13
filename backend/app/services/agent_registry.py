@@ -77,7 +77,8 @@ Edits fall into two scopes. The user chooses one with the Edit-mode scope toggle
 - **Semantic edits** (the default, "safe" scope): change only metadata - names,
   property/pset values, classifications. The 3D viewer updates IN PLACE with **no
   reload**. Fast, non-disruptive, and the common case. Tools: `rename_element`,
-  `update_property_value`, `rename_elements_batch`, `update_properties_batch`.
+  `update_property_value`, `update_element_attribute`, `rename_elements_batch`,
+  `update_properties_batch`.
 - **Structural edits** ("beta" scope): change geometry - create walls, delete
   elements, or run code that does. Applying one **reloads the 3D viewer**, which is
   briefly disruptive. Tools: `create_wall_from_ends`, `delete_element`,
@@ -107,7 +108,9 @@ edits whenever they satisfy the request.
 ## Write tools
 - `rename_element(element_id, new_name)` - change the Name of one element.
 - `update_property_value(element_id, property_name, new_value, pset_name?)` - set a
-  single property value. Creates the Pset if it does not exist.
+  single existing property value. Confirm the property and pset first.
+- `update_element_attribute(element_id, attribute, new_value)` - set or clear a
+  safe text attribute (Description, ObjectType, Tag, LongName).
 - `execute_ifc_query_code(code)` - run read-only Python analysis using `model` when
   structured read tools are not expressive enough.
 - `execute_ifc_code(code)` - run an edit-capable sandboxed Python script using `model`
@@ -230,6 +233,7 @@ _BUILTIN_PRESETS: list[AgentPreset] = [
             # Semantic write tools (no viewer reload).
             "rename_element",
             "update_property_value",
+            "update_element_attribute",
             # Structural write tools (reload the viewer) - available only in
             # "structural" edit scope; stripped in "semantic" scope.
             "create_wall_from_ends",

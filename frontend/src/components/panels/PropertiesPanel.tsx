@@ -593,11 +593,11 @@ export default function PropertiesPanel({ embedded = false }: PropertiesPanelPro
       { k: 'GlobalId',  v: selectedElement.global_id },
       { k: 'Name',      v: selectedElement.name || '-' },
       { k: 'Type',      v: selectedElement.ifc_type },
+      { k: 'Description', v: selectedElement.description ?? '' },
+      { k: 'ObjectType', v: selectedElement.object_type ?? '' },
+      { k: 'Tag', v: selectedElement.tag ?? '' },
     ];
     if (selectedElement.predefined_type) rows.push({ k: 'Predefined', v: selectedElement.predefined_type });
-    if (selectedElement.object_type) rows.push({ k: 'ObjectType', v: selectedElement.object_type });
-    if (selectedElement.description) rows.push({ k: 'Description', v: selectedElement.description });
-    if (selectedElement.tag) rows.push({ k: 'Tag', v: selectedElement.tag });
     if (selectedElement.storey) rows.push({ k: 'Storey',   v: selectedElement.storey });
     if (selectedElement.material) rows.push({ k: 'Material', v: selectedElement.material });
     if (selectedElement.relating_type) rows.push({ k: 'Type Def', v: selectedElement.relating_type });
@@ -657,6 +657,17 @@ export default function PropertiesPanel({ embedded = false }: PropertiesPanelPro
                         applyOperation('set_name', {
                           element_id: selectedElement.id,
                           new_name: next,
+                        })
+                      }
+                    />
+                  ) : editable && (k === 'Description' || k === 'ObjectType' || k === 'Tag') ? (
+                    <EditableText
+                      value={v == null ? '' : String(v)}
+                      onCommit={(next) =>
+                        applyOperation('set_attribute', {
+                          element_id: selectedElement.id,
+                          attribute: k,
+                          new_value: next,
                         })
                       }
                     />

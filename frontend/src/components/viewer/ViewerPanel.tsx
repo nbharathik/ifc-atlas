@@ -89,6 +89,10 @@ import {
   type FragmentUpdateScheduler,
 } from '../../services/viewer/fragmentUpdateScheduler';
 import { prewarmExpressToLocalCache } from '../../services/viewer/localIdCachePrewarm';
+import {
+  PANEL_RESIZE_END_EVENT,
+  PANEL_RESIZE_START_EVENT,
+} from '../../services/viewer/panelResizeSession';
 import { summarizeFrameDeltas } from '../../services/viewer/frameTimeRecorder';
 import {
   getMainPassStats,
@@ -142,6 +146,8 @@ import {
   disposeStreamingPreview,
 } from '../../services/viewer/streamingPreviewBuilder';
 import {
+  computeSceneBVH,
+  getBVHCoverage,
   installBVH,
 } from '../../services/viewer/bvhSetup';
 import {
@@ -3444,14 +3450,12 @@ export default function ViewerPanel({
         // Runs async-deferred so it doesn't stall the first paint.
         if (import.meta.env.VITE_VIEWER_COMPUTE_SCENE_BVH === 'true') {
           setTimeout(() => {
-            void import('../../services/viewer/bvhSetup').then(({ computeSceneBVH, getBVHCoverage }) => {
-              const bvhCount = computeSceneBVH(world.scene.three);
-              const cov = getBVHCoverage(world.scene.three);
-              console.info(
-                `[BVH] Computed BVH for ${bvhCount} meshes. ` +
-                `Coverage: ${cov.bvhMeshes}/${cov.totalMeshes} (${cov.coveragePct.toFixed(0)}%)`,
-              );
-            });
+            const bvhCount = computeSceneBVH(world.scene.three);
+            const cov = getBVHCoverage(world.scene.three);
+            console.info(
+              `[BVH] Computed BVH for ${bvhCount} meshes. ` +
+              `Coverage: ${cov.bvhMeshes}/${cov.totalMeshes} (${cov.coveragePct.toFixed(0)}%)`,
+            );
           }, 500);
         }
 
@@ -3660,6 +3664,10 @@ export default function ViewerPanel({
             fingerprint: useStore.getState().modelFingerprint,
             profile: graphicsProfile,
             signal: lodAbort.signal,
+            // Pin the decimated model to ALL_VISIBLE too - it is the model
+            // shown during motion, where DEFAULT LodMode would coverage-cull
+            // its own elements every frame and reintroduce the flicker.
+            allVisibleLodMode: FRAGS.LodMode.ALL_VISIBLE,
           }).then((attached) => {
             if (disposed || !attached) { attached?.dispose(); return; }
             lodAttached = attached;
@@ -3683,29 +3691,30 @@ export default function ViewerPanel({
           };
         }
 
-        // Tiered LOD policy (lodTierPolicy.ts). Small models bypass the
-        // worker's view-time culling entirely. ALL_GEOMETRY was the wrong
-        // enum: in the worker's fetchLodLevel the screen-coverage INVISIBLE
-        // verdict runs BEFORE the ALL_GEOMETRY check, so small elements
-        // still hard-vanished while zooming - that mode
-        // only suppressed the wire tier. ALL_VISIBLE is the first branch of
-        // the classifier: no frustum cull, no screen-size cull - only
-        // explicit visibility (Hider/isolate/ghost) is honored, so nothing
-        // can disappear during camera motion - the whole model draws every
-        // frame. Tiles stay GPU-resident either way
-        // (they are only freed under memoryOverflow), so the cost is just
-        // drawing the sub-3 px band - negligible below the small-tier gate.
-        // DEFAULT stays for larger models where the LOD budget genuinely
-        // buys frame time; their tier feeds the per-model quality writes in
-        // applyPerModelGraphicsQuality (medium pins the idle level, large
-        // gets the real navigation degrade plus a resting cap).
+        // LodMode.ALL_VISIBLE for every model, regardless of size. In DEFAULT
+        // LodMode the worker's screen-coverage classifier re-evaluates every
+        // element on each view refresh and hard-hides anything below the
+        // sub-pixel / frustum-edge threshold. That verdict recomputes every
+        // frame while the camera moves, so elements visibly flicker and vanish
+        // during orbit/zoom and a hidden element cannot be picked - the exact
+        // regression reported against the original viewer, which never culled
+        // at view time. ALL_VISIBLE is the classifier's first branch: no
+        // frustum cull, no screen-size cull - only explicit visibility (Hider /
+        // isolate / ghost) is honored, so nothing disappears under the user
+        // during navigation. Tiles stay GPU-resident either way (freed only
+        // under memoryOverflow) and the lodTierPolicy.ts bench found the cull
+        // band buys no measurable frame time up to ~5k elements; genuinely
+        // large models get their motion-time budget from the decimated LOD
+        // swap (loadAndAttachLod, itself pinned to ALL_VISIBLE), not from
+        // hiding elements. The per-model graphicsQuality writes below stay
+        // (inert under ALL_VISIBLE, but keep the tier plumbing correct).
         void (async () => {
           try {
             const ids = await model.getLocalIds();
             if (disposed || ids.length === 0) return;
             const tier = resolveLodTier(ids.length);
             modelLodTiers.set(modelId, tier);
-            if (tier === 'small' && typeof model.setLodMode === 'function') {
+            if (typeof model.setLodMode === 'function') {
               await model.setLodMode(FRAGS.LodMode.ALL_VISIBLE);
             }
             // Re-apply the current ladder level now that the tier is known:
@@ -3999,12 +4008,12 @@ export default function ViewerPanel({
             }, 180);
           };
 
-          window.addEventListener('ifc-panel-resize-start', onPanelResizeStart as EventListener);
-          window.addEventListener('ifc-panel-resize-end', onPanelResizeEnd as EventListener);
+          window.addEventListener(PANEL_RESIZE_START_EVENT, onPanelResizeStart as EventListener);
+          window.addEventListener(PANEL_RESIZE_END_EVENT, onPanelResizeEnd as EventListener);
           window.addEventListener('resize', onWindowResize);
           removePanelResizeHooks = () => {
-            window.removeEventListener('ifc-panel-resize-start', onPanelResizeStart as EventListener);
-            window.removeEventListener('ifc-panel-resize-end', onPanelResizeEnd as EventListener);
+            window.removeEventListener(PANEL_RESIZE_START_EVENT, onPanelResizeStart as EventListener);
+            window.removeEventListener(PANEL_RESIZE_END_EVENT, onPanelResizeEnd as EventListener);
             window.removeEventListener('resize', onWindowResize);
             if (windowResizeEndTimer !== null) {
               window.clearTimeout(windowResizeEndTimer);

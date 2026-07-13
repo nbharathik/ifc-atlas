@@ -10,7 +10,7 @@
 
 - **Viewer.** Three.js with `@thatopen/components`. Backend pre-converts IFC files to fragments; browser `web-ifc` parsing is the fallback. Section planes, linear / polygon / angle measurements, classification browser, multi-select aggregates, snap-to-vertex, screen-space measurement labels, share links.
 - **AI Chat.** Streaming WebSocket chat against OpenAI, Anthropic, or OpenRouter. A UI-configurable model catalogue, per-agent tool allowlists, prompt snippets, forkable system prompts, and a Document Index for PDF / Markdown context.
-- **Model editing (experimental, disabled by default).** Write tools run inside a sandboxed IfcOpenShell copy with a before-and-after diff and Apply / Discard approval. The capability ships disabled in this release behind the `EDIT_MODE_ENABLED` flag.
+- **Model editing.** Editing is available by default; AI write tools run inside a sandboxed IfcOpenShell copy with a before-and-after diff and Apply / Discard approval. Set `EDIT_MODE_ENABLED=0` for a read-only deployment.
 - **Integrations.** Full buildingSMART IDS 1.0 validation through `ifctester`. MCP client (consume external tools) and MCP server (expose the viewer toolset to Claude Desktop, Cursor, etc.).
 - **Distribution.** Self-host with Docker + Caddy, publish a viewer-only build to GitHub Pages, or package a Tauri 2 desktop app.
 

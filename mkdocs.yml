@@ -74,7 +74,9 @@ nav:
   - Getting Started:
     - Quick start: user/GETTING_STARTED.md
     - Features: user/FEATURES.md
+    - Practical workflows: user/USE_CASES.md
     - Editing models: user/EDITING.md
+    - Known limitations: user/KNOWN_LIMITATIONS.md
     - Keyboard shortcuts: user/KEYBOARD_SHORTCUTS.md
   - AI Agent Guide:
     - Overview: agent/index.md
@@ -94,6 +96,7 @@ nav:
     - Command line: user/CLI.md
     - Data storage: user/DATA_STORAGE.md
     - Troubleshooting: user/TROUBLESHOOTING.md
+  - Roadmap: ROADMAP.md
 
 validation:
   nav:

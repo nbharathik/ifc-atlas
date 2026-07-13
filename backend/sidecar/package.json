@@ -1,6 +1,6 @@
 {
   "name": "ifc-atlas-sidecar",
-  "version": "1.0.0",
+  "version": "0.1.1",
   "license": "MPL-2.0",
   "private": true,
   "description": "Node fragment-conversion sidecar for the IFC Atlas native parse engine.",

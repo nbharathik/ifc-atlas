@@ -176,8 +176,17 @@ export async function loadAndAttachLod(opts: {
   /** Graphics profile the full frag was cached under (cache-key component). */
   profile: string;
   signal?: AbortSignal;
+  /**
+   * FRAGS.LodMode.ALL_VISIBLE, passed in so this module stays free of a
+   * @thatopen/fragments value import. When set, the decimated model is pinned
+   * to it after load so the motion view never coverage-culls its own elements.
+   */
+  allVisibleLodMode?: number;
 }): Promise<AttachedLod | null> {
-  const { fragmentsManager, worldScene, fullModelId, autoCoordinate, fingerprint, profile, signal } = opts;
+  const {
+    fragmentsManager, worldScene, fullModelId, autoCoordinate, fingerprint, profile, signal,
+    allVisibleLodMode,
+  } = opts;
   if (!fingerprint) return null; // no fingerprint -> cannot address the cached full frag
   try {
     const query = `?fingerprint=${encodeURIComponent(fingerprint)}&profile=${encodeURIComponent(profile)}`;
@@ -194,6 +203,16 @@ export async function loadAndAttachLod(opts: {
     if (signal?.aborted) {
       try { lodModel.object.parent?.remove(lodModel.object); } catch { /* best-effort */ }
       return null;
+    }
+    // Keep the decimated model in ALL_VISIBLE: it is drawn in full during
+    // motion (that is the whole point of the low-poly swap), so its own
+    // view-time coverage cull must be off or it flickers like the full model.
+    if (typeof allVisibleLodMode === 'number') {
+      try {
+        await (lodModel as unknown as {
+          setLodMode?: (m: number) => Promise<void> | void;
+        }).setLodMode?.(allVisibleLodMode);
+      } catch { /* best-effort; LOD mode is an optimization, never fatal */ }
     }
     lodModel.object.visible = false;
     worldScene.add(lodModel.object);

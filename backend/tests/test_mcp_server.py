@@ -421,8 +421,8 @@ class TestWriteToolCatalog:
         from app.mcp_server import list_exposed_write_tools
         from app.mcp_server.server import _WRITE_ALLOWLIST
         tools = list_exposed_write_tools()
-        # Full write parity with the chat surface (R4): staged tools + direct
-        # ops + get_edit_history.
+        # Full write parity with the chat surface (R4): staged tools plus
+        # direct operations. Read-only history remains in the read catalog.
         assert len(tools) == len(_WRITE_ALLOWLIST) == 10
 
     def test_list_exposed_write_tools_has_descriptions(self):

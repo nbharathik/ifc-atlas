@@ -236,6 +236,17 @@ export interface ClassificationGroup {
 export interface ToolCall {
   name: string;
   arguments: Record<string, unknown>;
+  tier?: string;
+  tierLabel?: string;
+  activityKind?:
+    | 'read_only'
+    | 'viewer_action'
+    | 'validation'
+    | 'semantic_edit'
+    | 'geometry_edit'
+    | 'model_edit'
+    | 'code_read'
+    | 'code_edit';
   result?: string;
   executedOn?: 'client' | 'server';
   /** Number of assistant-text characters emitted BEFORE this tool call, so the
@@ -560,4 +571,3 @@ export interface CheckpointDiffResult {
   truncated: boolean;
   entries: CheckpointDiffEntry[];
 }
-

@@ -25,26 +25,32 @@ const CAMERA_RESTORE_TIMEOUT_MS = 60_000;
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let inFlight = false;
-let rerunRequested = false;
+let activeFingerprint: string | null = null;
+let rerunRequested: { reason: string; fingerprint: string | null } | null = null;
 
 /** Schedule a debounced soft reload (safe to call for every sync event). */
-export function requestModelRefresh(reason: string): void {
+export function requestModelRefresh(reason: string, fingerprint: string | null = null): void {
   const state = useStore.getState();
   if (!state.modelLoaded) return;
   if (debounceTimer !== null) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
     debounceTimer = null;
-    void runRefresh(reason);
+    void runRefresh(reason, fingerprint);
   }, DEBOUNCE_MS);
 }
 
-async function runRefresh(reason: string): Promise<void> {
+async function runRefresh(reason: string, fingerprint: string | null): Promise<void> {
   if (inFlight) {
-    // A structural edit landed while reloading - run once more afterwards.
-    rerunRequested = true;
+    // The backend can publish more than one compatibility event for the same
+    // edit. Do not turn that into a second full scene reconstruction.
+    if (fingerprint && fingerprint === activeFingerprint) return;
+    // A genuinely newer structural edit landed while reloading: keep only the
+    // latest request and refresh it once the current load settles.
+    rerunRequested = { reason, fingerprint };
     return;
   }
   inFlight = true;
+  activeFingerprint = fingerprint;
   const state = useStore.getState();
   state.logActivity({
     kind: 'info',
@@ -88,9 +94,11 @@ async function runRefresh(reason: string): Promise<void> {
     });
   } finally {
     inFlight = false;
-    if (rerunRequested) {
-      rerunRequested = false;
-      requestModelRefresh('follow-up edit');
+    activeFingerprint = null;
+    const followUp = rerunRequested;
+    rerunRequested = null;
+    if (followUp) {
+      requestModelRefresh(followUp.reason || 'follow-up edit', followUp.fingerprint);
     }
   }
 }

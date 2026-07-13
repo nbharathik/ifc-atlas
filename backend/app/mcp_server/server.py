@@ -105,11 +105,10 @@ _WRITE_ALLOWLIST: frozenset[str] = frozenset({
     # Direct operations (see _DIRECT_OP_TOOLS)
     "rename_element",
     "update_property_value",
+    "update_element_attribute",
     "rename_elements_batch",
     "update_properties_batch",
     "undo_last_edit",
-    # Read-only but edit-surface-scoped (undo-stack listing)
-    "get_edit_history",
 })
 
 # Direct-operation tools mutate the live model immediately (no pending-edit
@@ -119,6 +118,7 @@ _WRITE_ALLOWLIST: frozenset[str] = frozenset({
 _DIRECT_OP_TOOLS: frozenset[str] = frozenset({
     "rename_element",
     "update_property_value",
+    "update_element_attribute",
     "rename_elements_batch",
     "update_properties_batch",
     "undo_last_edit",

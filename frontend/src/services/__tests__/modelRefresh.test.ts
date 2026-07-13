@@ -59,6 +59,22 @@ describe('requestModelRefresh', () => {
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
   });
 
+  it('does not reload twice for duplicate events from the same edit', async () => {
+    let resolveMeta!: (value: typeof META) => void;
+    vi.mocked(getMetaWithMode).mockReturnValue(
+      new Promise((resolve) => { resolveMeta = resolve; }) as never,
+    );
+
+    requestModelRefresh('geometry patch', 'edit-fingerprint');
+    await vi.advanceTimersByTimeAsync(500);
+    requestModelRefresh('compatibility refresh', 'edit-fingerprint');
+    await vi.advanceTimersByTimeAsync(500);
+
+    resolveMeta(META);
+    await vi.runAllTimersAsync();
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+  });
+
   it('adopts the fresh contract and remounts the viewer via loadStartTs', async () => {
     requestModelRefresh('created wall');
     await vi.advanceTimersByTimeAsync(1000);

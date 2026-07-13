@@ -34,6 +34,7 @@ _WRITE_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "rename_element",
         "update_property_value",
+        "update_element_attribute",
         "rename_elements_batch",
         "update_properties_batch",
         "propose_edit",
@@ -416,7 +417,7 @@ TOOL_DEFINITIONS = [
         "name": "rename_element",
         "description": (
             "Rename an IFC element by changing its Name attribute. "
-            "This is a reversible edit - use undo_last_edit to roll back. "
+            "Chat-agent calls are staged in an IFC sandbox for approval before apply. "
             "Always confirm the element_id with get_element_details first."
         ),
         "parameters": {
@@ -439,7 +440,7 @@ TOOL_DEFINITIONS = [
         "name": "update_property_value",
         "description": (
             "Update a single property value on an IFC element's property set. "
-            "This is a reversible edit - use undo_last_edit to roll back. "
+            "Chat-agent calls are staged in an IFC sandbox for approval before apply. "
             "Use get_element_details first to confirm the property set and property name."
         ),
         "parameters": {
@@ -462,6 +463,32 @@ TOOL_DEFINITIONS = [
                 },
             },
             "required": ["element_id", "property_name", "new_value"],
+        },
+        "where": "server",
+    },
+    {
+        "name": "update_element_attribute",
+        "description": (
+            "Update one safe IFC text attribute without changing geometry. "
+            "Supported attributes: Description, ObjectType, Tag, LongName. "
+            "The edit is sandboxed for approval, validated, logged, and updates the viewer in place. "
+            "Use get_element_details first to confirm the element and current value."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "element_id": {"type": "integer", "description": "IFC Express ID of the element."},
+                "attribute": {
+                    "type": "string",
+                    "enum": ["Description", "ObjectType", "Tag", "LongName"],
+                    "description": "The controlled IFC text attribute to update.",
+                },
+                "new_value": {
+                    "type": "string",
+                    "description": "New text, or an empty string to clear the optional attribute.",
+                },
+            },
+            "required": ["element_id", "attribute", "new_value"],
         },
         "where": "server",
     },
@@ -1265,7 +1292,7 @@ _TOOL_TIERS: dict[str, tuple[str, str]] = {
     "search_by_property":      ("read_model",  "Read - Model"),
     "get_all_property_names":  ("read_model",  "Read - Model"),
     "get_quantities_summary":  ("read_model",  "Read - Model"),
-    "run_model_health_check":  ("read_model",  "Read - Model"),
+    "run_model_health_check":  ("validate",    "Validate"),
     "highlight_elements":      ("read_viewer", "Read - Viewer"),
     "select_element":          ("read_viewer", "Read - Viewer"),
     "isolate_elements":        ("read_viewer", "Read - Viewer"),
@@ -1276,9 +1303,10 @@ _TOOL_TIERS: dict[str, tuple[str, str]] = {
     "rename_element":          ("write_edit",  "Write - Edit"),
     "rename_elements_batch":   ("write_edit",  "Write - Edit"),
     "update_property_value":   ("write_edit",  "Write - Edit"),
+    "update_element_attribute": ("write_edit", "Write - Edit"),
     "update_properties_batch": ("write_edit",  "Write - Edit"),
     "undo_last_edit":          ("write_edit",  "Write - Edit"),
-    "get_edit_history":        ("write_edit",  "Write - Edit"),
+    "get_edit_history":        ("read_model",  "Read - Model"),
     "propose_edit":            ("write_edit",  "Write - Edit"),
     "execute_ifc_query_code":  ("read_model",  "Read - Model"),
     "execute_ifc_code":        ("write_edit",  "Write - Edit"),
@@ -1299,7 +1327,7 @@ _TOOL_TIERS: dict[str, tuple[str, str]] = {
     "get_cost_summary":            ("read_model",  "Read - Model"),
     "get_carbon_summary":          ("read_model",  "Read - Model"),
     "get_element_relationships":   ("read_model",  "Read - Model"),
-    "run_model_audit":             ("read_model",  "Read - Model"),
+    "run_model_audit":             ("validate",    "Validate"),
 }
 
 
@@ -1348,6 +1376,31 @@ def structural_write_tool_names() -> frozenset[str]:
 def semantic_write_tool_names() -> frozenset[str]:
     """Write tools whose edits are metadata-only (no viewer reload)."""
     return write_edit_tool_names() - STRUCTURAL_WRITE_TOOLS
+
+
+def tool_activity_kind(name: str) -> str:
+    """User-facing effect classification for chat progress/tool cards.
+
+    This is deliberately more specific than the permission tier: code
+    execution and geometry changes deserve distinct warnings even though both
+    may share the same write gate.
+    """
+    if name == "execute_ifc_query_code":
+        return "code_read"
+    if name == "execute_ifc_code":
+        return "code_edit"
+    if name == "undo_last_edit":
+        return "model_edit"
+    if name in STRUCTURAL_WRITE_TOOLS:
+        return "geometry_edit"
+    tier, _ = tool_tier(name)
+    if tier == "write_edit":
+        return "semantic_edit"
+    if tier == "validate":
+        return "validation"
+    if tier == "read_viewer":
+        return "viewer_action"
+    return "read_only"
 
 
 # Tools that DON'T need IfcOpenShell can run during warm-up.
@@ -1651,6 +1704,44 @@ def _get_docs(arguments: dict[str, Any]) -> dict[str, Any]:
 
     return {"error": f"get_docs: unknown source '{source}'. "
                      "Use one of: ifcopenshell, bsdd, user, ifc-schema."}
+
+
+def _pending_edit_result(envelope: Any) -> dict[str, Any]:
+    if envelope is None:
+        return {
+            "action": "pending_noop",
+            "message": "Sandbox ran cleanly but produced no model change - nothing to review.",
+        }
+    return {
+        "action": "pending_edit",
+        "edit_id": envelope.edit_id,
+        "summary": envelope.summary,
+        "counts": envelope.counts,
+        "change_preview": [c.model_dump() for c in envelope.changes[:10]],
+        "total_changes": len(envelope.changes),
+        "preview_truncated": len(envelope.changes) > 10,
+        "verifier_verdict": envelope.verifier_verdict,
+        "note": (
+            "Edit is PENDING - review it in chat before applying. Nothing mutates yet."
+            + _verdict_suffix(envelope.verifier_verdict)
+        ),
+    }
+
+
+def _stage_agent_edit(
+    actor: Actor,
+    operations: list[dict[str, Any]],
+    summary: str,
+) -> Optional[dict[str, Any]]:
+    """Stage chat-agent writes while preserving direct human/MCP operations."""
+    if actor is not Actor.AGENT:
+        return None
+    envelope = sandbox_service.propose_edit(
+        ifc_service=ifc_service,
+        operations=operations,
+        summary=summary,
+    )
+    return _pending_edit_result(envelope)
 
 
 def _verdict_suffix(verdict: Optional[dict[str, Any]]) -> str:
@@ -1960,21 +2051,57 @@ def _execute_tool_raw(
         # /`edit_id`, plus op_id/actor/patch_tier), so downstream WS-sync and
         # LLM-facing code is unchanged.
         elif name == "rename_element":
+            element_id = int(arguments["element_id"])
+            new_name = str(arguments["new_name"])
+            pending = _stage_agent_edit(
+                actor,
+                [{"op": "set_name", "element_id": element_id, "new_name": new_name}],
+                f"Rename element #{element_id} to '{new_name}'",
+            )
+            if pending is not None:
+                return pending
             return operation_service.execute(
                 "set_name",
-                {"element_id": int(arguments["element_id"]), "new_name": str(arguments["new_name"])},
+                {"element_id": element_id, "new_name": new_name},
                 actor=actor, ifc_service=ifc_service,
             ).to_public_dict()
 
         elif name == "update_property_value":
+            params = {
+                "element_id": int(arguments["element_id"]),
+                "property_name": str(arguments["property_name"]),
+                "new_value": arguments["new_value"],
+                "pset_name": arguments.get("pset_name"),
+            }
+            pending = _stage_agent_edit(
+                actor,
+                [{"op": "set_property", **params}],
+                f"Update {params.get('pset_name') or 'property set'}.{params['property_name']} on #{params['element_id']}",
+            )
+            if pending is not None:
+                return pending
             return operation_service.execute(
                 "set_property",
-                {
-                    "element_id": int(arguments["element_id"]),
-                    "property_name": str(arguments["property_name"]),
-                    "new_value": arguments["new_value"],
-                    "pset_name": arguments.get("pset_name"),
-                },
+                params,
+                actor=actor, ifc_service=ifc_service,
+            ).to_public_dict()
+
+        elif name == "update_element_attribute":
+            params = {
+                "element_id": int(arguments["element_id"]),
+                "attribute": str(arguments["attribute"]),
+                "new_value": str(arguments.get("new_value") or ""),
+            }
+            pending = _stage_agent_edit(
+                actor,
+                [{"op": "set_attribute", **params}],
+                f"Update {params['attribute']} on element #{params['element_id']}",
+            )
+            if pending is not None:
+                return pending
+            return operation_service.execute(
+                "set_attribute",
+                params,
                 actor=actor, ifc_service=ifc_service,
             ).to_public_dict()
 
@@ -1982,6 +2109,13 @@ def _execute_tool_raw(
             renames = arguments.get("renames") or []
             if not isinstance(renames, list):
                 return {"error": "rename_elements_batch: 'renames' must be a list"}
+            pending = _stage_agent_edit(
+                actor,
+                [{"op": "set_name", **item} for item in renames],
+                f"Rename {len(renames)} elements",
+            )
+            if pending is not None:
+                return pending
             return operation_service.execute(
                 "set_names_batch", {"renames": renames},
                 actor=actor, ifc_service=ifc_service,
@@ -1991,6 +2125,13 @@ def _execute_tool_raw(
             updates = arguments.get("updates") or []
             if not isinstance(updates, list):
                 return {"error": "update_properties_batch: 'updates' must be a list"}
+            pending = _stage_agent_edit(
+                actor,
+                [{"op": "set_property", **item} for item in updates],
+                f"Update properties on {len(updates)} elements",
+            )
+            if pending is not None:
+                return pending
             return operation_service.execute(
                 "set_properties_batch", {"updates": updates},
                 actor=actor, ifc_service=ifc_service,
@@ -2012,31 +2153,7 @@ def _execute_tool_raw(
                 operations=ops,
                 summary=arguments.get("summary"),
             )
-            if envelope is None:
-                return {
-                    "action": "pending_noop",
-                    "message": (
-                        "Sandbox ran cleanly but produced no structural "
-                        "change - nothing to review."
-                    ),
-                }
-            return {
-                "action": "pending_edit",
-                "edit_id": envelope.edit_id,
-                "summary": envelope.summary,
-                "counts": envelope.counts,
-                "change_preview": [
-                    c.model_dump() for c in envelope.changes[:10]
-                ],
-                "total_changes": len(envelope.changes),
-                "preview_truncated": len(envelope.changes) > 10,
-                "verifier_verdict": envelope.verifier_verdict,
-                "note": (
-                    "Edit is PENDING - the user must click Apply in the "
-                    "Diff Preview panel. Nothing mutates yet."
-                    + _verdict_suffix(envelope.verifier_verdict)
-                ),
-            }
+            return _pending_edit_result(envelope)
 
         elif name in {"execute_ifc_query_code", "execute_ifc_code"}:
             code = arguments.get("code")

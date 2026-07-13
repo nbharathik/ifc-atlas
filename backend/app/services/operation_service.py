@@ -624,6 +624,14 @@ def _op_set_property(svc: Any, p: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _op_set_attribute(svc: Any, p: dict[str, Any]) -> dict[str, Any]:
+    return svc.update_text_attribute(
+        int(p["element_id"]),
+        str(p["attribute"]),
+        p.get("new_value"),
+    )
+
+
 def _op_set_names_batch(svc: Any, p: dict[str, Any]) -> dict[str, Any]:
     return svc.rename_elements_batch(list(p["renames"]))
 
@@ -685,6 +693,13 @@ def _register_builtins(service: OperationService) -> None:
         executor=_op_set_property,
         required={"element_id": int, "property_name": str, "new_value": ANY},
         optional={"pset_name": str},
+        default_tier=PatchTier.METADATA,
+    ))
+    service.register(OpSpec(
+        name="set_attribute",
+        summary="Set a safe IFC text attribute (Description, ObjectType, Tag, or LongName).",
+        executor=_op_set_attribute,
+        required={"element_id": int, "attribute": str, "new_value": str},
         default_tier=PatchTier.METADATA,
     ))
     service.register(OpSpec(

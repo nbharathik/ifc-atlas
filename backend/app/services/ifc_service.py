@@ -1137,6 +1137,70 @@ class IfcService:
             "changed_ids": [element_id],
         }
 
+    def update_text_attribute(
+        self,
+        element_id: int,
+        attribute: str,
+        new_value: Optional[str],
+    ) -> dict[str, Any]:
+        """Update a safe, non-relational IFC text attribute.
+
+        Relationship and enum fields are intentionally excluded: assigning
+        those as strings can invalidate an IFC graph. Spatial/type changes go
+        through their dedicated operations instead.
+        """
+        allowed = {"Description", "ObjectType", "Tag", "LongName"}
+        if attribute not in allowed:
+            raise ValueError(
+                f"attribute must be one of {', '.join(sorted(allowed))}"
+            )
+        entity = self._require_entity(element_id)
+        if not hasattr(entity, attribute):
+            raise ValueError(
+                f"Element {element_id} ({entity.is_a()}) has no {attribute} attribute"
+            )
+
+        old_value = getattr(entity, attribute, None)
+        value = None if new_value is None or not str(new_value).strip() else str(new_value).strip()
+        if old_value == value:
+            return {
+                "changed": False,
+                "reason": f"{attribute} is already that value",
+                "element_id": element_id,
+            }
+
+        setattr(entity, attribute, value)
+        self._persist_model()
+        self._model_version += 1
+        edit_id = uuid.uuid4().hex
+        self._last_edit_id = edit_id
+        self._project_cache = None
+        self._stats_cache = None
+
+        description = (
+            f"Set {attribute} on #{element_id} ({entity.is_a()}) "
+            f"from {old_value!r} to {value!r}"
+        )
+        self._push_undo(edit_id, description, [{
+            "op": "set_attribute",
+            "express_id": element_id,
+            "attribute": attribute,
+            "value": old_value,
+        }])
+        self._cache_meta_snapshot()
+        return {
+            "changed": True,
+            "element_id": element_id,
+            "ifc_type": entity.is_a(),
+            "attribute": attribute,
+            "old_value": old_value,
+            "new_value": value,
+            "edit_id": edit_id,
+            "description": description,
+            "action": "metadata_changed",
+            "changed_ids": [element_id],
+        }
+
     def update_property_value(
         self,
         element_id: int,
@@ -1665,6 +1729,14 @@ class IfcService:
             if kind == "set_name":
                 entity.Name = inv_op["value"]
                 self._patch_cached_tree_name(expr_id, inv_op["value"] or "", entity.is_a())
+
+            elif kind == "set_attribute":
+                try:
+                    setattr(entity, inv_op["attribute"], inv_op.get("value"))
+                except Exception as exc:
+                    issues.append(
+                        f"Could not restore {inv_op.get('attribute')} on {expr_id}: {exc}"
+                    )
 
             elif kind == "set_property":
                 op = EditOperation(

@@ -36,8 +36,10 @@ Server -> client. A streamed text fragment from the LLM.
 
 Server -> client. The agent is invoking a tool.
 
+`tier` is the permission boundary; `activity_kind` describes the visible effect so the UI can distinguish read-only work, validation, viewer actions, semantic edits, geometry edits and code execution before the result arrives.
+
 ```json
-{"type": "tool_call", "name": "search_elements", "arguments": {"query": "wall"}}
+{"type": "tool_call", "name": "search_elements", "arguments": {"query": "wall"}, "tier": "read_model", "tier_label": "Read - Model", "activity_kind": "read_only"}
 ```
 
 ---
@@ -194,4 +196,4 @@ Server -> client. An error occurred (invalid chat payload, in-band stream error,
 
 ---
 
-_Last regenerated: 2026-07-11. Run `python scripts/generate_api_doc.py` to refresh._
+_Last regenerated: 2026-07-12. Run `python scripts/generate_api_doc.py` to refresh._

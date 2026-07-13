@@ -4,6 +4,11 @@
   <strong>Open-source, AI-native BIM platform: view, inspect, and edit native IFC models — with an AI assistant, git-like history, and an MCP server.</strong><br>
 </p>
 
+> **v0.1.1 release candidate.** Rendering, editing, AI approvals, settings, and
+> release workflows have been hardened for the v0.1.1 public release. See the
+> [release notes](RELEASE_NOTES.md), [known limitations](docs/user/KNOWN_LIMITATIONS.md),
+> and [roadmap](docs/ROADMAP.md).
+
 <p align="center">
   <img alt="IFC Atlas with a sample house model loaded: the model tree on the left, the 3D viewport in the center, and the AI agent summarizing the model on the right." src="docs/assets/viewer.png" width="900">
 </p>
@@ -19,6 +24,7 @@
 - **Deployment.** Desktop app, Docker self-hosting, or a browser-only demo.
 
 Full feature catalogue and shortcuts: [`docs/user/FEATURES.md`](docs/user/FEATURES.md).
+Practical workflows and example prompts: [`docs/user/USE_CASES.md`](docs/user/USE_CASES.md).
 
 ## Download
 

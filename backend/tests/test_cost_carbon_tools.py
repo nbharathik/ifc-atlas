@@ -8,7 +8,7 @@ tier/tool-set registration.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 FAKE_BOQ = {
     "currency": "USD",
@@ -218,14 +218,15 @@ def test_carbon_summary_no_model_error():
 def test_new_tools_registered_in_definitions_and_tier():
     from app.services.tools import TOOL_BY_NAME, tool_tier
 
-    for name in (
-        "get_cost_summary",
-        "get_carbon_summary",
-        "get_element_relationships",
-        "run_model_audit",
-    ):
+    expected_tiers = {
+        "get_cost_summary": "read_model",
+        "get_carbon_summary": "read_model",
+        "get_element_relationships": "read_model",
+        "run_model_audit": "validate",
+    }
+    for name, expected_tier in expected_tiers.items():
         assert name in TOOL_BY_NAME, name
-        assert tool_tier(name)[0] == "read_model", name
+        assert tool_tier(name)[0] == expected_tier, name
         assert TOOL_BY_NAME[name].get("where") == "server", name
 
 

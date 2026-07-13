@@ -24,8 +24,8 @@ class FakeIfcService:
     def __init__(self, fingerprint: str = "fp-unit"):
         self._fp = fingerprint
         self._elements = {
-            361: {"Name": "Wall-A", "props": {"Reference": "old-ref"}},
-            362: {"Name": "Wall-B", "props": {"Reference": "old-ref-b"}},
+            361: {"Name": "Wall-A", "Description": None, "props": {"Reference": "old-ref"}},
+            362: {"Name": "Wall-B", "Description": None, "props": {"Reference": "old-ref-b"}},
         }
         self._undo: list[dict] = []
         self._counter = 0
@@ -76,6 +76,25 @@ class FakeIfcService:
             "old_value": old, "new_value": new_value, "edit_id": eid,
             "action": "metadata_changed", "changed_ids": [element_id],
             "description": f"Set {property_name}={new_value!r}",
+        }
+
+    def update_text_attribute(self, element_id, attribute, new_value) -> dict:
+        el = self._elements.get(element_id)
+        if el is None:
+            raise ValueError(f"Element {element_id} not found")
+        old = el.get(attribute)
+        el[attribute] = new_value or None
+        eid = self._next_edit_id()
+        return {
+            "changed": old != el[attribute],
+            "element_id": element_id,
+            "attribute": attribute,
+            "old_value": old,
+            "new_value": el[attribute],
+            "edit_id": eid,
+            "action": "metadata_changed",
+            "changed_ids": [element_id],
+            "description": f"Set {attribute}",
         }
 
     def rename_elements_batch(self, renames: list[dict]) -> dict:
@@ -211,6 +230,19 @@ def test_set_name_success(env):
     pub = res.to_public_dict()
     assert pub["action"] == "metadata_changed"
     assert pub["actor"] == "user"
+
+
+def test_set_attribute_success(env):
+    service, svc = env
+    res = service.execute(
+        "set_attribute",
+        {"element_id": 361, "attribute": "Description", "new_value": "Fire wall"},
+        actor=Actor.USER,
+        ifc_service=svc,
+    )
+    assert res.ok and res.changed
+    assert res.patch_tier == PatchTier.METADATA
+    assert svc._elements[361]["Description"] == "Fire wall"
 
 
 def test_actor_attribution_recorded_in_log(env):

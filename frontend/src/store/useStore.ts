@@ -5,6 +5,7 @@ import type {
   AgentPreset, ChatAttachment, PendingEditEnvelope, OperationResult,
 } from '../types/ifc';
 import type { ServerConvertCapabilities } from '../services/ifc/serverConvert';
+import { invalidateModelElementDetails } from '../services/ifc/elementDetailInvalidation';
 import {
   DEFAULT_PREBUILD_WAIT_PREFS,
   PREBUILD_POLL_MAX_MS,
@@ -1876,31 +1877,20 @@ export const useStore = create<AppState>()(
     }),
 
     invalidateElementDetails: (changedIds) => {
-      // Also clear ModelService's element-detail cache (and, in backend-
-      // metadata mode, mark the ids so the next read fetches authoritative
-      // IfcOpenShell data instead of the stale pristine index). Dynamic import
-      // keeps the viewer engine out of the store's static chunk so the
-      // entry-bundle split is preserved; ModelService is already loaded by the
-      // time any edit fires, so this resolves from cache.
-      const cleared = import('../services/ifc/ModelService')
-        .then((m) => m.modelService.invalidateElementDetails(changedIds))
-        .catch(() => { /* viewer not loaded yet - nothing to invalidate */ });
-      // Flip the panel's refresh keys only AFTER the cache clear resolves:
-      // bumping the serial first would let PropertiesPanel's re-fetch peek
-      // the stale cached detail and render pre-edit values.
-      void cleared.then(() => {
-        set((s) => {
-          if (s.selectedElementId !== null && changedIds.includes(s.selectedElementId)) {
-            // The serial is what re-runs PropertiesPanel's fetch effect (the
-            // selection id is unchanged by an edit), fixing the blank panel
-            // that previously persisted until manual re-selection.
-            return {
-              selectedElement: null,
-              detailRefreshSerial: s.detailRefreshSerial + 1,
-            };
-          }
-          return {};
-        });
+      // ModelService registers its already-loaded singleton with this tiny
+      // bridge, so cache eviction is synchronous without pulling the heavy IFC
+      // engine into the store's entry chunk.
+      invalidateModelElementDetails(changedIds);
+      set((s) => {
+        if (s.selectedElementId !== null && changedIds.includes(s.selectedElementId)) {
+          // The serial re-runs PropertiesPanel's fetch effect while keeping the
+          // selected express id stable across semantic edits.
+          return {
+            selectedElement: null,
+            detailRefreshSerial: s.detailRefreshSerial + 1,
+          };
+        }
+        return {};
       });
     },
 

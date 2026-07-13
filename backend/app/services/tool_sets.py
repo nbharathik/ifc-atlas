@@ -169,6 +169,7 @@ _BUILTIN: list[ToolSet] = [
             "select_element",
             "rename_element",
             "update_property_value",
+            "update_element_attribute",
             "execute_ifc_code",
             "undo_last_edit",
             "get_edit_history",

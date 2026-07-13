@@ -10,8 +10,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from app.services.ifc_service import IfcService
 
 
@@ -359,8 +357,8 @@ class TestBatchUndoIntegration:
 
 def _run_batch_rename(arguments: dict) -> dict:
     from app.services.tools import execute_tool
+    from app.services.operation_service import Actor
 
-    mock_entity = _make_entity(1, "OldName")
     mock_result = {
         "changed_count": 1,
         "skipped_count": 0,
@@ -374,11 +372,12 @@ def _run_batch_rename(arguments: dict) -> dict:
     with patch("app.services.tools.ifc_service") as mock_svc:
         mock_svc.is_loaded = True
         mock_svc.rename_elements_batch.return_value = mock_result
-        return execute_tool("rename_elements_batch", arguments)
+        return execute_tool("rename_elements_batch", arguments, actor=Actor.MCP)
 
 
 def _run_batch_update(arguments: dict) -> dict:
     from app.services.tools import execute_tool
+    from app.services.operation_service import Actor
 
     mock_result = {
         "changed_count": 1,
@@ -393,7 +392,7 @@ def _run_batch_update(arguments: dict) -> dict:
     with patch("app.services.tools.ifc_service") as mock_svc:
         mock_svc.is_loaded = True
         mock_svc.update_properties_batch.return_value = mock_result
-        return execute_tool("update_properties_batch", arguments)
+        return execute_tool("update_properties_batch", arguments, actor=Actor.MCP)
 
 
 class TestExecuteToolDispatch:
@@ -406,15 +405,16 @@ class TestExecuteToolDispatch:
         assert "error" in result
 
     def test_rename_batch_missing_key_uses_empty(self):
-        result = _run_batch_rename({})
+        _run_batch_rename({})
         # Empty renames → 0 changed; the mock returns the preset result but
         # execute_tool should pass an empty list to the service.
         # Since we mocked rename_elements_batch, just verify it was called:
         from app.services.tools import execute_tool
+        from app.services.operation_service import Actor
         with patch("app.services.tools.ifc_service") as mock_svc:
             mock_svc.is_loaded = True
             mock_svc.rename_elements_batch.return_value = {"changed_count": 0, "results": []}
-            execute_tool("rename_elements_batch", {})
+            execute_tool("rename_elements_batch", {}, actor=Actor.MCP)
             mock_svc.rename_elements_batch.assert_called_once_with([])
 
     def test_update_batch_dispatched(self):
@@ -429,8 +429,9 @@ class TestExecuteToolDispatch:
 
     def test_update_batch_missing_key_uses_empty(self):
         from app.services.tools import execute_tool
+        from app.services.operation_service import Actor
         with patch("app.services.tools.ifc_service") as mock_svc:
             mock_svc.is_loaded = True
             mock_svc.update_properties_batch.return_value = {"changed_count": 0, "results": []}
-            execute_tool("update_properties_batch", {})
+            execute_tool("update_properties_batch", {}, actor=Actor.MCP)
             mock_svc.update_properties_batch.assert_called_once_with([])

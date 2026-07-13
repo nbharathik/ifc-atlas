@@ -41,7 +41,7 @@ The model decided no tool was needed. Refine the prompt with a specific IFC type
 
 ### "tool_not_allowed: rename_element"
 
-You asked for a write operation. Model editing is an experimental capability that ships disabled in this release, so the backend rejects every write tool at the API layer. The agent should describe the change it would make instead of applying it.
+You asked for a write operation while the chat is in Ask mode or the backend is configured read-only. Switch to Edit mode, or check `/api/ifc/edit-state` and remove `EDIT_MODE_ENABLED=0` if this deployment is intended to allow editing. Ask mode always rejects write tools.
 
 ### WebSocket reconnects constantly
 
@@ -55,7 +55,7 @@ Add a key under Chat Manager → **Settings** (persists to `~/.ifc-atlas/secrets
 
 ## Edit and Diff Preview
 
-These issues only apply when writes are enabled (the experimental edit mode, or MCP writes via `MCP_ALLOW_WRITES=1`); both are off by default in this release.
+These issues apply to Edit mode. MCP writes remain independently disabled unless `MCP_ALLOW_WRITES=1` is set.
 
 ### Diff Preview shows "no changes"
 

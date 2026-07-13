@@ -20,12 +20,12 @@ Built-in agents are read-only: they cannot be deleted or renamed. To specialise 
 
 ---
 
-## Edit Assistant (experimental, disabled by default)
+## Edit Assistant
 
 - **Role:** BIM authoring assistant that proposes and applies edits in small, reviewable steps. The only agent with write tools.
-- **Status:** Disabled in this release. The `EDIT_MODE_ENABLED` flag (backend environment variable plus frontend constant, both off by default) hides the Edit mode and hard-blocks every write tool at the API layer.
-- **Allowed tools:** Read-tier query tools (`get_project_info`, `get_model_stats`, `search_elements`, `get_element_details`, `get_elements_by_type`, `get_elements_by_storey`, `get_storeys`, `search_by_property`, `get_all_property_names`, `execute_ifc_query_code`), viewer tools (`highlight_elements`, `select_element`), and the write tier (`rename_element`, `update_property_value`, `execute_ifc_code`, `undo_last_edit`, `get_edit_history`).
-- **When enabled, use for:** Bulk renames, property standardisation, data cleanup, scripted edits.
+- **Status:** Available by default. `EDIT_MODE_ENABLED=0` hides Edit mode and hard-blocks every write tool for read-only deployments.
+- **Allowed tools:** Read-tier query tools (`get_project_info`, `get_model_stats`, `search_elements`, `get_element_details`, `get_elements_by_type`, `get_elements_by_storey`, `get_storeys`, `search_by_property`, `get_all_property_names`, `execute_ifc_query_code`), viewer tools (`highlight_elements`, `select_element`), and the write tier (`rename_element`, `update_element_attribute`, `update_property_value`, `execute_ifc_code`, `undo_last_edit`, `get_edit_history`).
+- **Use for:** Bulk renames, safe text attributes, property standardisation, data cleanup, and reviewed scripted edits.
 - **Examples:**
   - *"Rename all walls on Ground Floor to 'Exterior Wall'."*
   - *"Add IsExternal=true to the Pset_WallCommon of all IfcWall elements."*

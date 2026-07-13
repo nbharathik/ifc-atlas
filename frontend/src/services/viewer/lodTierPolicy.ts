@@ -12,7 +12,15 @@
  * The floor rule: the interaction ladder drops quality to 0.6 during
  * navigation, which maps to a ~1.5x wider cull band than the idle 0.85.
  * Wiring that drop naively to every model would make elements visibly
- * vanish during orbit on exactly the models users care about. So:
+ * vanish during orbit on exactly the models users care about.
+ *
+ * NOTE (2026-07): ViewerPanel now pins EVERY model to ALL_VISIBLE LodMode,
+ * not just the small tier, because DEFAULT-mode coverage culling made
+ * elements flicker and vanish during orbit at any size (a regression against
+ * the original viewer). Large models get their motion-time budget from the
+ * decimated LOD swap instead. The tier below therefore only drives the
+ * per-model graphicsQuality writes, which are inert under ALL_VISIBLE but
+ * kept so the plumbing stays correct. Original tier rationale retained:
  *
  *   small  (< ALL_VISIBLE_MAX_ELEMENTS): ALL_VISIBLE LodMode - the worker
  *          skips coverage/frustum culling entirely, quality is irrelevant.
@@ -28,9 +36,10 @@
 
 export type LodTier = 'small' | 'medium' | 'large';
 
-/** Below this element count the model runs ALL_VISIBLE (nothing ever
- *  disappears during camera motion). Matches the element-culler small-model
- *  gate; raise only with probe data showing ALL_VISIBLE holds frame rate. */
+/** Small/medium tier boundary and the element-culler's small-model gate.
+ *  ViewerPanel now runs ALL_VISIBLE at every tier (see the NOTE above), so
+ *  this no longer gates ALL_VISIBLE; it still classifies the tier used for
+ *  the per-model quality writes and the frustum-culler enablement. */
 export const ALL_VISIBLE_MAX_ELEMENTS = 300;
 
 /** At or above this element count the model is 'large'. Kept as a distinct

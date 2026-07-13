@@ -17,6 +17,7 @@ import {
   fetchBackendMetadataIndex,
 } from './backendMetadataIndex';
 import { composeIdBridge } from './composeIdBridge';
+import { registerElementDetailInvalidator } from './elementDetailInvalidation';
 import { getClientIfcFlag } from './featureFlags';
 import { MetadataWorkerClient } from './metadataWorker';
 import { resolveHitProductId } from './resolveHitProductId';
@@ -1466,4 +1467,10 @@ function ifcTypeDisplayName(raw: string): string {
 }
 
 export const modelService = new ModelServiceImpl();
+
+// Keep the store/viewer bundle boundary intact while making post-edit cache
+// invalidation synchronous once ModelService is loaded.
+registerElementDetailInvalidator((expressIds) => {
+  modelService.invalidateElementDetails([...expressIds]);
+});
 export type ModelService = ModelServiceImpl;

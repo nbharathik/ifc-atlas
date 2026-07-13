@@ -30,7 +30,12 @@ from app.services.prompt_library import prompt_library
 from app.services.snippet_service import snippet_service
 from app.services.sandbox_service import sandbox_service
 from app.services.tool_sets import tool_set_registry
-from app.services.tools import execute_tool, tool_tier, tool_where, get_tool_catalog
+from app.services.tools import (
+    get_tool_catalog,
+    tool_activity_kind,
+    tool_tier,
+    tool_where,
+)
 from app.services.tool_settings_service import tool_settings_service
 from app.services.session_memory import SessionMemory
 
@@ -717,7 +722,8 @@ CLIENT_TOOL_TIMEOUT_SECONDS = 30.0
 
 # WS_EVENT: tool_call
 # Server -> client. The agent is invoking a tool.
-# Schema: {"type": "tool_call", "name": "search_elements", "arguments": {"query": "wall"}}
+# `tier` is the permission boundary; `activity_kind` describes the visible effect so the UI can distinguish read-only work, validation, viewer actions, semantic edits, geometry edits and code execution before the result arrives.
+# Schema: {"type": "tool_call", "name": "search_elements", "arguments": {"query": "wall"}, "tier": "read_model", "tier_label": "Read - Model", "activity_kind": "read_only"}
 
 # WS_EVENT: tool_result
 # Server -> client. The result of a tool call. "executed_on" is "server" or "client".
@@ -1009,10 +1015,14 @@ async def chat_websocket(websocket: WebSocket):
                             "content": event["content"],
                         })
                     elif event_type == "tool_call":
+                        tier_id, tier_label = tool_tier(event["name"])
                         await websocket.send_json({
                             "type": "tool_call",
                             "name": event["name"],
                             "arguments": event["arguments"],
+                            "tier": tier_id,
+                            "tier_label": tier_label,
+                            "activity_kind": tool_activity_kind(event["name"]),
                         })
                     elif event_type == "tool_result":
                         result_data = event.get("result")
@@ -1142,5 +1152,3 @@ async def chat_websocket(websocket: WebSocket):
             await receive_task
         except (asyncio.CancelledError, Exception):
             pass
-
-

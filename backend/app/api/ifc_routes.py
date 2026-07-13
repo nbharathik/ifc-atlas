@@ -987,16 +987,15 @@ async def get_frag_delta(edit_id: str):
     ``fragmentDeltaLoader`` consumes this to apply per-element geometry
     updates via ``Editor.edit()`` instead of triggering a full reload.
 
-    **v1.0 scope** - the route returns the correct shape but with an
+    **v0.1.1 scope** - the route returns the correct shape but with an
     empty ``representations`` map. The frontend loader iterates, finds
     no matching repData per express id, and returns ``updatedCount=0``;
     the existing ``rebuild_started`` full-reload path then takes over.
 
-    **v1.1** will populate the ``representations`` map with
-    @thatopen/fragments-compatible ``RawRepresentation`` blobs built
-    from the live IfcOpenShell geometry - at which point edits update
-    in-place under 100 ms instead of triggering the multi-second
-    reload.
+    A future release will populate the ``representations`` map with
+    @thatopen/fragments-compatible ``RawRepresentation`` blobs built from the
+    live IfcOpenShell geometry. Until then, structural edits use the
+    camera-preserving full refresh for correctness.
     """
     record = frag_delta_service.get(edit_id)
     if record is None:
@@ -1007,7 +1006,7 @@ async def get_frag_delta(edit_id: str):
                 f"evicted from the recent-edits cache or never existed."
             ),
         )
-    # v1.0 - empty representations map. v1.1 will fill this in.
+    # v0.1.1 - empty representations map; the full refresh remains the fallback.
     return {
         "edit_id": record.edit_id,
         "express_ids": record.express_ids,

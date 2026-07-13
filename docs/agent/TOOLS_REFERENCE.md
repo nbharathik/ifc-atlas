@@ -164,15 +164,13 @@ Aggregate IfcElementQuantity values (lengths, areas, volumes, weights, counts) a
 
 ---
 
-### `run_model_health_check`
+### `get_edit_history`
 
-Run a set of deterministic IFC model quality rules and return a structured JSON report including total issue counts, per-severity breakdown, and per-rule issue records with element names and Express IDs. Seven rules are checked: (1) missing_global_id - elements without a GUID (severity: error); (2) duplicate_global_id - elements sharing a GUID (severity: error); (3) missing_name - structural elements with blank Name (severity: warning); (4) empty_property_sets - IfcPropertySet with no properties (severity: warning); (5) no_storey_assignment - walls/slabs/columns/beams not assigned to any building storey (severity: warning); (6) duplicate_name_in_type - same Name used for multiple instances of the same door/window/space type (severity: info); (7) large_element_count - informational flag when the model has more than 10 000 elements. Use this tool when the user asks about model quality, data integrity, BIM health, QA/QC audits, or missing data issues. The response includes duration_ms so you can report how long the check took.
+List recent edits that can be undone, newest first. Shows up to 20 entries with edit_id, description, and timestamp.
 
 **Parameters:**
 
-| Name | Type | Required | Description |
-|---|---|---|---|
-| `limit_per_rule` | integer |  | Max issue records to return per rule (default 50). Use 10-20 for a quick summary, 100+ for deep audits. |
+_No parameters._
 
 ---
 
@@ -322,18 +320,6 @@ Full relationship map for one element: spatial containment chain (storey / build
 
 ---
 
-### `run_model_audit`
-
-THE tool for 'audit this model', 'is this model ready?', or any overall quality-and-readiness question. One call chains five checks into a structured report: (1) rule-based model health (GUIDs, names, storey assignment, empty psets), (2) quantity-takeoff coverage (how many elements carry base quantities), (3) 5D cost pricing coverage, (4) embodied-carbon factor coverage, and (5) a summary of the last cached IDS validation run for this model when one exists. Returns {sections: [{name, status: ok|warnings|issues, findings, stats}], summary} - narrate it section by section, leading with the overall summary status and any 'issues' sections. Cost and carbon figures rely on the editable placeholder rate/factor libraries, so flag them as estimates.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|---|---|---|---|
-| `limit_per_rule` | integer |  | Max issue examples per health rule (default 10). Raise for deep audits. |
-
----
-
 ## Read - Viewer
 
 Tools in this tier control what is visible in the 3D viewport. They execute client-side in the browser and are **not** exposed via the MCP server.
@@ -415,6 +401,18 @@ Fit the 3D section-box crop to a single element's bounding box (AABB) with 10 % 
 
 Tools in this tier validate the model against external specifications such as IDS.
 
+### `run_model_health_check`
+
+Run a set of deterministic IFC model quality rules and return a structured JSON report including total issue counts, per-severity breakdown, and per-rule issue records with element names and Express IDs. Seven rules are checked: (1) missing_global_id - elements without a GUID (severity: error); (2) duplicate_global_id - elements sharing a GUID (severity: error); (3) missing_name - structural elements with blank Name (severity: warning); (4) empty_property_sets - IfcPropertySet with no properties (severity: warning); (5) no_storey_assignment - walls/slabs/columns/beams not assigned to any building storey (severity: warning); (6) duplicate_name_in_type - same Name used for multiple instances of the same door/window/space type (severity: info); (7) large_element_count - informational flag when the model has more than 10 000 elements. Use this tool when the user asks about model quality, data integrity, BIM health, QA/QC audits, or missing data issues. The response includes duration_ms so you can report how long the check took.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `limit_per_rule` | integer |  | Max issue records to return per rule (default 50). Use 10-20 for a quick summary, 100+ for deep audits. |
+
+---
+
 ### `ids_validate`
 
 Validate the loaded IFC model against a buildingSMART IDS (Information Delivery Specification) XML document. The IDS payload is supplied as base64 (typically from a chat file attachment with kind='ids'). Returns per-specification pass/fail counts and a list of offending Express IDs with reasons. Prefer this over manual property searches when the user asks to audit the model against a spec.
@@ -441,13 +439,25 @@ Highlight in the 3D viewer all IFC elements that failed an IDS specification. Re
 
 ---
 
+### `run_model_audit`
+
+THE tool for 'audit this model', 'is this model ready?', or any overall quality-and-readiness question. One call chains five checks into a structured report: (1) rule-based model health (GUIDs, names, storey assignment, empty psets), (2) quantity-takeoff coverage (how many elements carry base quantities), (3) 5D cost pricing coverage, (4) embodied-carbon factor coverage, and (5) a summary of the last cached IDS validation run for this model when one exists. Returns {sections: [{name, status: ok|warnings|issues, findings, stats}], summary} - narrate it section by section, leading with the overall summary status and any 'issues' sections. Cost and carbon figures rely on the editable placeholder rate/factor libraries, so flag them as estimates.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `limit_per_rule` | integer |  | Max issue examples per health rule (default 10). Raise for deep audits. |
+
+---
+
 ## Write - Edit
 
 Tools in this tier modify the IFC model. They require the **Edit** pill to be active in the chat panel. Write tools are off by default in the MCP server (enable with `MCP_ALLOW_WRITES=1`).
 
 ### `rename_element`
 
-Rename an IFC element by changing its Name attribute. This is a reversible edit - use undo_last_edit to roll back. Always confirm the element_id with get_element_details first.
+Rename an IFC element by changing its Name attribute. Chat-agent calls are staged in an IFC sandbox for approval before apply. Always confirm the element_id with get_element_details first.
 
 **Parameters:**
 
@@ -460,7 +470,7 @@ Rename an IFC element by changing its Name attribute. This is a reversible edit 
 
 ### `update_property_value`
 
-Update a single property value on an IFC element's property set. This is a reversible edit - use undo_last_edit to roll back. Use get_element_details first to confirm the property set and property name.
+Update a single property value on an IFC element's property set. Chat-agent calls are staged in an IFC sandbox for approval before apply. Use get_element_details first to confirm the property set and property name.
 
 **Parameters:**
 
@@ -470,6 +480,20 @@ Update a single property value on an IFC element's property set. This is a rever
 | `property_name` | string | ✓ | Exact name of the IfcPropertySingleValue to update. |
 | `new_value` | any | ✓ | New value. Provide as a string, number, or boolean to match the existing property type. |
 | `pset_name` | string |  | Optional: name of the IfcPropertySet that contains the property. Required if multiple psets share the same property name. |
+
+---
+
+### `update_element_attribute`
+
+Update one safe IFC text attribute without changing geometry. Supported attributes: Description, ObjectType, Tag, LongName. The edit is sandboxed for approval, validated, logged, and updates the viewer in place. Use get_element_details first to confirm the element and current value.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `element_id` | integer | ✓ | IFC Express ID of the element. |
+| `attribute` | string | ✓ | The controlled IFC text attribute to update. |
+| `new_value` | string | ✓ | New text, or an empty string to clear the optional attribute. |
 
 ---
 
@@ -500,16 +524,6 @@ Update property values on multiple IFC elements in a single atomic operation. Al
 ### `undo_last_edit`
 
 Undo the most recent rename_element, update_property_value, rename_elements_batch, or update_properties_batch operation. Can be called repeatedly to walk back through the edit history (up to 20 edits).
-
-**Parameters:**
-
-_No parameters._
-
----
-
-### `get_edit_history`
-
-List recent edits that can be undone, newest first. Shows up to 20 entries with edit_id, description, and timestamp.
 
 **Parameters:**
 
@@ -631,4 +645,4 @@ Look up reference documentation. Sources: 'ifcopenshell' (the IfcOpenShell Pytho
 
 ---
 
-_Last regenerated: 2026-07-11. Run `python scripts/generate_tools_doc.py` to refresh._
+_Last regenerated: 2026-07-12. Run `python scripts/generate_tools_doc.py` to refresh._

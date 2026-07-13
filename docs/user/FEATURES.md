@@ -16,7 +16,7 @@ For the dated history of changes, see the [GitHub Releases page](https://github.
 | **Multi-threaded WASM parsing** | COOP and COEP headers establish a cross-origin-isolated context so the fallback parser can spawn worker threads. |
 | **Native metadata index** | A TypeScript sidecar parses IFC metadata on the backend. Repeat uploads of the same file (matched by SHA-256) are served from cache. Many Ask-mode queries are answered directly from this index, tagged `_source: "native_index"` in the tool-call log. |
 | **Per-storey progressive reveal** | Multi-storey models reveal one storey at a time, ground floor first. Can be disabled from Settings → Performance. |
-| **Sample model** | `data/fixtures/BasicHouse.ifc` (≈ 50 MB, two storeys, 149 elements) for first-run testing. If it is missing from your clone, download it with `scripts/fetch-sample.ps1` or `scripts/fetch-sample.sh`. |
+| **Sample model** | `data/fixtures/BasicHouse.ifc` (IFC2X3, ≈ 50 MB, two storeys, 149 elements) for first-run testing. If it is missing from your clone, download it with `scripts/fetch-sample.ps1` or `scripts/fetch-sample.sh`. |
 
 ### Selection and visibility
 
@@ -110,7 +110,7 @@ Switch the chat to **Edit** mode to stage model changes - every AI write is sand
 | Agent | Mode | Purpose |
 |---|---|---|
 | Default | Ask | General-purpose assistant, all read tools enabled. |
-| Edit Assistant | Edit | Experimental, disabled by default. Renames, property updates, custom scripts, all staged through Diff Preview. |
+| Edit Assistant | Edit | Semantic and beta geometry changes, with agent writes staged through inline approval. Set `EDIT_MODE_ENABLED=0` for read-only deployments. |
 
 Each agent has its own system prompt, model, temperature, and tool allowlist. Specialise the assistant by activating a system prompt from the **Skills** tab: editing a built-in prompt forks it into your own editable copy.
 
@@ -175,7 +175,7 @@ ops — disappears together; the frontend probes the flag at runtime).
 
 | Feature | Description |
 |---|---|
-| **Edit mode** | View/Edit toggle in the top bar. Inline-editable Name and property values in the Properties panel, with type validation and instant refresh. |
+| **Edit mode** | View/Edit toggle in the top bar. Inline-editable Name, Description, ObjectType, Tag, and existing property values in the Properties panel, with validation and instant refresh. |
 | **Operation layer** | Every mutation — human, AI, or MCP — is a named, validated, actor-attributed, logged, undoable operation over `ifcopenshell.api` (ADR 003). |
 | **Creation ops** | `create_wall` (two-point, storey work plane), `create_slab` (polygon), `create_storey`, `assign_to_storey`, `set_storey_elevation`, `delete_element` — available from the UI, the AI, the REST API, and MCP. |
 | **Wall drawing** | In Edit mode, draw walls with two clicks on the storey work plane: live preview line, length label, grid snap, height/thickness/storey controls. |

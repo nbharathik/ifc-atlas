@@ -538,6 +538,7 @@ export default function App() {
       // it must both update the contract and trigger the geometry reload.
       const isOperationEvent =
         msg.type === 'metadata_changed' ||
+        msg.type === 'geometry_patch' ||
         msg.type === 'model_refresh' ||
         msg.type === 'rebuild_started';
 
@@ -582,6 +583,9 @@ export default function App() {
       } else if (msg.type === 'pending_discarded') {
         if (msg.edit_id) state.removePendingEdit(msg.edit_id);
       } else if (msg.type === 'metadata_patch') {
+        if (payload.updated_elements?.length) {
+          state.invalidateElementDetails(payload.updated_elements.map((element) => element.id));
+        }
         if (payload.updated_elements?.length && state.spatialTree) {
           const updates = new Map<number, string>();
           for (const el of payload.updated_elements) {
@@ -625,7 +629,11 @@ export default function App() {
           summary: 'Edit rejected',
           detail: payload.message,
         });
-      } else if (msg.type === 'rebuild_started' || msg.type === 'model_refresh') {
+      } else if (
+        msg.type === 'geometry_patch' ||
+        msg.type === 'rebuild_started' ||
+        msg.type === 'model_refresh'
+      ) {
         // A structural change landed (wall created, element deleted, sandbox
         // geometry apply, rollback). Correct-first display path: soft-reload
         // the edited model - debounced, camera-preserving, and WITHOUT
@@ -638,7 +646,7 @@ export default function App() {
         state.logActivity({ kind: 'edit', summary: `Structural change: ${why}` });
         state.refreshEditState();
         void import('./services/ifc/modelRefresh').then((m) =>
-          m.requestModelRefresh(why),
+          m.requestModelRefresh(why, msg.model_fingerprint),
         );
       } else if (msg.type === 'rebuild_ready') {
         state.logActivity({ kind: 'info', summary: 'Background rebuild ready' });

@@ -63,7 +63,7 @@ MAX_OPS_PER_PROPOSAL = 128
 # Supported op shapes (prototype subset of the eventual execute_ifc_code)
 # ──────────────────────────────────────────────────────────────────────
 
-SUPPORTED_OPS = {"set_name", "set_property", "create_wall", "delete_element"}
+SUPPORTED_OPS = {"set_name", "set_property", "set_attribute", "create_wall", "delete_element"}
 
 
 @dataclass
@@ -467,6 +467,20 @@ class SandboxService:
                 pset_name = op.get("pset_name") or None
                 new_value = op.get("new_value")
                 _apply_property_edit(entity, prop_name, pset_name, new_value)
+
+            elif kind == "set_attribute":
+                attribute = str(op.get("attribute") or "")
+                allowed = {"Description", "ObjectType", "Tag", "LongName"}
+                if attribute not in allowed:
+                    raise ValueError(
+                        f"Op #{idx}: attribute must be one of {sorted(allowed)}"
+                    )
+                if not hasattr(entity, attribute):
+                    raise ValueError(
+                        f"Op #{idx}: element {expr_id} ({entity.is_a()}) has no {attribute} attribute"
+                    )
+                raw = op.get("new_value")
+                setattr(entity, attribute, None if raw is None or not str(raw).strip() else str(raw).strip())
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -903,6 +917,20 @@ def _compute_diff(base: ifcopenshell.file, sandbox: ifcopenshell.file) -> list[P
                             "after": s.get(prop_name),
                         }
                     )
+
+        # Controlled IFC text attributes use the same preview structure as
+        # property changes so the current diff UI can show before/after values
+        # without inventing an incompatible wire type.
+        for attribute in ("Description", "ObjectType", "Tag", "LongName"):
+            before = getattr(base_entity, attribute, None)
+            after = getattr(sandbox_entity, attribute, None)
+            if before != after:
+                prop_changes.append({
+                    "property_set": "$attributes",
+                    "property_name": attribute,
+                    "before": before,
+                    "after": after,
+                })
 
         if prop_changes:
             changes.append(

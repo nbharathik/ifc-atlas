@@ -27,6 +27,7 @@ import {
   formatProfileTransitionNotice,
 } from '../../services/viewer/graphicsProfileTransitionHelpers';
 import type { ParseProfile } from '../../services/viewer/parseProfiles';
+import { buildSettingsNavigation, type SettingsSectionId } from './settingsCatalog';
 
 interface SettingsModalProps {
   onClose: () => void;
@@ -85,21 +86,10 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const setAgentManagerOpen = useStore((s) => s.setAgentManagerOpen);
   const setChatManagerInitialSection = useStore((s) => s.setChatManagerInitialSection);
 
-  // VS Code-style layout: left nav scrolls/highlights sections in a single
-  // scrollable right pane. `activeSection` reflects which section the user
-  // last clicked OR is currently scrolled into view of.
-  type SectionId = 'appearance' | 'viewer' | 'performance' | 'storage' | 'integrations' | 'ai';
-  const [activeSection, setActiveSection] = useState<SectionId>('appearance');
+  // A single focused page is shown at a time. This keeps advanced processing
+  // controls out of the way until the user deliberately opens them.
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>('appearance');
   const scrollPaneRef = useRef<HTMLDivElement | null>(null);
-  const sectionRefs = useRef<Record<SectionId, HTMLElement | null>>({
-    appearance: null,
-    viewer: null,
-    performance: null,
-    storage: null,
-    integrations: null,
-    ai: null,
-  });
-  const userScrollLockRef = useRef(false); // suppress scroll-spy while click-jumping
   const [mcpData, setMcpData] = useState<McpListResponse | null>(null);
   const [mcpLoading, setMcpLoading] = useState(false);
   const [mcpError, setMcpError] = useState<string | null>(null);
@@ -156,10 +146,9 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
   // All sections are mounted at once; load lazily on first open.
   useEffect(() => {
-    if (BROWSER_ONLY) return; // Integrations section absent - no backend.
+    if (BROWSER_ONLY || activeSection !== 'integrations') return;
     if (!mcpData && !mcpLoading) void refreshMcp();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activeSection, mcpData, mcpLoading, refreshMcp]);
 
   const handleAccentPreset = useCallback((id: string) => {
     setAccentPreset(id);
@@ -308,10 +297,9 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   }, []);
 
   useEffect(() => {
-    if (BROWSER_ONLY) return; // User-data-folder card absent - no backend.
+    if (BROWSER_ONLY || activeSection !== 'storage') return;
     if (!dataPaths && !dataPathsLoading) void refreshDataPaths();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activeSection, dataPaths, dataPathsLoading, refreshDataPaths]);
 
   const handleFlushScope = useCallback(async (scope: CacheScope) => {
     setFlushingScope(scope);
@@ -349,55 +337,11 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     }
   }, [addToast]);
 
-  const SECTIONS: ReadonlyArray<{ id: SectionId; label: string }> = [
-    { id: 'appearance', label: 'Appearance' },
-    { id: 'viewer', label: 'Viewer' },
-    { id: 'performance', label: 'Performance' },
-    { id: 'storage', label: 'Storage' },
-    // Integrations (MCP) and AI need the backend; in the static viewer-only
-    // build the 'ai' slot becomes a pointer to the desktop app instead.
-    ...(BROWSER_ONLY
-      ? [{ id: 'ai', label: 'Desktop app' } as const]
-      : [
-          { id: 'integrations', label: 'Integrations' } as const,
-          { id: 'ai', label: 'AI' } as const,
-        ]),
-  ];
+  const NAV_GROUPS = buildSettingsNavigation(BROWSER_ONLY);
 
-  const jumpTo = useCallback((id: SectionId) => {
-    const target = sectionRefs.current[id];
-    const pane = scrollPaneRef.current;
-    if (!target || !pane) return;
+  const jumpTo = useCallback((id: SettingsSectionId) => {
     setActiveSection(id);
-    userScrollLockRef.current = true;
-    pane.scrollTo({ top: target.offsetTop - 8, behavior: 'smooth' });
-    window.setTimeout(() => { userScrollLockRef.current = false; }, 600);
-  }, []);
-
-  // Scroll-spy - highlight the section that's currently top-of-pane.
-  useEffect(() => {
-    const pane = scrollPaneRef.current;
-    if (!pane) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (userScrollLockRef.current) return;
-        // Pick the entry closest to the top of the pane that is visible.
-        const visible = entries
-          .filter((e) => e.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-        if (visible[0]) {
-          const id = visible[0].target.getAttribute('data-section-id') as SectionId | null;
-          if (id) setActiveSection(id);
-        }
-      },
-      { root: pane, rootMargin: '0px 0px -65% 0px', threshold: [0, 0.1, 0.5] },
-    );
-    for (const id of SECTIONS.map((s) => s.id)) {
-      const el = sectionRefs.current[id];
-      if (el) observer.observe(el);
-    }
-    return () => observer.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    scrollPaneRef.current?.scrollTo({ top: 0, behavior: 'auto' });
   }, []);
 
   return (
@@ -405,33 +349,59 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content settings-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Settings</h2>
-          <button className="btn-icon" onClick={onClose}>
+          <div>
+            <h2>Workspace settings</h2>
+            <p className="settings-modal-subtitle">Tune IFC Atlas for this device. Changes are saved automatically.</p>
+          </div>
+          <button className="btn-icon" onClick={onClose} aria-label="Close settings">
             &times;
           </button>
         </div>
 
         <div className="settings-vscode-body">
           <nav className="settings-vscode-nav" aria-label="Settings sections">
-            {SECTIONS.map((s) => (
-              <button
-                key={s.id}
-                className={`settings-vscode-nav-item${activeSection === s.id ? ' active' : ''}`}
-                onClick={() => jumpTo(s.id)}
-                type="button"
-              >
-                {s.label}
-              </button>
+            {NAV_GROUPS.map((group) => (
+              <div className="settings-nav-group" key={group.label}>
+                <div className="settings-nav-group-label">{group.label}</div>
+                {group.items.map((item) => (
+                  <button
+                    key={item.id}
+                    className={`settings-vscode-nav-item${activeSection === item.id ? ' active' : ''}`}
+                    onClick={() => jumpTo(item.id)}
+                    type="button"
+                    aria-current={activeSection === item.id ? 'page' : undefined}
+                  >
+                    <span>{item.label}</span>
+                    <small>{item.description}</small>
+                  </button>
+                ))}
+              </div>
             ))}
           </nav>
 
           <div className="settings-vscode-pane" ref={scrollPaneRef}>
             <section
-              ref={(el) => { sectionRefs.current.appearance = el; }}
               data-section-id="appearance"
               className="settings-section settings-vscode-section"
+              hidden={activeSection !== 'appearance'}
             >
-              <h3 className="settings-vscode-section-title">Appearance</h3>
+              <div className="settings-section-heading">
+                <div>
+                  <div className="settings-section-eyebrow">Workspace</div>
+                  <h3 className="settings-vscode-section-title">General & appearance</h3>
+                  <p>Choose a comfortable visual foundation for long model-review sessions.</p>
+                </div>
+                <button
+                  type="button"
+                  className="settings-reset-btn"
+                  onClick={() => {
+                    setTheme('dark');
+                    handleAccentPreset('blue');
+                  }}
+                >
+                  Reset section
+                </button>
+              </div>
               <div className="setting-group">
                 <label className="setting-label">Theme</label>
                 <div className="provider-cards">
@@ -471,11 +441,30 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
             </section>
 
             <section
-              ref={(el) => { sectionRefs.current.viewer = el; }}
               data-section-id="viewer"
               className="settings-section settings-vscode-section"
+              hidden={activeSection !== 'viewer'}
             >
-              <h3 className="settings-vscode-section-title">Viewer</h3>
+              <div className="settings-section-heading">
+                <div>
+                  <div className="settings-section-eyebrow">Workspace</div>
+                  <h3 className="settings-vscode-section-title">Viewer</h3>
+                  <p>Control how selection, context and scene helpers behave.</p>
+                </div>
+                <button
+                  type="button"
+                  className="settings-reset-btn"
+                  onClick={() => {
+                    setSelectionFocusMode('off');
+                    setSelectionGhostOpacity(0.22);
+                    if (!gridVisible) toggleGrid();
+                    setHoverHighlightEnabled(false);
+                    setFurnishingMerged(false);
+                  }}
+                >
+                  Reset section
+                </button>
+              </div>
               <div className="setting-group">
                 <label className="setting-label">Selection focus</label>
                 <div className="provider-cards">
@@ -566,11 +555,30 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
             </section>
 
             <section
-              ref={(el) => { sectionRefs.current.performance = el; }}
               data-section-id="performance"
               className="settings-section settings-vscode-section"
+              hidden={activeSection !== 'performance'}
             >
-              <h3 className="settings-vscode-section-title">Performance</h3>
+              <div className="settings-section-heading">
+                <div>
+                  <div className="settings-section-eyebrow">IFC model</div>
+                  <h3 className="settings-vscode-section-title">Processing & performance</h3>
+                  <p>Balance first render, navigation quality and memory use. Most users should keep the defaults.</p>
+                </div>
+                <button
+                  type="button"
+                  className="settings-reset-btn"
+                  onClick={() => {
+                    setRendererMode('auto');
+                    setStartupMode('concurrent_fast');
+                    handleGraphicsProfileChange('balanced');
+                    setFrustumCullingEnabled(false);
+                    setLargeModelLod(true);
+                  }}
+                >
+                  Reset section
+                </button>
+              </div>
               <div className="setting-group">
                 <label className="setting-label">Renderer</label>
                 <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
@@ -695,11 +703,28 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
             </section>
 
             <section
-              ref={(el) => { sectionRefs.current.storage = el; }}
               data-section-id="storage"
               className="settings-section settings-vscode-section"
+              hidden={activeSection !== 'storage'}
             >
-              <h3 className="settings-vscode-section-title">Storage</h3>
+              <div className="settings-section-heading">
+                <div>
+                  <div className="settings-section-eyebrow">IFC model</div>
+                  <h3 className="settings-vscode-section-title">Privacy & data</h3>
+                  <p>Review what is stored locally and remove cached model data when needed.</p>
+                </div>
+                <button
+                  type="button"
+                  className="settings-reset-btn"
+                  onClick={() => {
+                    setUseServerCache(true);
+                    setCachePolicy('off');
+                    resetPrebuildWaitPrefs();
+                  }}
+                >
+                  Reset section
+                </button>
+              </div>
               {!BROWSER_ONLY && (
               <div className="setting-group">
                 <label className="setting-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -984,11 +1009,17 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
             {!BROWSER_ONLY && (
             <section
-              ref={(el) => { sectionRefs.current.integrations = el; }}
               data-section-id="integrations"
               className="settings-section settings-vscode-section"
+              hidden={activeSection !== 'integrations'}
             >
-              <h3 className="settings-vscode-section-title">Integrations</h3>
+              <div className="settings-section-heading">
+                <div>
+                  <div className="settings-section-eyebrow">Assistant</div>
+                  <h3 className="settings-vscode-section-title">Advanced</h3>
+                  <p>External tool servers and validation integrations for experienced users.</p>
+                </div>
+              </div>
               <div className="setting-group">
                 <label className="setting-label">MCP servers</label>
                 <p className="setting-hint" style={{ marginTop: 0 }}>
@@ -1110,11 +1141,17 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
             {BROWSER_ONLY && (
             <section
-              ref={(el) => { sectionRefs.current.ai = el; }}
               data-section-id="ai"
               className="settings-section settings-vscode-section"
+              hidden={activeSection !== 'ai'}
             >
-              <h3 className="settings-vscode-section-title">Desktop app</h3>
+              <div className="settings-section-heading">
+                <div>
+                  <div className="settings-section-eyebrow">Edition</div>
+                  <h3 className="settings-vscode-section-title">Desktop features</h3>
+                  <p>AI, editing and export are available in the local desktop workspace.</p>
+                </div>
+              </div>
               <div className="setting-group">
                 <label className="setting-label">AI chat, editing and exports</label>
                 <p className="setting-hint" style={{ marginTop: 0 }}>
@@ -1129,29 +1166,49 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
             {!BROWSER_ONLY && (
             <section
-              ref={(el) => { sectionRefs.current.ai = el; }}
               data-section-id="ai"
               className="settings-section settings-vscode-section"
+              hidden={activeSection !== 'ai'}
             >
-              <h3 className="settings-vscode-section-title">AI</h3>
+              <div className="settings-section-heading">
+                <div>
+                  <div className="settings-section-eyebrow">Assistant</div>
+                  <h3 className="settings-vscode-section-title">AI workspace</h3>
+                  <p>Configure who the assistant talks to, what it may do and when edits require approval.</p>
+                </div>
+              </div>
               <div className="setting-group">
-                <label className="setting-label">Models, keys and agents</label>
-                <p className="setting-hint" style={{ marginTop: 0 }}>
-                  AI providers, API keys, the model catalogue, agents, skills and
-                  chat defaults are managed in the Chat Manager so everything about
-                  the assistant lives in one place.
+                <div className="settings-ai-map" aria-label="AI configuration areas">
+                  <div>
+                    <strong>Provider & models</strong>
+                    <span>Choose OpenAI, Anthropic, OpenRouter or a local endpoint and select the default model.</span>
+                  </div>
+                  <div>
+                    <strong>API keys</strong>
+                    <span>Keys are stored by the local backend and are never written into exported IFC files.</span>
+                  </div>
+                  <div>
+                    <strong>Agent behaviour</strong>
+                    <span>Choose presets, tool access, context limits and how the assistant reports progress.</span>
+                  </div>
+                  <div>
+                    <strong>Code execution & edits</strong>
+                    <span>Review sandbox limits and require approval before semantic or geometry changes are applied.</span>
+                  </div>
+                </div>
+                <p className="setting-hint">
+                  These controls live together in Assistant settings so provider credentials and edit permissions are not duplicated across the app.
                 </p>
-                <div style={{ marginTop: 6 }}>
+                <div>
                   <button
-                    className="provider-card"
-                    style={{ padding: '5px 14px', fontSize: 12, fontWeight: 500 }}
+                    className="btn btn-primary settings-ai-open"
                     onClick={() => {
                       setChatManagerInitialSection('settings');
                       setAgentManagerOpen(true);
                       onClose();
                     }}
                   >
-                    Open Chat Manager settings
+                    Open Assistant settings
                   </button>
                 </div>
               </div>

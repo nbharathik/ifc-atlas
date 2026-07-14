@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ALL_VISIBLE_MAX_ELEMENTS,
+  canUseFurnishingMerge,
+  canUseNavigationLod,
   LARGE_MODEL_MIN_ELEMENTS,
   resolveLodTier,
   resolveModelGraphicsQuality,
+  shouldPinAllVisible,
+  shouldAttachNavigationLod,
 } from '../lodTierPolicy';
 
 describe('resolveLodTier', () => {
@@ -15,6 +19,67 @@ describe('resolveLodTier', () => {
     expect(resolveLodTier(LARGE_MODEL_MIN_ELEMENTS - 1)).toBe('medium');
     expect(resolveLodTier(LARGE_MODEL_MIN_ELEMENTS)).toBe('large');
     expect(resolveLodTier(1_000_000)).toBe('large');
+  });
+});
+
+describe('navigation LOD policy', () => {
+  const cleanAppearance = {
+    enabled: true,
+    isolatedCount: 0,
+    hiddenCount: 0,
+    ghostModeOn: false,
+    selectedElementId: null,
+    selectedCount: 0,
+    highlightedCount: 0,
+    colourBy: 'off',
+    colourLayerCount: 0,
+    furnishingMerged: false,
+  };
+
+  it('does not allocate a duplicate proxy for medium models', () => {
+    expect(shouldAttachNavigationLod(resolveLodTier(1_032), true)).toBe(false);
+    expect(shouldAttachNavigationLod('large', true)).toBe(true);
+    expect(shouldAttachNavigationLod('large', false)).toBe(false);
+  });
+
+  it('keeps the styled primary visible for selection, chat, and painting', () => {
+    expect(canUseNavigationLod(cleanAppearance)).toBe(true);
+    expect(canUseNavigationLod({ ...cleanAppearance, selectedElementId: 7 })).toBe(false);
+    expect(canUseNavigationLod({ ...cleanAppearance, selectedCount: 2 })).toBe(false);
+    expect(canUseNavigationLod({ ...cleanAppearance, highlightedCount: 1 })).toBe(false);
+    expect(canUseNavigationLod({ ...cleanAppearance, colourBy: 'storey' })).toBe(false);
+    expect(canUseNavigationLod({ ...cleanAppearance, colourLayerCount: 1 })).toBe(false);
+    expect(canUseNavigationLod({ ...cleanAppearance, furnishingMerged: true })).toBe(false);
+  });
+
+  it('suspends furnishing merge for fragment-level interaction state', () => {
+    const clean = {
+      ...cleanAppearance,
+      hoverHighlightEnabled: false,
+      measurementMode: 'off',
+    };
+    expect(canUseFurnishingMerge(clean)).toBe(true);
+    expect(canUseFurnishingMerge({ ...clean, selectedElementId: 7 })).toBe(false);
+    expect(canUseFurnishingMerge({ ...clean, hiddenCount: 1 })).toBe(false);
+    expect(canUseFurnishingMerge({ ...clean, isolatedCount: 1 })).toBe(false);
+    expect(canUseFurnishingMerge({ ...clean, ghostModeOn: true })).toBe(false);
+    expect(canUseFurnishingMerge({ ...clean, highlightedCount: 1 })).toBe(false);
+    expect(canUseFurnishingMerge({ ...clean, colourLayerCount: 1 })).toBe(false);
+    expect(canUseFurnishingMerge({ ...clean, hoverHighlightEnabled: true })).toBe(false);
+    expect(canUseFurnishingMerge({ ...clean, measurementMode: 'length' })).toBe(false);
+  });
+});
+
+describe('shouldPinAllVisible', () => {
+  it('keeps view-dependent LOD enabled for the reported 1,032-element class', () => {
+    expect(resolveLodTier(1_032)).toBe('medium');
+    expect(shouldPinAllVisible(resolveLodTier(1_032))).toBe(false);
+  });
+
+  it('bypasses coverage culling only for tiny models', () => {
+    expect(shouldPinAllVisible('small')).toBe(true);
+    expect(shouldPinAllVisible('medium')).toBe(false);
+    expect(shouldPinAllVisible('large')).toBe(false);
   });
 });
 

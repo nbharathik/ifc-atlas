@@ -15,7 +15,6 @@ import {
  * Two-click wall drawing controller (master-plan B5, first drawing tool).
  *
  * Owns, while armed:
- *   - its own `pointermove` listener on the renderer canvas (live preview)
  *   - its own capture-phase `Escape` listener (cancel pending / exit tool)
  *   - a THREE.Group with the preview visuals (start marker, rubber-band
  *     line, floating length label) - disposed with the controller
@@ -52,6 +51,10 @@ export interface WallDrawControllerOptions {
   dom: HTMLElement;
   /** Resolved per raycast so projection-mode switches stay correct. */
   getCamera: () => THREE.Camera;
+  /** Request a viewer frame after preview buffers change. */
+  onPreviewChange?: () => void;
+  /** Allow the viewer to deactivate mutually-exclusive tools. */
+  onArm?: () => void;
 }
 
 /** Tag stamped on every THREE object the controller owns (leak diagnosis). */
@@ -67,6 +70,8 @@ export class WallDrawController {
   private readonly scene: THREE.Scene;
   private readonly dom: HTMLElement;
   private readonly getCamera: () => THREE.Camera;
+  private readonly onPreviewChange: (() => void) | undefined;
+  private readonly onArm: (() => void) | undefined;
 
   private readonly group: THREE.Group;
   private readonly raycaster = new THREE.Raycaster();
@@ -79,8 +84,17 @@ export class WallDrawController {
   private cursorIfc: IfcXY | null = null;
   private disposed = false;
 
-  private startMarker: THREE.Points | null = null;
-  private previewLine: THREE.Line | null = null;
+  private readonly startMarker: THREE.Points;
+  private readonly previewLine: THREE.Line;
+  private readonly markerPositions = new Float32Array(3);
+  private readonly linePositions = new Float32Array(6);
+  private readonly ndc = new THREE.Vector2();
+  private readonly hitPoint = new THREE.Vector3();
+  private readonly startWorld = new THREE.Vector3();
+  private readonly endWorld = new THREE.Vector3();
+  private readonly midpoint = new THREE.Vector3();
+  private pendingMove: { x: number; y: number } | null = null;
+  private moveRaf: number | null = null;
   private label: THREE.Sprite | null = null;
   private labelCanvas: HTMLCanvasElement | null = null;
   private labelTexture: THREE.CanvasTexture | null = null;
@@ -94,9 +108,51 @@ export class WallDrawController {
     this.scene = opts.scene;
     this.dom = opts.dom;
     this.getCamera = opts.getCamera;
+    this.onPreviewChange = opts.onPreviewChange;
+    this.onArm = opts.onArm;
     this.group = new THREE.Group();
     this.group.name = WALL_DRAW_TAG;
     this.group.renderOrder = 999;
+    const markerGeometry = new THREE.BufferGeometry();
+    markerGeometry.setAttribute(
+      'position',
+      new THREE.BufferAttribute(this.markerPositions, 3).setUsage(THREE.DynamicDrawUsage),
+    );
+    this.startMarker = new THREE.Points(
+      markerGeometry,
+      new THREE.PointsMaterial({
+        color: PREVIEW_COLOUR,
+        size: 10,
+        sizeAttenuation: false,
+        depthTest: false,
+        transparent: true,
+        opacity: 0.95,
+      }),
+    );
+    this.startMarker.name = WALL_DRAW_TAG + '/start';
+    this.startMarker.renderOrder = 1000;
+    this.startMarker.frustumCulled = false;
+    this.startMarker.visible = false;
+
+    const lineGeometry = new THREE.BufferGeometry();
+    lineGeometry.setAttribute(
+      'position',
+      new THREE.BufferAttribute(this.linePositions, 3).setUsage(THREE.DynamicDrawUsage),
+    );
+    this.previewLine = new THREE.Line(
+      lineGeometry,
+      new THREE.LineBasicMaterial({
+        color: PREVIEW_COLOUR,
+        depthTest: false,
+        transparent: true,
+        opacity: 0.95,
+      }),
+    );
+    this.previewLine.name = WALL_DRAW_TAG + '/line';
+    this.previewLine.renderOrder = 999;
+    this.previewLine.frustumCulled = false;
+    this.previewLine.visible = false;
+    this.group.add(this.startMarker, this.previewLine);
     this.scene.add(this.group);
   }
 
@@ -130,8 +186,8 @@ export class WallDrawController {
   /** Activate the tool: crosshair cursor, move preview + Escape listeners. */
   arm(): void {
     if (this.armed || this.disposed) return;
+    this.onArm?.();
     this.armed = true;
-    this.dom.addEventListener('pointermove', this.handlePointerMove);
     window.addEventListener('keydown', this.handleKeyDown, true);
     this.dom.style.cursor = 'crosshair';
     this.emit();
@@ -145,6 +201,7 @@ export class WallDrawController {
     this.cursorIfc = null;
     this.teardownListeners();
     this.refreshPreview();
+    this.onPreviewChange?.();
     this.emit();
   }
 
@@ -154,6 +211,7 @@ export class WallDrawController {
     this.startIfc = null;
     this.cursorIfc = null;
     this.refreshPreview();
+    this.onPreviewChange?.();
     this.emit();
   }
 
@@ -174,6 +232,7 @@ export class WallDrawController {
       this.startIfc = picked;
       this.cursorIfc = picked;
       this.refreshPreview();
+      this.onPreviewChange?.();
       this.emit();
       return true;
     }
@@ -185,6 +244,7 @@ export class WallDrawController {
     this.startIfc = null;
     this.cursorIfc = null;
     this.refreshPreview();
+    this.onPreviewChange?.();
     this.emit();
     this.onCommit?.(event);
     return true;
@@ -195,6 +255,35 @@ export class WallDrawController {
     const lengthM =
       this.startIfc && this.cursorIfc ? wallLengthM(this.startIfc, this.cursorIfc) : null;
     return { armed: this.armed, hasStart: this.startIfc !== null, lengthM };
+  }
+
+  /**
+   * Feed live pointer coordinates from ViewerPanel's single pointer hub.
+   * Work is coalesced to one update per animation frame and ignored until the
+   * first wall point exists.
+   */
+  handlePointerMove(clientX: number, clientY: number): void {
+    if (!this.armed || !this.startIfc || this.disposed) return;
+    this.pendingMove = { x: clientX, y: clientY };
+    if (this.moveRaf !== null) return;
+    this.moveRaf = window.requestAnimationFrame(() => {
+      this.moveRaf = null;
+      const pending = this.pendingMove;
+      this.pendingMove = null;
+      if (!pending || !this.armed || !this.startIfc || this.disposed) return;
+      const next = this.pickIfcPoint(pending.x, pending.y);
+      if (
+        this.cursorIfc
+        && next
+        && this.cursorIfc[0] === next[0]
+        && this.cursorIfc[1] === next[1]
+      ) return;
+      if (this.cursorIfc === null && next === null) return;
+      this.cursorIfc = next;
+      this.refreshPreview();
+      this.onPreviewChange?.();
+      this.emit();
+    });
   }
 
   /** Tear down listeners + scene objects. Safe to call twice. */
@@ -210,6 +299,7 @@ export class WallDrawController {
     this.onCommit = null;
     this.onStateChange = null;
     this.scene.remove(this.group);
+    this.onPreviewChange?.();
     this.group.traverse((obj) => {
       const anyObj = obj as unknown as {
         geometry?: THREE.BufferGeometry;
@@ -221,25 +311,20 @@ export class WallDrawController {
     });
     this.labelTexture?.dispose();
     this.labelTexture = null;
-    this.startMarker = null;
-    this.previewLine = null;
     this.label = null;
   }
 
   // ───────────────────── internals ─────────────────────
 
   private teardownListeners(): void {
-    this.dom.removeEventListener('pointermove', this.handlePointerMove);
     window.removeEventListener('keydown', this.handleKeyDown, true);
+    if (this.moveRaf !== null) {
+      window.cancelAnimationFrame(this.moveRaf);
+      this.moveRaf = null;
+    }
+    this.pendingMove = null;
     this.dom.style.cursor = 'default';
   }
-
-  private handlePointerMove = (ev: PointerEvent): void => {
-    if (!this.armed || !this.startIfc) return;
-    this.cursorIfc = this.pickIfcPoint(ev.clientX, ev.clientY);
-    this.refreshPreview();
-    this.emit();
-  };
 
   private handleKeyDown = (ev: KeyboardEvent): void => {
     if (ev.key !== 'Escape' || !this.armed) return;
@@ -252,20 +337,19 @@ export class WallDrawController {
   private pickIfcPoint(clientX: number, clientY: number): IfcXY | null {
     const rect = this.dom.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return null;
-    const ndc = new THREE.Vector2(
+    this.ndc.set(
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1,
     );
-    this.raycaster.setFromCamera(ndc, this.getCamera());
-    const hit = new THREE.Vector3();
-    if (!this.raycaster.ray.intersectPlane(this.plane, hit)) return null;
-    return snapIfcXY(worldToIfcXY(hit.x, hit.z), GRID_SNAP_M);
+    this.raycaster.setFromCamera(this.ndc, this.getCamera());
+    if (!this.raycaster.ray.intersectPlane(this.plane, this.hitPoint)) return null;
+    return snapIfcXY(worldToIfcXY(this.hitPoint.x, this.hitPoint.z), GRID_SNAP_M);
   }
 
   /** Snapped IFC XY back to a world point on the work plane. */
-  private ifcToWorld(p: IfcXY): THREE.Vector3 {
+  private ifcToWorld(p: IfcXY, target: THREE.Vector3): THREE.Vector3 {
     const [wx, wz] = ifcXYToWorldXZ(p[0], p[1]);
-    return new THREE.Vector3(wx, this.planeWorldY, wz);
+    return target.set(wx, this.planeWorldY, wz);
   }
 
   /** Notify the toolbar - deduplicated so pointermove doesn't spam React. */
@@ -286,65 +370,39 @@ export class WallDrawController {
   }
 
   /**
-   * Rebuild the preview: start marker always while a start exists; line +
-   * length label once the cursor has a valid plane hit. Cheap enough to
-   * rebuild per move (1 line, 1 points, texture redrawn only on text change).
+   * Update the persistent preview buffers. Geometry/material objects are
+   * created once in the constructor and disposed once with the controller.
    */
   private refreshPreview(): void {
-    if (this.previewLine) {
-      this.group.remove(this.previewLine);
-      this.previewLine.geometry.dispose();
-      (this.previewLine.material as THREE.Material).dispose();
-      this.previewLine = null;
-    }
-    if (this.startMarker) {
-      this.group.remove(this.startMarker);
-      this.startMarker.geometry.dispose();
-      (this.startMarker.material as THREE.Material).dispose();
-      this.startMarker = null;
-    }
+    this.previewLine.visible = false;
+    this.startMarker.visible = false;
     if (this.label) this.label.visible = false;
 
     if (!this.startIfc) return;
 
-    const startWorld = this.ifcToWorld(this.startIfc);
-    const markerGeom = new THREE.BufferGeometry().setFromPoints([startWorld]);
-    this.startMarker = new THREE.Points(
-      markerGeom,
-      new THREE.PointsMaterial({
-        color: PREVIEW_COLOUR,
-        size: 10,
-        sizeAttenuation: false,
-        depthTest: false,
-        transparent: true,
-        opacity: 0.95,
-      }),
-    );
-    this.startMarker.name = WALL_DRAW_TAG + '/start';
-    this.startMarker.renderOrder = 1000;
-    this.group.add(this.startMarker);
+    const startWorld = this.ifcToWorld(this.startIfc, this.startWorld);
+    this.markerPositions[0] = startWorld.x;
+    this.markerPositions[1] = startWorld.y;
+    this.markerPositions[2] = startWorld.z;
+    (this.startMarker.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+    this.startMarker.visible = true;
 
     if (!this.cursorIfc) return;
     const lengthM = wallLengthM(this.startIfc, this.cursorIfc);
     if (lengthM < MIN_WALL_SEGMENT_M) return;
 
-    const endWorld = this.ifcToWorld(this.cursorIfc);
-    const lineGeom = new THREE.BufferGeometry().setFromPoints([startWorld, endWorld]);
-    this.previewLine = new THREE.Line(
-      lineGeom,
-      new THREE.LineBasicMaterial({
-        color: PREVIEW_COLOUR,
-        depthTest: false,
-        transparent: true,
-        opacity: 0.95,
-      }),
-    );
-    this.previewLine.name = WALL_DRAW_TAG + '/line';
-    this.previewLine.renderOrder = 999;
-    this.group.add(this.previewLine);
+    const endWorld = this.ifcToWorld(this.cursorIfc, this.endWorld);
+    this.linePositions[0] = startWorld.x;
+    this.linePositions[1] = startWorld.y;
+    this.linePositions[2] = startWorld.z;
+    this.linePositions[3] = endWorld.x;
+    this.linePositions[4] = endWorld.y;
+    this.linePositions[5] = endWorld.z;
+    (this.previewLine.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+    this.previewLine.visible = true;
 
-    const mid = startWorld.clone().add(endWorld).multiplyScalar(0.5);
-    this.updateLabel(formatWallLength(lengthM), mid);
+    this.midpoint.copy(startWorld).add(endWorld).multiplyScalar(0.5);
+    this.updateLabel(formatWallLength(lengthM), this.midpoint);
   }
 
   /** Screen-constant sprite label (canvas texture, redrawn on text change). */

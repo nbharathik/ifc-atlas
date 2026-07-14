@@ -1,12 +1,36 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createPickLeaseCoordinator,
   createPickRequestToken,
   decideVoidClick,
+  isClickGesture,
+  isConfirmedVoidPick,
   isNoopSameElementClick,
   isStalePickResult,
 } from '../pickingPipeline';
 
 describe('pickingPipeline helpers', () => {
+  it('holds an exact-pick lease until every overlapping pick releases', () => {
+    const transitions: boolean[] = [];
+    const leases = createPickLeaseCoordinator((active) => transitions.push(active));
+    const releaseFirst = leases.acquire();
+    const releaseSecond = leases.acquire();
+
+    expect(leases.active).toBe(true);
+    expect(leases.count).toBe(2);
+    expect(transitions).toEqual([true]);
+
+    releaseFirst();
+    releaseFirst();
+    expect(leases.active).toBe(true);
+    expect(leases.count).toBe(1);
+
+    releaseSecond();
+    expect(leases.active).toBe(false);
+    expect(leases.count).toBe(0);
+    expect(transitions).toEqual([true, false]);
+  });
+
   it('marks out-of-order pick results as stale', () => {
     const token = createPickRequestToken(4);
 
@@ -72,5 +96,17 @@ describe('pickingPipeline helpers', () => {
       selectedIds: [],
       shiftKey: true,
     })).toBe(false);
+  });
+
+  it('accepts a long stationary press and rejects actual pointer travel', () => {
+    expect(isClickGesture({ distancePx: 0, elapsedMs: 600 })).toBe(true);
+    expect(isClickGesture({ distancePx: 3, elapsedMs: 2_000 })).toBe(true);
+    expect(isClickGesture({ distancePx: 5, elapsedMs: 20 })).toBe(false);
+  });
+
+  it('does not turn a raycast failure into a void click', () => {
+    expect(isConfirmedVoidPick({ exactHit: false, error: null })).toBe(true);
+    expect(isConfirmedVoidPick({ exactHit: true, error: null })).toBe(false);
+    expect(isConfirmedVoidPick({ exactHit: false, error: new Error('worker failed') })).toBe(false);
   });
 });

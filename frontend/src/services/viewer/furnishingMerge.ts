@@ -31,6 +31,203 @@ export interface FurnishingMergeResult {
   dispose: () => Promise<void>;
 }
 
+export interface FurnishingMergeLifecycleOptions {
+  /** Starts a merge. The implementation should observe the supplied signal. */
+  apply: (signal: AbortSignal) => Promise<FurnishingMergeResult>;
+  /** Re-assert fragment visibility/appearance after source ids are restored. */
+  afterUnmerge?: () => Promise<void> | void;
+  /** Called whenever desired/current/pending state changes. */
+  onStateChange?: () => void;
+}
+
+function makeAbortError(): Error {
+  const error = new Error('Furnishing merge aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw makeAbortError();
+}
+
+function disposeMergedMesh(scene: THREE.Scene, mesh: THREE.Mesh): void {
+  scene.remove(mesh);
+  mesh.geometry.dispose();
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  for (const material of materials) material.dispose();
+}
+
+/**
+ * Serializes furnishing merge application and disposal while allowing UI state
+ * to change freely. Every desired-state change invalidates the work currently
+ * in flight; an implementation that cannot stop immediately is still safe
+ * because its stale result is disposed before the next operation starts.
+ */
+export class FurnishingMergeLifecycle {
+  private desired = false;
+  private current: FurnishingMergeResult | null = null;
+  private pending = false;
+  private revision = 0;
+  private stopped = false;
+  private activeApply: AbortController | null = null;
+  private queue: Promise<void> = Promise.resolve();
+  private shutdownPromise: Promise<void> | null = null;
+
+  constructor(private readonly options: FurnishingMergeLifecycleOptions) {}
+
+  get blocksNavigationLod(): boolean {
+    return this.current !== null || this.pending;
+  }
+
+  get currentResult(): FurnishingMergeResult | null {
+    return this.current;
+  }
+
+  get isPending(): boolean {
+    return this.pending;
+  }
+
+  /** Set the latest requested merge state. Calls are safe to fire-and-forget. */
+  setDesired(enabled: boolean): Promise<void> {
+    if (this.stopped || enabled === this.desired) return this.queue;
+
+    this.desired = enabled;
+    this.revision += 1;
+    this.activeApply?.abort();
+    // Close the replacement-geometry gate synchronously; reconcile starts in
+    // a microtask and must not leave a one-frame window for navigation LOD.
+    if (enabled && !this.current) this.pending = true;
+    this.emitStateChange();
+    return this.enqueueReconcile();
+  }
+
+  /** Permanently stop the coordinator and dispose any current or stale merge. */
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+
+    this.stopped = true;
+    this.desired = false;
+    this.revision += 1;
+    this.activeApply?.abort();
+    this.emitStateChange();
+    this.shutdownPromise = this.enqueueReconcile();
+    return this.shutdownPromise;
+  }
+
+  private enqueueReconcile(): Promise<void> {
+    const operation = this.queue.then(
+      () => this.reconcile(),
+      () => this.reconcile(),
+    );
+    // A failed consumer-supplied apply/dispose must not poison future work.
+    this.queue = operation.catch(() => {});
+    return operation;
+  }
+
+  private async reconcile(): Promise<void> {
+    if (this.stopped || !this.desired) {
+      await this.disposeCurrent();
+      return;
+    }
+
+    if (this.current) return;
+
+    const operationRevision = this.revision;
+    const controller = new AbortController();
+    this.activeApply = controller;
+    this.setPending(true);
+
+    let result: FurnishingMergeResult | null = null;
+    try {
+      result = await this.options.apply(controller.signal);
+    } catch {
+      // Aborts are expected when desired state changes. Other apply failures
+      // leave the originals untouched and may be retried by a later toggle.
+    } finally {
+      if (this.activeApply === controller) this.activeApply = null;
+    }
+
+    const stale = controller.signal.aborted
+      || this.stopped
+      || !this.desired
+      || operationRevision !== this.revision;
+
+    if (stale) {
+      if (result) {
+        try {
+          await result.dispose();
+        } catch {
+          // Continue reconciliation even if an external visibility API fails.
+        }
+      }
+      await this.runAfterUnmerge();
+      // A newer enable may already be queued behind this stale cleanup. Keep
+      // the gate closed until that replacement reconcile starts.
+      this.setPending(this.desired && !this.stopped);
+      return;
+    }
+
+    if (result?.mergedMesh) {
+      this.current = result;
+      this.setPending(false, true);
+      return;
+    }
+
+    // No furnishings, unavailable geometry, or a visibility rollback is not
+    // an active merge and must not permanently disable navigation LOD.
+    if (result) {
+      try { await result.dispose(); } catch { /* no-op/rollback cleanup */ }
+      // A failed visibility write may have partially hidden then restored the
+      // source ids. Reassert external visibility/culler ownership whenever a
+      // no-op attempt had furnishing ids to touch.
+      if (result.furnishingLocalIds.length > 0) await this.runAfterUnmerge();
+    }
+    this.setPending(false);
+  }
+
+  private async disposeCurrent(): Promise<void> {
+    if (!this.current) {
+      // A true -> false toggle can happen before the queued apply even starts.
+      // Release the synchronous enable gate in that no-current path.
+      this.setPending(this.desired && !this.stopped);
+      return;
+    }
+
+    this.setPending(true);
+    // Clear first so state observers never treat a result being disposed as
+    // current and so a newer desired state cannot reuse it.
+    const result = this.current;
+    this.current = null;
+    this.emitStateChange();
+    try {
+      await result.dispose();
+    } catch {
+      // Disposal is best-effort; the queue must remain usable.
+    } finally {
+      await this.runAfterUnmerge();
+      this.setPending(this.desired && !this.stopped);
+    }
+  }
+
+  private async runAfterUnmerge(): Promise<void> {
+    try {
+      await this.options.afterUnmerge?.();
+    } catch {
+      // Repair failure must not poison later toggle operations.
+    }
+  }
+
+  private setPending(pending: boolean, currentChanged = false): void {
+    if (this.pending === pending && !currentChanged) return;
+    this.pending = pending;
+    this.emitStateChange();
+  }
+
+  private emitStateChange(): void {
+    this.options.onStateChange?.();
+  }
+}
+
 /**
  * Collect local IDs of all furnishing elements in the model.
  * Returns an empty array if none are found or the API is unavailable.
@@ -120,8 +317,11 @@ export async function buildMergedFurnishingGeometry(
 export async function applyFurnishingMerge(
   model: FRAGS.FragmentsModel,
   scene: THREE.Scene,
+  signal?: AbortSignal,
 ): Promise<FurnishingMergeResult> {
+  throwIfAborted(signal);
   const localIds = await collectFurnishingLocalIds(model);
+  throwIfAborted(signal);
 
   const noOpDispose = async () => {};
 
@@ -130,40 +330,60 @@ export async function applyFurnishingMerge(
   }
 
   const geometry = await buildMergedFurnishingGeometry(model, localIds);
-
-  let mergedMesh: THREE.Mesh | null = null;
-  if (geometry) {
-    const material = new THREE.MeshStandardMaterial({
-      color: 0x8a7560,
-      flatShading: true,
-      roughness: 0.9,
-      metalness: 0.0,
-    });
-    mergedMesh = new THREE.Mesh(geometry, material);
-    mergedMesh.name = '__furnishing_merged__';
-    // Non-selectable: don't participate in raycasting for element selection
-    mergedMesh.raycast = () => {};
-    scene.add(mergedMesh);
+  if (signal?.aborted) {
+    geometry?.dispose();
+    throw makeAbortError();
   }
 
-  // Hide originals in the @thatopen fragment system
+  // Without replacement geometry the originals must remain visible.
+  if (!geometry) {
+    return { mergedMesh: null, furnishingLocalIds: localIds, dispose: noOpDispose };
+  }
+
+  const material = new THREE.MeshStandardMaterial({
+    color: 0x8a7560,
+    flatShading: true,
+    roughness: 0.9,
+    metalness: 0.0,
+  });
+  const mergedMesh = new THREE.Mesh(geometry, material);
+  mergedMesh.name = '__furnishing_merged__';
+  // Non-selectable: don't participate in raycasting for element selection
+  mergedMesh.raycast = () => {};
+
+  let originalsHidden = false;
   try {
+    throwIfAborted(signal);
     await model.setVisible(localIds, false);
+    originalsHidden = true;
+    throwIfAborted(signal);
   } catch {
-    // Visibility API unavailable - still return the merged mesh
-  }
-
-  const dispose = async () => {
-    // Restore originals
+    // A merged duplicate is unsafe if the originals could not be hidden.
+    disposeMergedMesh(scene, mergedMesh);
     try {
       await model.setVisible(localIds, true);
-    } catch { /* ignore */ }
-    // Remove merged mesh
-    if (mergedMesh) {
-      scene.remove(mergedMesh);
-      mergedMesh.geometry.dispose();
-      (mergedMesh.material as THREE.Material).dispose();
-    }
+    } catch { /* best-effort rollback */ }
+    throwIfAborted(signal);
+    return { mergedMesh: null, furnishingLocalIds: localIds, dispose: noOpDispose };
+  }
+
+  scene.add(mergedMesh);
+
+  let disposePromise: Promise<void> | null = null;
+  const dispose = () => {
+    if (disposePromise) return disposePromise;
+
+    // Remove the replacement synchronously before restoring originals so a
+    // slow visibility call cannot leave both copies rendered together.
+    disposeMergedMesh(scene, mergedMesh);
+    disposePromise = (async () => {
+      if (!originalsHidden) return;
+      originalsHidden = false;
+      try {
+        await model.setVisible(localIds, true);
+      } catch { /* ignore */ }
+    })();
+    return disposePromise;
   };
 
   return { mergedMesh, furnishingLocalIds: localIds, dispose };

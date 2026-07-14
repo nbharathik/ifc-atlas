@@ -4,7 +4,9 @@ import {
   collectFurnishingLocalIds,
   buildMergedFurnishingGeometry,
   applyFurnishingMerge,
+  FurnishingMergeLifecycle,
 } from '../furnishingMerge';
+import type { FurnishingMergeResult } from '../furnishingMerge';
 
 // ---------------------------------------------------------------------------
 // Mock @thatopen/fragments FragmentsModel
@@ -31,6 +33,24 @@ function makeModel(opts: {
     setVisible: opts.setVisibleError
       ? vi.fn().mockRejectedValue(new Error('visibility error'))
       : vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function makeLifecycleResult(dispose = vi.fn().mockResolvedValue(undefined)): FurnishingMergeResult {
+  return {
+    mergedMesh: new THREE.Mesh(),
+    furnishingLocalIds: [1],
+    dispose,
   };
 }
 
@@ -126,6 +146,7 @@ describe('applyFurnishingMerge', () => {
   let scene: THREE.Scene;
 
   beforeEach(() => {
+    vi.restoreAllMocks();
     scene = new THREE.Scene();
   });
 
@@ -165,20 +186,20 @@ describe('applyFurnishingMerge', () => {
     expect(model.setVisible).toHaveBeenCalledWith([1, 2], true);
   });
 
-  it('still hides originals even when geometry fetch fails', async () => {
+  it('keeps originals visible when replacement geometry is unavailable', async () => {
     const model = {
       getItemsOfCategories: vi.fn().mockResolvedValue({ IFCFURNISHINGELEMENT: [5, 6] }),
       getItemsGeometry: vi.fn().mockRejectedValue(new Error('no geom')),
       setVisible: vi.fn().mockResolvedValue(undefined),
     };
     const result = await applyFurnishingMerge(model as any, scene);
-    // Geometry unavailable → no merged mesh, but originals still hidden
     expect(result.mergedMesh).toBeNull();
-    expect(model.setVisible).toHaveBeenCalledWith([5, 6], false);
+    expect(model.setVisible).not.toHaveBeenCalled();
+    expect(scene.children).toHaveLength(0);
     await result.dispose();
   });
 
-  it('handles setVisible errors gracefully', async () => {
+  it('removes and disposes the merged duplicate when hiding originals fails', async () => {
     const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
     const indices = new Uint16Array([0, 1, 2]);
     const model = makeModel({
@@ -186,8 +207,17 @@ describe('applyFurnishingMerge', () => {
       geometry: () => [[makeMeshData(positions, indices)]],
       setVisibleError: true,
     });
-    // Should not throw even when setVisible errors
-    await expect(applyFurnishingMerge(model as any, scene)).resolves.toBeDefined();
+    const removeSpy = vi.spyOn(scene, 'remove');
+    const geometryDisposeSpy = vi.spyOn(THREE.BufferGeometry.prototype, 'dispose');
+
+    const result = await applyFurnishingMerge(model as any, scene);
+
+    expect(result.mergedMesh).toBeNull();
+    expect(scene.children).toHaveLength(0);
+    expect(removeSpy).toHaveBeenCalledOnce();
+    const removedMesh = removeSpy.mock.calls[0][0] as THREE.Mesh;
+    expect(geometryDisposeSpy.mock.contexts).toContain(removedMesh.geometry);
+    expect(model.setVisible).toHaveBeenCalledWith([1], true);
   });
 
   it('merged mesh has raycast no-op (non-selectable)', async () => {
@@ -205,5 +235,227 @@ describe('applyFurnishingMerge', () => {
     result.mergedMesh!.raycast(raycaster, intersections);
     expect(intersections).toHaveLength(0);
     await result.dispose();
+  });
+
+  it('disposes built geometry when aborted during geometry extraction', async () => {
+    const geometry = deferred<ReturnType<typeof makeMeshData>[][]>();
+    const model = {
+      getItemsOfCategories: vi.fn().mockResolvedValue({ IFCFURNISHINGELEMENT: [5] }),
+      getItemsGeometry: vi.fn(() => geometry.promise),
+      setVisible: vi.fn().mockResolvedValue(undefined),
+    };
+    const controller = new AbortController();
+    const geometryDisposeSpy = vi.spyOn(THREE.BufferGeometry.prototype, 'dispose');
+    const applying = applyFurnishingMerge(model as any, scene, controller.signal);
+    await vi.waitFor(() => expect(model.getItemsGeometry).toHaveBeenCalledOnce());
+
+    controller.abort();
+    geometry.resolve([[
+      makeMeshData(
+        new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+        new Uint16Array([0, 1, 2]),
+      ),
+    ]]);
+
+    await expect(applying).rejects.toMatchObject({ name: 'AbortError' });
+    // One temporary source geometry and the final merged geometry are freed.
+    expect(geometryDisposeSpy).toHaveBeenCalledTimes(2);
+    expect(model.setVisible).not.toHaveBeenCalled();
+    expect(scene.children).toHaveLength(0);
+  });
+
+  it('dispose is idempotent and removes the mesh before visibility restore settles', async () => {
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    const indices = new Uint16Array([0, 1, 2]);
+    const restore = deferred<void>();
+    const model = makeModel({
+      categories: { IFCFURNISHINGELEMENT: [1] },
+      geometry: () => [[makeMeshData(positions, indices)]],
+    });
+    model.setVisible.mockImplementation(async (_ids: number[], visible: boolean) => {
+      if (visible) await restore.promise;
+    });
+
+    const result = await applyFurnishingMerge(model as any, scene);
+    const geometryDispose = vi.spyOn(result.mergedMesh!.geometry, 'dispose');
+    const materialDispose = vi.spyOn(result.mergedMesh!.material as THREE.Material, 'dispose');
+
+    const firstDispose = result.dispose();
+    const secondDispose = result.dispose();
+
+    expect(secondDispose).toBe(firstDispose);
+    expect(scene.children).not.toContain(result.mergedMesh);
+    expect(geometryDispose).toHaveBeenCalledOnce();
+    expect(materialDispose).toHaveBeenCalledOnce();
+    expect(model.setVisible).toHaveBeenCalledTimes(2);
+
+    restore.resolve();
+    await Promise.all([firstDispose, secondDispose]);
+    expect(geometryDispose).toHaveBeenCalledOnce();
+    expect(materialDispose).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('FurnishingMergeLifecycle', () => {
+  it('releases the gate when disabled before a queued apply starts', async () => {
+    const apply = vi.fn().mockResolvedValue(makeLifecycleResult());
+    const lifecycle = new FurnishingMergeLifecycle({ apply });
+
+    const enabling = lifecycle.setDesired(true);
+    const disabling = lifecycle.setDesired(false);
+    expect(lifecycle.blocksNavigationLod).toBe(true);
+    await Promise.all([enabling, disabling]);
+
+    expect(apply).not.toHaveBeenCalled();
+    expect(lifecycle.isPending).toBe(false);
+    expect(lifecycle.blocksNavigationLod).toBe(false);
+  });
+
+  it('releases the gate when shutdown wins before a queued apply starts', async () => {
+    const apply = vi.fn().mockResolvedValue(makeLifecycleResult());
+    const lifecycle = new FurnishingMergeLifecycle({ apply });
+
+    const enabling = lifecycle.setDesired(true);
+    const shutdown = lifecycle.shutdown();
+    await Promise.all([enabling, shutdown]);
+
+    expect(apply).not.toHaveBeenCalled();
+    expect(lifecycle.isPending).toBe(false);
+    expect(lifecycle.blocksNavigationLod).toBe(false);
+  });
+
+  it('does not treat a no-op merge result as active replacement geometry', async () => {
+    const dispose = vi.fn().mockResolvedValue(undefined);
+    const afterUnmerge = vi.fn().mockResolvedValue(undefined);
+    const apply = vi.fn().mockResolvedValue({
+      mergedMesh: null,
+      furnishingLocalIds: [1],
+      dispose,
+    } satisfies FurnishingMergeResult);
+    const lifecycle = new FurnishingMergeLifecycle({ apply, afterUnmerge });
+
+    const enabling = lifecycle.setDesired(true);
+    expect(lifecycle.blocksNavigationLod).toBe(true);
+    await enabling;
+
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(afterUnmerge).toHaveBeenCalledOnce();
+    expect(lifecycle.currentResult).toBeNull();
+    expect(lifecycle.isPending).toBe(false);
+    expect(lifecycle.blocksNavigationLod).toBe(false);
+  });
+
+  it('disposes a stale result when disabled during a pending apply', async () => {
+    const pending = deferred<FurnishingMergeResult>();
+    let applySignal: AbortSignal | undefined;
+    const apply = vi.fn((signal: AbortSignal) => {
+      applySignal = signal;
+      return pending.promise;
+    });
+    const staleDispose = vi.fn().mockResolvedValue(undefined);
+    const lifecycle = new FurnishingMergeLifecycle({ apply });
+
+    const enabled = lifecycle.setDesired(true);
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledOnce());
+    expect(lifecycle.blocksNavigationLod).toBe(true);
+
+    const disabled = lifecycle.setDesired(false);
+    expect(applySignal?.aborted).toBe(true);
+    expect(lifecycle.blocksNavigationLod).toBe(true);
+    pending.resolve(makeLifecycleResult(staleDispose));
+
+    await Promise.all([enabled, disabled]);
+    expect(staleDispose).toHaveBeenCalledOnce();
+    expect(lifecycle.currentResult).toBeNull();
+    expect(lifecycle.isPending).toBe(false);
+    expect(lifecycle.blocksNavigationLod).toBe(false);
+  });
+
+  it('honours the latest true state after true-false-true during apply', async () => {
+    const first = deferred<FurnishingMergeResult>();
+    const second = deferred<FurnishingMergeResult>();
+    const signals: AbortSignal[] = [];
+    const apply = vi.fn((signal: AbortSignal) => {
+      signals.push(signal);
+      return signals.length === 1 ? first.promise : second.promise;
+    });
+    const staleDispose = vi.fn().mockResolvedValue(undefined);
+    const activeResult = makeLifecycleResult();
+    const lifecycle = new FurnishingMergeLifecycle({ apply });
+
+    const enableFirst = lifecycle.setDesired(true);
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+    const disable = lifecycle.setDesired(false);
+    const enableLatest = lifecycle.setDesired(true);
+    expect(signals[0].aborted).toBe(true);
+
+    first.resolve(makeLifecycleResult(staleDispose));
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(2));
+    expect(staleDispose).toHaveBeenCalledOnce();
+    expect(signals[1].aborted).toBe(false);
+
+    second.resolve(activeResult);
+    await Promise.all([enableFirst, disable, enableLatest]);
+    expect(lifecycle.currentResult).toBe(activeResult);
+    expect(lifecycle.blocksNavigationLod).toBe(true);
+  });
+
+  it('invalidates and disposes a pending result on shutdown', async () => {
+    const pending = deferred<FurnishingMergeResult>();
+    let applySignal: AbortSignal | undefined;
+    const apply = vi.fn((signal: AbortSignal) => {
+      applySignal = signal;
+      return pending.promise;
+    });
+    const staleDispose = vi.fn().mockResolvedValue(undefined);
+    const lifecycle = new FurnishingMergeLifecycle({ apply });
+
+    const enabled = lifecycle.setDesired(true);
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledOnce());
+    const shutdown = lifecycle.shutdown();
+    expect(applySignal?.aborted).toBe(true);
+    pending.resolve(makeLifecycleResult(staleDispose));
+
+    await Promise.all([enabled, shutdown]);
+    expect(staleDispose).toHaveBeenCalledOnce();
+    expect(lifecycle.currentResult).toBeNull();
+    expect(lifecycle.blocksNavigationLod).toBe(false);
+
+    await lifecycle.setDesired(true);
+    expect(apply).toHaveBeenCalledOnce();
+  });
+
+  it('clears current before awaiting disposal and serializes the next apply', async () => {
+    const disposal = deferred<void>();
+    const repair = deferred<void>();
+    const firstDispose = vi.fn(() => disposal.promise);
+    const afterUnmerge = vi.fn(() => repair.promise);
+    const firstResult = makeLifecycleResult(firstDispose);
+    const secondResult = makeLifecycleResult();
+    const apply = vi.fn()
+      .mockResolvedValueOnce(firstResult)
+      .mockResolvedValueOnce(secondResult);
+    const lifecycle = new FurnishingMergeLifecycle({ apply, afterUnmerge });
+
+    await lifecycle.setDesired(true);
+    expect(lifecycle.currentResult).toBe(firstResult);
+
+    const disable = lifecycle.setDesired(false);
+    await vi.waitFor(() => expect(firstDispose).toHaveBeenCalledOnce());
+    expect(lifecycle.currentResult).toBeNull();
+    expect(lifecycle.isPending).toBe(true);
+    expect(lifecycle.blocksNavigationLod).toBe(true);
+
+    const enable = lifecycle.setDesired(true);
+    expect(apply).toHaveBeenCalledOnce();
+    disposal.resolve();
+    await vi.waitFor(() => expect(afterUnmerge).toHaveBeenCalledOnce());
+    expect(apply).toHaveBeenCalledOnce();
+    repair.resolve();
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(2));
+    await Promise.all([disable, enable]);
+    expect(lifecycle.currentResult).toBe(secondResult);
   });
 });

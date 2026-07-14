@@ -48,7 +48,6 @@ import {
   getWebIfcSettingsForProfile,
   AUTO_PERF_PROFILE_THRESHOLD_BYTES,
 } from '../../services/viewer/parseProfiles';
-import { clientPointToNdc, queryFastPicker } from '../../services/viewer/fastPickerGuard';
 import {
   GHOST_ISOLATION_OPACITY,
   decideGhostWork,
@@ -75,10 +74,20 @@ import {
   type InteractionQualityState,
   type RuntimeViewerQuality,
 } from '../../services/viewer/interactionQualityController';
-import { isNoopSameElementClick } from '../../services/viewer/pickingPipeline';
 import {
+  createPickLeaseCoordinator,
+  isClickGesture,
+  isConfirmedVoidPick,
+  isNoopSameElementClick,
+  type PickLeaseCoordinator,
+} from '../../services/viewer/pickingPipeline';
+import {
+  canUseFurnishingMerge,
+  canUseNavigationLod,
   resolveLodTier,
   resolveModelGraphicsQuality,
+  shouldAttachNavigationLod,
+  shouldPinAllVisible,
   type LodTier,
 } from '../../services/viewer/lodTierPolicy';
 import { solveCameraFrame } from '../../services/viewer/frameCameraMath';
@@ -110,6 +119,7 @@ import {
   computeAmberIds,
   decideSelectionWork,
   getSelectionHighlightColor,
+  resolveDurableHighlightLayer,
 } from '../../services/viewer/selectionHighlightHelpers';
 import { createRebuildScheduler, type RebuildScheduler } from '../../services/viewer/rebuildScheduler';
 import {
@@ -155,8 +165,10 @@ import {
   hasPendingFragmentZFightingMitigation,
   resetFragmentZFightingTracking,
 } from '../../services/viewer/zFightingMitigation';
-import { applyFurnishingMerge } from '../../services/viewer/furnishingMerge';
-import type { FurnishingMergeResult } from '../../services/viewer/furnishingMerge';
+import {
+  applyFurnishingMerge,
+  FurnishingMergeLifecycle,
+} from '../../services/viewer/furnishingMerge';
 import {
   StoreyFrustumCuller,
   extractStoreyNodes,
@@ -466,6 +478,10 @@ export default function ViewerPanel({
   // Suppresses low-priority hover work during camera navigation.
   const cameraNavigatingRef = useRef(false);
   const lodCleanupRef = useRef<(() => void) | null>(null);
+  const navigationLodAppearanceRefreshRef = useRef<(() => void) | null>(null);
+  const furnishingMergeDesiredRefreshRef = useRef<(() => void) | null>(null);
+  const visibilityRepairRef = useRef<(() => Promise<void>) | null>(null);
+  const exactPickLeaseRef = useRef<PickLeaseCoordinator | null>(null);
   // Runtime pixel ratio, graphics quality, and hover-gate ladder state.
   const interactionQualityRef = useRef<InteractionQualityState>(
     DEFAULT_INTERACTION_QUALITY_STATE,
@@ -481,6 +497,7 @@ export default function ViewerPanel({
   const postproductionRef =
     useRef<GhostPostproductionTarget<OBCF.EdgeDetectionPassMode> | null>(null);
   const fragmentUpdateSchedulerRef = useRef<FragmentUpdateScheduler | null>(null);
+  const renderKickRef = useRef<((ms?: number) => void) | null>(null);
 
   const updateLoadProgress = useCallback((next: Partial<ViewerLoadProgress>) => {
     setLoadProgress((previous) => {
@@ -526,6 +543,11 @@ export default function ViewerPanel({
     } catch {
       /* best-effort render kick */
     }
+  }, []);
+
+  /** Invalidate only the renderer for plain Three.js visibility/buffer changes. */
+  const requestViewerRender = useCallback((ms = 100) => {
+    renderKickRef.current?.(ms);
   }, []);
 
   // Click-to-highlight latency is recorded after the highlight flush resolves.
@@ -651,6 +673,55 @@ export default function ViewerPanel({
       out.push(lid);
     }
     return out;
+  }, []);
+
+  /** Restore the persistent visual hidden underneath a temporary hover tint. */
+  const restoreDurableHighlight = useCallback(async (
+    targetModel: FRAGS.FragmentsModel,
+    localId: number,
+    expressId: number | null,
+  ): Promise<void> => {
+    const state = useStore.getState();
+    const snapshot = nativeHighlightSnapshotRef.current;
+    const amberIds = computeAmberIds(state.selectedElementId, state.selectedIds);
+    const chatIds = state.highlightedIds.slice(0, CHAT_HIGHLIGHT_LIMIT);
+    const baseColour = expressId === null
+      ? undefined
+      : snapshot?.baseExpressColors.get(expressId);
+    const layer = resolveDurableHighlightLayer(
+      expressId,
+      amberIds,
+      chatIds,
+      baseColour !== undefined,
+    );
+    if (layer === 'selection') {
+      await targetModel.highlight([localId], {
+        color: getSelectionHighlightColor(),
+        opacity: SELECTION_HIGHLIGHT_OPACITY,
+        transparent: false,
+        renderedFaces: FRAGS.RenderedFaces.ONE,
+      });
+      return;
+    }
+    if (layer === 'chat') {
+      await targetModel.highlight([localId], {
+        color: CHAT_HIGHLIGHT_COLOR,
+        opacity: 1,
+        transparent: false,
+        renderedFaces: FRAGS.RenderedFaces.ONE,
+      });
+      return;
+    }
+    if (layer === 'base' && baseColour) {
+      await targetModel.highlight([localId], {
+        color: baseColour,
+        opacity: 0.95,
+        transparent: false,
+        renderedFaces: FRAGS.RenderedFaces.ONE,
+      });
+      return;
+    }
+    await targetModel.resetHighlight([localId]);
   }, []);
 
   // Apply native fragment highlights (exact mesh geometry, not bounding boxes).
@@ -800,8 +871,15 @@ export default function ViewerPanel({
               colourGroupsResolved.push([color, lids]);
             }
             if (chatLids !== null && colourGroupsResolved !== null) {
+              let repairScheduled = false;
+              const repairAfterFastPathFailure = () => {
+                if (repairScheduled) return;
+                repairScheduled = true;
+                nativeHighlightSnapshotRef.current = null;
+                rebuildSchedulerRef.current?.schedule();
+              };
               if (resetLids.length > 0) {
-                model.resetHighlight(resetLids).catch(() => { /* non-fatal */ });
+                model.resetHighlight(resetLids).catch(repairAfterFastPathFailure);
               }
               for (const [color, lids] of colourGroupsResolved) {
                 if (lids.length === 0) continue;
@@ -810,7 +888,7 @@ export default function ViewerPanel({
                   opacity: 0.95,
                   transparent: false,
                   renderedFaces: FRAGS.RenderedFaces.ONE,
-                }).catch(() => { /* non-fatal */ });
+                }).catch(repairAfterFastPathFailure);
               }
               if (chatLids.length > 0) {
                 model.highlight(chatLids, {
@@ -818,7 +896,7 @@ export default function ViewerPanel({
                   opacity: 1.0,
                   transparent: false,
                   renderedFaces: FRAGS.RenderedFaces.ONE,
-                }).catch(() => { /* non-fatal */ });
+                }).catch(repairAfterFastPathFailure);
               }
               if (paintLids.length > 0) {
                 model.highlight(paintLids, {
@@ -826,7 +904,7 @@ export default function ViewerPanel({
                   opacity: SELECTION_HIGHLIGHT_OPACITY,
                   transparent: false,
                   renderedFaces: FRAGS.RenderedFaces.ONE,
-                }).catch(() => { /* non-fatal */ });
+                }).catch(repairAfterFastPathFailure);
               }
               nativeHighlightSnapshotRef.current = {
                 ...prevSnapshot,
@@ -976,6 +1054,8 @@ export default function ViewerPanel({
       // into the next paint instead of starting overlapping forced updates.
       requestFragmentUpdate('click-highlight');
     } catch (err) {
+      nativeHighlightSnapshotRef.current = null;
+      pendingClickStartRef.current = null;
       // Highlight errors are non-fatal, but a silent swallow hides real
       // failures (no amber, no flush) - surface them in dev builds.
       if (import.meta.env.DEV) console.debug('[viewer] highlight rebuild failed', err);
@@ -1025,6 +1105,9 @@ export default function ViewerPanel({
     const u4 = useStore.subscribe((s) => s.colourBy, scheduler.schedule);
     const u5 = useStore.subscribe((s) => s.spatialTree, scheduler.schedule);
     const u6 = useStore.subscribe((s) => s.colourLayers, scheduler.schedule);
+    // A structural edit remount preserves store selection/paint state. Repaint
+    // it on the new fragments model even when no Zustand value changed.
+    scheduler.schedule();
     return () => {
       u1(); u2(); u3(); u4(); u5(); u6();
       scheduler.cancel();
@@ -1365,12 +1448,29 @@ export default function ViewerPanel({
         void applyVisibility(state.isolatedIds, state.hiddenIds, state.ghostModeOn);
       },
     });
+    const repairVisibility = async () => {
+      // Furnishing unmerge restores its source ids to visible. Forget the
+      // delta snapshot so the current hide/isolate policy is authoritatively
+      // re-applied after that restore instead of being skipped as unchanged.
+      previousVisibilitySnapshot = {
+        isolatedIds: [],
+        hiddenIds: [],
+        ghostModeOn: false,
+      };
+      appliedInvisibleLocalSet = new Set();
+      const state = useStore.getState();
+      await applyVisibility(state.isolatedIds, state.hiddenIds, state.ghostModeOn);
+    };
+    visibilityRepairRef.current = repairVisibility;
     const unsubIso = useStore.subscribe((state) => state.isolatedIds, scheduler.schedule);
     const unsubHide = useStore.subscribe((state) => state.hiddenIds, scheduler.schedule);
     const unsubGhost = useStore.subscribe((state) => state.ghostModeOn, scheduler.schedule);
     scheduler.schedule();
 
     return () => {
+      if (visibilityRepairRef.current === repairVisibility) {
+        visibilityRepairRef.current = null;
+      }
       unsubIso();
       unsubHide();
       unsubGhost();
@@ -1498,18 +1598,18 @@ export default function ViewerPanel({
   const measurementMode = useStore((s) => s.measurement.mode);
   const measurementUnit = useStore((s) => s.measurement.unit);
   const setMeasurementMode = useStore((s) => s.setMeasurementMode);
+  const editMode = useStore((s) => s.editMode);
+  const editModeAvailable = useStore((s) => s.editModeAvailable);
+  const pickPlaneMode = useStore((s) => s.pickPlaneMode);
   const measurementControllerRef = useRef<MeasurementController | null>(null);
   const [measurementSnapshot, setMeasurementSnapshot] = useState<MeasurementSnapshot | null>(null);
 
   /** Active furnishing merge, disposed on toggle-off. */
-  const furnishingMergeRef = useRef<FurnishingMergeResult | null>(null);
+  const furnishingMergeLifecycleRef = useRef<FurnishingMergeLifecycle | null>(null);
 
   /** Per-storey AABB frustum culler. */
   const storeyFrustumCullerRef = useRef<StoreyFrustumCuller | null>(null);
   const elementFrustumCullerRef = useRef<ElementFrustumCuller | null>(null);
-  /** GPU color-coded model picker used as a fast miss guard before raycast. */
-  const fastPickerRef = useRef<OBC.FastModelPicker | null>(null);
-
   useEffect(() => {
     if (!viewerReady || !viewerRef.current) return;
     const { world, model } = viewerRef.current;
@@ -1541,12 +1641,18 @@ export default function ViewerPanel({
   const wallDrawControllerRef = useRef<WallDrawController | null>(null);
   const [wallDrawController, setWallDrawController] = useState<WallDrawController | null>(null);
   useEffect(() => {
-    if (!viewerReady || !viewerRef.current) return;
+    if (!viewerReady || !viewerRef.current || !editModeAvailable || !editMode) return;
     const { world } = viewerRef.current;
     const controller = new WallDrawController({
       scene: world.scene.three as THREE.Scene,
       dom: world.renderer!.three.domElement,
       getCamera: () => world.camera.three as THREE.Camera,
+      onPreviewChange: () => requestViewerRender(80),
+      onArm: () => {
+        const state = useStore.getState();
+        state.setMeasurementMode('off');
+        state.setPickPlaneMode(false);
+      },
     });
     wallDrawControllerRef.current = controller;
     setWallDrawController(controller);
@@ -1555,7 +1661,15 @@ export default function ViewerPanel({
       wallDrawControllerRef.current = null;
       setWallDrawController(null);
     };
-  }, [viewerReady]);
+  }, [viewerReady, editModeAvailable, editMode, requestViewerRender]);
+
+  useEffect(() => {
+    if (measurementMode !== 'off') wallDrawControllerRef.current?.disarm();
+  }, [measurementMode]);
+
+  useEffect(() => {
+    if (pickPlaneMode) wallDrawControllerRef.current?.disarm();
+  }, [pickPlaneMode]);
 
   // Escape cancels pending measurement points, then exits the tool.
   useEffect(() => {
@@ -1604,27 +1718,97 @@ export default function ViewerPanel({
   }, [viewerReady, gridVisible]);
 
   // Furnishing merge replaces furnishing meshes with one static mesh.
-  const furnishingMerged = useStore((s) => s.furnishingMerged);
   useEffect(() => {
     if (!viewerReady || !viewerRef.current) return;
     const { model, world } = viewerRef.current;
     const scene = world.scene.three as THREE.Scene;
+    let active = true;
+    const lifecycle = new FurnishingMergeLifecycle({
+      apply: (signal) => applyFurnishingMerge(model, scene, signal),
+      afterUnmerge: async () => {
+        if (!active) return;
+        // Furnishing disposal restores its source ids directly. First release
+        // app-culler ownership so their autoCulled flags cannot claim ids that
+        // were just made visible, then rebuild the authoritative user policy.
+        const storeyCuller = storeyFrustumCullerRef.current;
+        const elementCuller = elementFrustumCullerRef.current;
+        if (storeyCuller?.isBuilt) await storeyCuller.clearCull(model);
+        if (elementCuller?.isBuilt) await elementCuller.clearCull(model);
+        await visibilityRepairRef.current?.();
 
-    if (furnishingMerged) {
-      void applyFurnishingMerge(model, scene).then((result) => {
-        furnishingMergeRef.current = result;
-        // Flush immediately after the merge visibility changes.
+        const state = useStore.getState();
+        let culledStoreys = 0;
+        let culledElements = 0;
+        if (state.isolatedIds.length === 0 && state.hiddenIds.length === 0) {
+          const camera = world.camera.three as THREE.Camera;
+          if (storeyCuller?.isBuilt) {
+            culledStoreys = await storeyCuller.tick(camera, model);
+          }
+          if (elementCuller?.isBuilt) {
+            const ownedByStorey = storeyCuller?.isBuilt
+              ? new Set(storeyCuller.getCulledMemberIds())
+              : undefined;
+            culledElements = await elementCuller.tick(camera, model, ownedByStorey);
+          }
+        }
+        if (storeyCuller?.isBuilt || elementCuller?.isBuilt) {
+          useStore.getState().updatePerfMetrics({ culledStoreys, culledElements });
+        }
+
+        // Keep all repairs inside the serialized lifecycle. A new merge cannot
+        // start until culling, visibility, and durable highlight layers settle.
+        await rebuildNativeHighlightsRef.current?.();
         requestFragmentUpdate('manual');
-      });
-    } else {
-      if (furnishingMergeRef.current) {
-        void furnishingMergeRef.current.dispose().then(() => {
-          furnishingMergeRef.current = null;
-          requestFragmentUpdate('manual');
-        });
+      },
+      onStateChange: () => {
+        if (!active) return;
+        // Keep an unstyled LOD proxy out of the scene for the whole merge /
+        // unmerge transition, not just while the persisted toggle is true.
+        navigationLodAppearanceRefreshRef.current?.();
+        requestFragmentUpdate('manual');
+      },
+    });
+    furnishingMergeLifecycleRef.current = lifecycle;
+    const canMergeForState = (state: ReturnType<typeof useStore.getState>) => (
+      canUseFurnishingMerge({
+        enabled: state.furnishingMerged,
+        isolatedCount: state.isolatedIds.length,
+        hiddenCount: state.hiddenIds.length,
+        ghostModeOn: state.ghostModeOn,
+        selectedElementId: state.selectedElementId,
+        selectedCount: state.selectedIds.length,
+        highlightedCount: state.highlightedIds.length,
+        colourBy: state.colourBy,
+        colourLayerCount: Object.keys(state.colourLayers).length,
+        hoverHighlightEnabled: state.hoverHighlightEnabled,
+        measurementMode: state.measurement.mode,
+      })
+    );
+    const reconcileDesiredState = (enabled: boolean) => {
+      void lifecycle.setDesired(enabled && !exactPickLeaseRef.current?.active);
+    };
+    const refreshDesiredState = () => {
+      reconcileDesiredState(canMergeForState(useStore.getState()));
+    };
+    furnishingMergeDesiredRefreshRef.current = refreshDesiredState;
+    const unsubscribe = useStore.subscribe(
+      canMergeForState,
+      reconcileDesiredState,
+      { fireImmediately: true },
+    );
+    return () => {
+      active = false;
+      unsubscribe();
+      if (furnishingMergeDesiredRefreshRef.current === refreshDesiredState) {
+        furnishingMergeDesiredRefreshRef.current = null;
       }
-    }
-  }, [viewerReady, furnishingMerged, requestFragmentUpdate]);
+      if (furnishingMergeLifecycleRef.current === lifecycle) {
+        furnishingMergeLifecycleRef.current = null;
+      }
+      void lifecycle.shutdown();
+      navigationLodAppearanceRefreshRef.current?.();
+    };
+  }, [viewerReady, requestFragmentUpdate]);
 
   // Storey AABB frustum culler builds when model and tree are ready.
   const spatialTree = useStore((s) => s.spatialTree);
@@ -1809,6 +1993,27 @@ export default function ViewerPanel({
     if (!container) return;
 
     let disposed = false;
+    const exactPickLease = createPickLeaseCoordinator((active) => {
+      if (disposed || exactPickLeaseRef.current !== exactPickLease) return;
+      if (active) {
+        // Restore the authoritative full fragments before any worker raycast.
+        navigationLodAppearanceRefreshRef.current?.();
+        return;
+      }
+      // The awaiting click continuation publishes selection in a microtask.
+      // Re-evaluate merge/LOD in the next task so durable appearance wins and
+      // another overlapping pick can acquire its lease first.
+      window.setTimeout(() => {
+        if (
+          disposed
+          || exactPickLeaseRef.current !== exactPickLease
+          || exactPickLease.active
+        ) return;
+        navigationLodAppearanceRefreshRef.current?.();
+        furnishingMergeDesiredRefreshRef.current?.();
+      }, 0);
+    });
+    exactPickLeaseRef.current = exactPickLease;
     const components = new OBC.Components();
     const initStart = performance.now();
     let perfSamplingCleanup: (() => void) | null = null;
@@ -1820,6 +2025,7 @@ export default function ViewerPanel({
     let zFightingCleanup: (() => void) | null = null;
     let fragmentUpdateScheduler: FragmentUpdateScheduler | null = null;
     let hoverIntentTimer: number | null = null;
+    let globalSlowTimer: number | null = null;
     // Unsubscribe for the viewer-performance-mode listener.
     let interactionQualityUnsub: (() => void) | null = null;
     const startupState = useStore.getState();
@@ -1844,7 +2050,7 @@ export default function ViewerPanel({
 
     async function init() {
       // Show slow-load feedback after 20 s on any loading path.
-      const globalSlowTimer = window.setTimeout(() => {
+      globalSlowTimer = window.setTimeout(() => {
         if (!disposed) setLoadingSlow(true);
       }, 20_000);
       try {
@@ -1944,6 +2150,7 @@ export default function ViewerPanel({
             /* flag is best-effort: any shape mismatch keeps AUTO mode */
           }
         }
+        renderKickRef.current = renderKick;
         // Postproduction starts disabled until an effect needs it.
         try {
           const pp = (world.renderer as unknown as OBCF.PostproductionRenderer).postproduction;
@@ -2296,20 +2503,6 @@ export default function ViewerPanel({
           grid: grid as unknown as ViewerRefs['grid'],
         };
         applyTheme(useStore.getState().theme);
-
-        // FastModelPicker - GPU color-coded pass for fast miss-detection.
-        // getModelAt() renders one flat-shaded pass and reads back one pixel:
-        // returns a model UUID if geometry sits under the cursor, or null for
-        // empty space. We use it as a pre-filter before model.raycast() so
-        // hover and click events skip the expensive triangle traversal when
-        // the cursor is over void. models.dispose() is called by components.dispose().
-        try {
-          const pickers = components.get(OBC.FastModelPickers);
-          fastPickerRef.current = pickers.get(world as unknown as OBC.World);
-        } catch {
-          // FastModelPicker may be unavailable in some preview/test environments.
-          fastPickerRef.current = null;
-        }
 
         // Initialize fragments with a blob-backed worker for broader runtime compatibility.
         const fragmentsManager = components.get(OBC.FragmentsManager);
@@ -3631,83 +3824,139 @@ export default function ViewerPanel({
           grid: grid as unknown as { three: THREE.Object3D },
         };
 
-        // Optional LOD swap renders a lighter model while the camera is moving.
-        {
-          const lodSwap = new LodSwapController();
+        const setupNavigationLodSwap = () => {
+          const lodSwap = new LodSwapController(() => requestViewerRender(180));
           lodSwap.setTargets(model.object, null);
           const lodControls = world.camera.controls;
           const onLodNav = () => lodSwap.onNavigate();
           const onLodRest = () => lodSwap.onRest();
           lodControls.addEventListener('wake', onLodNav);
           lodControls.addEventListener('controlstart', onLodNav);
-          // Continuous navigation signal for the LOD controller.
           lodControls.addEventListener('update', onLodNav);
           lodControls.addEventListener('rest', onLodRest);
           lodControls.addEventListener('sleep', onLodRest);
-          // Only swap when per-element visibility modes are inactive.
-          const unsubLod = useStore.subscribe(
-            (s) =>
-              s.largeModelLod
-              && s.isolatedIds.length === 0
-              && s.hiddenIds.length === 0
-              && !s.ghostModeOn,
-            (canSwap: boolean) => lodSwap.setEnabled(canSwap),
+
+          let lodAttached: AttachedLod | null = null;
+          let lodAbort: AbortController | null = null;
+          let lodLoadGeneration = 0;
+          let lodLoading = false;
+
+          const disposeAttached = () => {
+            lodLoadGeneration += 1;
+            lodLoading = false;
+            try { lodAbort?.abort(); } catch { /* best-effort */ }
+            lodAbort = null;
+            try { lodAttached?.dispose(); } catch { /* best-effort */ }
+            lodAttached = null;
+            lodSwap.setTargets(model.object, null);
+            if (import.meta.env.DEV) (window as any).__ifcLodAttached = false;
+          };
+
+          const startLodLoad = () => {
+            if (
+              disposed
+              || lodLoading
+              || lodAttached
+              || !useStore.getState().largeModelLod
+            ) return;
+            lodLoading = true;
+            const generation = ++lodLoadGeneration;
+            const abort = new AbortController();
+            lodAbort = abort;
+            void loadAndAttachLod({
+              fragmentsManager,
+              worldScene: world.scene.three as unknown as THREE.Object3D,
+              fullModelId: modelId,
+              lodModelId: `${modelId}__lod_${generation}`,
+              autoCoordinate: coordinateModel,
+              camera: world.camera.three as THREE.Camera,
+              fingerprint: useStore.getState().modelFingerprint,
+              profile: graphicsProfile,
+              signal: abort.signal,
+              allVisibleLodMode: FRAGS.LodMode.ALL_VISIBLE,
+            }).then((attached) => {
+              if (generation !== lodLoadGeneration || disposed || !useStore.getState().largeModelLod) {
+                attached?.dispose();
+                return;
+              }
+              lodLoading = false;
+              lodAbort = null;
+              if (!attached) return;
+              lodAttached = attached;
+              lodSwap.setTargets(model.object, attached.lodObject);
+              if (import.meta.env.DEV) (window as any).__ifcLodAttached = true;
+            });
+          };
+
+          // The decimated proxy does not carry per-element appearance state
+          // or the separately merged furnishing mesh. Keep the primary model
+          // visible whenever one of those overrides is active.
+          // Keep the subscription selector store-only. The lifecycle ref is
+          // refreshed explicitly below; including it in the selector would
+          // desynchronise Zustand's remembered value from LodSwapController
+          // and could miss the next store-driven gate closure.
+          const canSwapFromStore = (s: ReturnType<typeof useStore.getState>) => (
+            canUseNavigationLod({
+              enabled: s.largeModelLod,
+              isolatedCount: s.isolatedIds.length,
+              hiddenCount: s.hiddenIds.length,
+              ghostModeOn: s.ghostModeOn,
+              selectedElementId: s.selectedElementId,
+              selectedCount: s.selectedIds.length,
+              highlightedCount: s.highlightedIds.length,
+              colourBy: s.colourBy,
+              colourLayerCount: Object.keys(s.colourLayers).length,
+              // Actual/pending merge state is owned by the lifecycle ref and
+              // applied in refreshAppearanceGate below. The persisted request
+              // alone must not disable navigation LOD while merge is suspended
+              // for fragment interactions.
+              furnishingMerged: false,
+            })
+          );
+          const refreshAppearanceGate = () => {
+            lodSwap.setEnabled(
+              canSwapFromStore(useStore.getState())
+              && !furnishingMergeLifecycleRef.current?.blocksNavigationLod
+              && !exactPickLeaseRef.current?.active,
+            );
+          };
+          navigationLodAppearanceRefreshRef.current = refreshAppearanceGate;
+          const unsubAppearance = useStore.subscribe(
+            canSwapFromStore,
+            refreshAppearanceGate,
             { fireImmediately: true },
           );
-          const lodAbort = new AbortController();
-          let lodAttached: AttachedLod | null = null;
-          void loadAndAttachLod({
-            fragmentsManager,
-            worldScene: world.scene.three as unknown as THREE.Object3D,
-            fullModelId: modelId,
-            autoCoordinate: coordinateModel,
-            fingerprint: useStore.getState().modelFingerprint,
-            profile: graphicsProfile,
-            signal: lodAbort.signal,
-            // Pin the decimated model to ALL_VISIBLE too - it is the model
-            // shown during motion, where DEFAULT LodMode would coverage-cull
-            // its own elements every frame and reintroduce the flicker.
-            allVisibleLodMode: FRAGS.LodMode.ALL_VISIBLE,
-          }).then((attached) => {
-            if (disposed || !attached) { attached?.dispose(); return; }
-            lodAttached = attached;
-            lodSwap.setTargets(model.object, attached.lodObject);
-            if (import.meta.env.DEV) {
-              (window as any).__ifcLodAttached = true;
-            }
-          });
+          const unsubPreference = useStore.subscribe(
+            (s) => s.largeModelLod,
+            (enabled: boolean) => {
+              if (enabled) startLodLoad();
+              else disposeAttached();
+            },
+            { fireImmediately: true },
+          );
+
           lodCleanupRef.current = () => {
-            try { lodAbort.abort(); } catch { /* */ }
-            try { unsubLod(); } catch { /* */ }
+            if (navigationLodAppearanceRefreshRef.current === refreshAppearanceGate) {
+              navigationLodAppearanceRefreshRef.current = null;
+            }
+            try { unsubAppearance(); } catch { /* best-effort */ }
+            try { unsubPreference(); } catch { /* best-effort */ }
             try {
               lodControls.removeEventListener('wake', onLodNav);
               lodControls.removeEventListener('controlstart', onLodNav);
               lodControls.removeEventListener('update', onLodNav);
               lodControls.removeEventListener('rest', onLodRest);
               lodControls.removeEventListener('sleep', onLodRest);
-            } catch { /* */ }
-            try { lodSwap.dispose(); } catch { /* */ }
-            try { lodAttached?.dispose(); } catch { /* */ }
+            } catch { /* best-effort */ }
+            disposeAttached();
+            lodSwap.dispose();
           };
-        }
+        };
 
-        // LodMode.ALL_VISIBLE for every model, regardless of size. In DEFAULT
-        // LodMode the worker's screen-coverage classifier re-evaluates every
-        // element on each view refresh and hard-hides anything below the
-        // sub-pixel / frustum-edge threshold. That verdict recomputes every
-        // frame while the camera moves, so elements visibly flicker and vanish
-        // during orbit/zoom and a hidden element cannot be picked - the exact
-        // regression reported against the original viewer, which never culled
-        // at view time. ALL_VISIBLE is the classifier's first branch: no
-        // frustum cull, no screen-size cull - only explicit visibility (Hider /
-        // isolate / ghost) is honored, so nothing disappears under the user
-        // during navigation. Tiles stay GPU-resident either way (freed only
-        // under memoryOverflow) and the lodTierPolicy.ts bench found the cull
-        // band buys no measurable frame time up to ~5k elements; genuinely
-        // large models get their motion-time budget from the decimated LOD
-        // swap (loadAndAttachLod, itself pinned to ALL_VISIBLE), not from
-        // hiding elements. The per-model graphicsQuality writes below stay
-        // (inert under ALL_VISIBLE, but keep the tier plumbing correct).
+        // Tiny models can skip coverage culling without a meaningful GPU cost.
+        // Medium/large models must retain DEFAULT view-dependent LOD; forcing
+        // ALL_VISIBLE here regressed the reported 1,032-element model to 828 draw calls
+        // and all 6.43M triangles during navigation.
         void (async () => {
           try {
             const ids = await model.getLocalIds();
@@ -3715,7 +3964,20 @@ export default function ViewerPanel({
             const tier = resolveLodTier(ids.length);
             modelLodTiers.set(modelId, tier);
             if (typeof model.setLodMode === 'function') {
-              await model.setLodMode(FRAGS.LodMode.ALL_VISIBLE);
+              await model.setLodMode(
+                shouldPinAllVisible(tier)
+                  ? FRAGS.LodMode.ALL_VISIBLE
+                  : FRAGS.LodMode.DEFAULT,
+              );
+            }
+            if (disposed) return;
+            // A second fragments model is worthwhile only for genuinely large
+            // models. Medium fixtures use worker LOD and avoid duplicate GPU /
+            // worker memory entirely.
+            // Prepare the lazy preference subscription for large models; the
+            // proxy itself is fetched only while the preference is enabled.
+            if (shouldAttachNavigationLod(tier, true)) {
+              setupNavigationLodSwap();
             }
             // Re-apply the current ladder level now that the tier is known:
             // covers a ladder change racing the load and applies the
@@ -4333,8 +4595,8 @@ export default function ViewerPanel({
         let rightDownX = 0;
         let rightDownY = 0;
         type ClickPickResult = {
-          hitModelId: string | null;
           result: FragmentRaycastHit | null;
+          error: unknown | null;
         };
         let clickPickGeneration = 0;
         let pendingClickPick: {
@@ -4343,47 +4605,44 @@ export default function ViewerPanel({
           y: number;
           promise: Promise<ClickPickResult>;
         } | null = null;
-        // A2 + K - prefetch gating and pre-resolution state. The prefetch is
-        // deferred a beat so orbit-starts (which move within the first frames)
-        // never pay the FastPicker GPU readback; the pointer position is
-        // tracked so the pre-resolve can tell a held click from a drag.
+        // Prefetch worker raycasts after a short hold so most click work is
+        // complete before pointer-up, while real orbit drags avoid the pick.
         let prefetchTimer: number | null = null;
         let lastPointerClientX = 0;
         let lastPointerClientY = 0;
         const PREFETCH_DELAY_MS = 35;
         const CLICK_DRAG_THRESHOLD_PX = 4;
 
+        const suspendFurnishingMergeForExactPick = async (): Promise<void> => {
+          const lifecycle = furnishingMergeLifecycleRef.current;
+          if (!lifecycle?.blocksNavigationLod) return;
+          await lifecycle.setDesired(false);
+          // The lifecycle awaits visibility/highlight repair before settling,
+          // so this exact worker raycast sees the authoritative fragment state.
+        };
+
         const pickElementAt = async (pt: { x: number; y: number }): Promise<ClickPickResult> => {
-          const pickerPoint = clientPointToNdc(pt, canvas);
-          const fastPicker = fastPickerRef.current;
-          const camera = world.camera.three as
-            | THREE.PerspectiveCamera
-            | THREE.OrthographicCamera;
-          const mouse = new THREE.Vector2(pt.x, pt.y);
-          // Run the FastPicker void-guard and the
-          // worker raycast CONCURRENTLY: pick latency becomes
-          // max(GPU readback, worker raycast) instead of their sum (the
-          // serial order cost fast clicks ~10-25 ms). The picker keeps its
-          // role as the void authority - a confident picker miss still wins
-          // and the in-flight raycast result is discarded (a wasted worker
-          // raycast on a void click is cheap and off the main thread).
-          const raycastPromise = model.raycast({ camera, mouse, dom: canvas });
-          let hitModelId: string | null = '__no_picker__';
-          if (fastPicker) {
-            hitModelId = await queryFastPicker(fastPicker, pickerPoint);
-            if (!hitModelId) {
-              void raycastPromise.catch(() => { /* discarded void-click raycast */ });
-              return { hitModelId, result: null };
-            }
+          const releasePickLease = exactPickLease.acquire();
+          try {
+            await suspendFurnishingMergeForExactPick();
+            const camera = world.camera.three as
+              | THREE.PerspectiveCamera
+              | THREE.OrthographicCamera;
+            const mouse = new THREE.Vector2(pt.x, pt.y);
+            // The fragments worker raycast is authoritative. FastModelPicker's
+            // extra colour pass both stalled the GPU and sometimes reported a
+            // miss for a valid thin/stale tile, vetoing a real exact hit.
+            const result = await model.raycast({ camera, mouse, dom: canvas });
+            return { result, error: null };
+          } finally {
+            releasePickLease();
           }
-          const result = await raycastPromise;
-          return { hitModelId, result };
         };
 
         const prefetchClickPick = (pt: { x: number; y: number }) => {
-          const generation = ++clickPickGeneration;
-          const promise = pickElementAt(pt).catch(() => {
-            return { hitModelId: '__picker_error__', result: null };
+          const generation = clickPickGeneration;
+          const promise = pickElementAt(pt).catch((error: unknown) => {
+            return { result: null, error };
           });
           pendingClickPick = { generation, x: pt.x, y: pt.y, promise };
           // Pre-resolve held clicks to warm id and property caches.
@@ -4415,10 +4674,21 @@ export default function ViewerPanel({
           downX = event.clientX;
           downY = event.clientY;
           downTs = performance.now();
+          clickPickGeneration += 1;
           lastPointerClientX = event.clientX;
           lastPointerClientY = event.clientY;
-          // Defer prefetch briefly so orbit gestures avoid the GPU pick path.
+          // Defer prefetch briefly so orbit gestures avoid an unused worker raycast.
           if (prefetchTimer !== null) window.clearTimeout(prefetchTimer);
+          if (wallDrawControllerRef.current?.isArmed()) {
+            pendingClickPick = null;
+            return;
+          }
+          if (furnishingMergeLifecycleRef.current?.blocksNavigationLod) {
+            // Avoid an expensive speculative unmerge that may be wasted when
+            // this stationary press becomes an orbit. Confirm it on up.
+            pendingClickPick = null;
+            return;
+          }
           prefetchTimer = window.setTimeout(() => {
             prefetchTimer = null;
             if (disposed) return;
@@ -4441,9 +4711,13 @@ export default function ViewerPanel({
           const dy = event.clientY - downY;
           const dragDist = Math.hypot(dx, dy);
           const elapsed = performance.now() - downTs;
-          // Treat as a drag if the pointer moved meaningfully, OR the user
-          // held down for a while (orbit gesture).
-          if (dragDist > 4 || elapsed > 500) {
+          // Movement, not press duration, distinguishes navigation from a
+          // click. A deliberate long stationary click is still a selection.
+          if (!isClickGesture({
+            distancePx: dragDist,
+            elapsedMs: elapsed,
+            dragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
+          })) {
             pendingClickPick = null;
             clickPickGeneration += 1;
             if (import.meta.env.DEV) {
@@ -4456,6 +4730,7 @@ export default function ViewerPanel({
           // ahead of picking/selection (mirrors the measurement hijack below).
           if (wallDrawControllerRef.current?.isArmed()) {
             pendingClickPick = null; // drop the prefetched raycast - unused
+            clickPickGeneration += 1;
             wallDrawControllerRef.current.handleClick(event.clientX, event.clientY);
             return;
           }
@@ -4465,6 +4740,7 @@ export default function ViewerPanel({
           const tClickStart = performance.now();
 
           try {
+            const requestGeneration = clickPickGeneration;
             const pendingPick = pendingClickPick;
             pendingClickPick = null;
             const canUsePrefetch =
@@ -4472,26 +4748,18 @@ export default function ViewerPanel({
               && pendingPick.generation === clickPickGeneration
               && Math.hypot(pendingPick.x - downX, pendingPick.y - downY) <= 1;
             const tBeforeIO = import.meta.env.DEV ? performance.now() : 0;
-            const { hitModelId, result } = canUsePrefetch
+            const { result, error: pickError } = canUsePrefetch
               ? await pendingPick.promise
               : await pickElementAt({ x: event.clientX, y: event.clientY });
+            if (disposed || requestGeneration !== clickPickGeneration) return;
+            if (pickError) throw pickError;
             if (import.meta.env.DEV) {
               console.debug('[viewer] raycast', {
                 client: { x: event.clientX, y: event.clientY },
                 prefetched: canUsePrefetch,
                 ioMs: +(performance.now() - tBeforeIO).toFixed(1),
-                pickerHit: !!hitModelId,
                 hit: result ? { itemId: result.itemId, localId: result.localId } : null,
               });
-            }
-            if (fastPickerRef.current && !hitModelId && !result) {
-              const state = useStore.getState();
-              if (!event.shiftKey && state.selectedElementId !== null) {
-                state.selectElement(null);
-                rebuildSchedulerRef.current?.cancel();
-                void rebuildNativeHighlightsRef.current?.();
-              }
-              return;
             }
             // Pick-plane mode: next click on a model surface creates a clip
             // plane at the hit point, aligned to the dominant face-normal axis.
@@ -4546,6 +4814,13 @@ export default function ViewerPanel({
                 selectedIds: stateBeforeSelect.selectedIds,
                 shiftKey: event.shiftKey,
               })) {
+                // A same-id click is a cheap visual repair opportunity after
+                // a streamed tile swap or structural edit. Force a full
+                // repaint instead of assuming the cached snapshot is visible.
+                nativeHighlightSnapshotRef.current = null;
+                pendingClickStartRef.current = tClickStart;
+                rebuildSchedulerRef.current?.cancel();
+                void rebuildNativeHighlightsRef.current?.();
                 if (event.detail >= 2) {
                   stateBeforeSelect.zoomToElement(productId);
                 }
@@ -4571,6 +4846,7 @@ export default function ViewerPanel({
                 }
               }
               // Start highlight rebuild in the same task as the click.
+              pendingClickStartRef.current = tClickStart;
               rebuildSchedulerRef.current?.cancel();
               void rebuildNativeHighlightsRef.current?.();
 
@@ -4587,10 +4863,10 @@ export default function ViewerPanel({
                   summary: activitySummary,
                 });
               }, 0);
-
-              // Stop the click-to-highlight timer after the highlight flush completes.
-              pendingClickStartRef.current = tClickStart;
-            } else if (!event.shiftKey) {
+            } else if (
+              !event.shiftKey
+              && isConfirmedVoidPick({ exactHit: false, error: pickError })
+            ) {
               // Click on empty scene clears selection (but Shift+click on void is a no-op)
               useStore.getState().selectElement(null);
               rebuildSchedulerRef.current?.cancel();
@@ -4694,41 +4970,8 @@ export default function ViewerPanel({
           // the highlight back to a stale element.
           const myGen = hoverGenRef.current;
 
-          const pickerPoint = clientPointToNdc(pt, canvas);
           const mouse2 = new THREE.Vector2(pt.x, pt.y);
           try {
-            // Fast miss-guard: GPU color-coded pass (O(1)). Avoids raycast on void.
-            const fastPicker = fastPickerRef.current;
-            if (fastPicker) {
-              const hitModelId = await queryFastPicker(fastPicker, pickerPoint);
-              if (myGen !== hoverGenRef.current) return;
-              if (!hitModelId) {
-                const prevHoverLocal = hoveredLocalIdRef.current;
-                const prevHoverExpress = hoveredExpressIdRef.current;
-                if (prevHoverLocal !== null) {
-                  hoveredLocalIdRef.current = null;
-                  hoveredExpressIdRef.current = null;
-                  const st = useStore.getState();
-                  if (!isExpressIdSelected(prevHoverExpress, st.selectedElementId, st.selectedIds)) {
-                    model.resetHighlight([prevHoverLocal]).catch(() => {});
-                  }
-                  // Schedule a render so the un-highlight
-                  // is visible on the next frame instead of waiting for the
-                  // next orbit tick. update(true) is required - highlight
-                  // resets don't change LOD-tile structure, so update(false)
-                  // is a no-op for the render flush.
-                  fragmentUpdateScheduler?.request({
-                    priority: 'visual',
-                    force: true,
-                    reason: 'hover-highlight',
-                  });
-                }
-                clearHoverTooltip();
-                if (ctrl && measuring) ctrl.handleMove(null);
-                return;
-              }
-            }
-
             const cam = world.camera.three as THREE.PerspectiveCamera | THREE.OrthographicCamera;
             const result = await model.raycast({ camera: cam, mouse: mouse2, dom: canvas });
             // Stale: a newer pointermove fired while we were awaiting.
@@ -4796,9 +5039,11 @@ export default function ViewerPanel({
               // ~10 ms of stall per pointermove tick. The render kick at
               // the bottom is also fire-and-forget.
               if (decision.toReset !== null) {
-                if (!isExpressIdSelected(prevHoverExpress, st.selectedElementId, st.selectedIds)) {
-                  model.resetHighlight([decision.toReset]).catch(() => {});
-                }
+                void restoreDurableHighlight(
+                  model,
+                  decision.toReset,
+                  prevHoverExpress,
+                ).catch(() => {});
               }
               if (decision.toHighlight !== null) {
                 model.highlight([decision.toHighlight], HOVER_HIGHLIGHT_MATERIAL).catch(() => {});
@@ -4832,6 +5077,11 @@ export default function ViewerPanel({
           // BEFORE any policy short-circuit below.
           lastPointerClientX = event.clientX;
           lastPointerClientY = event.clientY;
+          // Wall preview shares this single pointer hub. Ignore button drags
+          // so orbit/pan never churns editor geometry or React state.
+          if (event.buttons === 0) {
+            wallDrawControllerRef.current?.handlePointerMove(event.clientX, event.clientY);
+          }
           // Feed the shared move-preview as long as either consumer is
           // interested (measurement mode on OR hover highlight enabled).
           const ctrl = measurementControllerRef.current;
@@ -4884,10 +5134,7 @@ export default function ViewerPanel({
           hoveredLocalIdRef.current = null;
           hoveredExpressIdRef.current = null;
           try {
-            const st = useStore.getState();
-            if (!isExpressIdSelected(prevHoverExpress, st.selectedElementId, st.selectedIds)) {
-              await model.resetHighlight([prevHoverLocal]);
-            }
+            await restoreDurableHighlight(model, prevHoverLocal, prevHoverExpress);
             // Forced update: highlight reset doesn't change LOD-tile
             // structure, so update(false) would skip the render flush.
             fragmentUpdateScheduler?.request({
@@ -4922,27 +5169,14 @@ export default function ViewerPanel({
             return;
           }
 
-          const pointerPoint = { x: event.clientX, y: event.clientY };
-          const pickerPoint = clientPointToNdc(pointerPoint, canvas);
-          const mouseVec = new THREE.Vector2(event.clientX, event.clientY);
           let expressId: number | null = null;
           let ifcType: string | null = null;
           try {
-            // Fast miss-guard for context menu: skip raycast when cursor is over void.
-            const fastPicker = fastPickerRef.current;
-            if (fastPicker) {
-              const hitModelId = await queryFastPicker(fastPicker, pickerPoint);
-              if (!hitModelId) {
-                setContextMenuStateRef.current({ x: event.clientX, y: event.clientY, expressId: null, ifcType: null });
-                return;
-              }
-            }
-
-            const camera = world.camera.three as
-              | THREE.PerspectiveCamera
-              | THREE.OrthographicCamera;
-            const raycastData: FRAGS.RaycastData = { camera, mouse: mouseVec, dom: canvas };
-            const result = await model.raycast(raycastData);
+            const { result, error } = await pickElementAt({
+              x: event.clientX,
+              y: event.clientY,
+            });
+            if (error) throw error;
             if (result) {
               // Normalize representation/geometry-item hits to the owning
               // IfcProduct so the context menu acts on the same element the
@@ -4997,7 +5231,10 @@ export default function ViewerPanel({
           requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
         );
         // Signal readiness after the first frames paint; fade the overlay independently.
-        window.clearTimeout(globalSlowTimer);
+        if (globalSlowTimer !== null) {
+          window.clearTimeout(globalSlowTimer);
+          globalSlowTimer = null;
+        }
         setLoadingSlow(false);
         setLoadingFading(true);
         setViewerReady(true);
@@ -5064,7 +5301,10 @@ export default function ViewerPanel({
         // Kick off performance sampling loop (FPS, memory, draw calls)
         startPerfSampling();
       } catch (err: any) {
-        window.clearTimeout(globalSlowTimer);
+        if (globalSlowTimer !== null) {
+          window.clearTimeout(globalSlowTimer);
+          globalSlowTimer = null;
+        }
         if (!disposed) {
           // Surface the full stack so we can tell whether the error is
           // coming from the live IFC parse, cached-fragment inflate, post-
@@ -5174,6 +5414,14 @@ export default function ViewerPanel({
 
     return () => {
       disposed = true;
+      if (exactPickLeaseRef.current === exactPickLease) {
+        exactPickLeaseRef.current = null;
+      }
+      renderKickRef.current = null;
+      if (globalSlowTimer !== null) {
+        window.clearTimeout(globalSlowTimer);
+        globalSlowTimer = null;
+      }
       // Abort any in-flight native geometry request and dispose preview meshes.
       nativePreviewAbort.abort();
       if (nativePreview) {
@@ -5216,15 +5464,14 @@ export default function ViewerPanel({
         elementFrustumCullerRef.current = null;
       }
       useStore.getState().updatePerfMetrics({ culledStoreys: 0, culledElements: 0 });
-      // FastModelPicker is disposed by components.dispose(); just clear the ref.
-      fastPickerRef.current = null;
       // Reset clip edges before the model is torn down so stale ClipEdges
       // instances don't reference a disposed model on the next load.
       clipEdgesServiceRef.current?.reset();
       // Dispose furnishing merge before tearing down the model
-      if (furnishingMergeRef.current) {
-        void furnishingMergeRef.current.dispose().catch(() => {});
-        furnishingMergeRef.current = null;
+      if (furnishingMergeLifecycleRef.current) {
+        const lifecycle = furnishingMergeLifecycleRef.current;
+        furnishingMergeLifecycleRef.current = null;
+        void lifecycle.shutdown().catch(() => {});
       }
       useStore.getState().setFurnishingMerged(false);
       // Dispose storey[0] preview sub-model if component unmounts mid-stream.
@@ -5245,7 +5492,14 @@ export default function ViewerPanel({
       sceneThemeTargetsRef.current = null;
       useStore.getState().setModelHalfExtents(null);
     };
-  }, [computeFitDistance, applyTheme, updateLoadProgress, applyGhostPostproduction]);
+  }, [
+    computeFitDistance,
+    applyTheme,
+    updateLoadProgress,
+    applyGhostPostproduction,
+    restoreDurableHighlight,
+    requestViewerRender,
+  ]);
 
   // Toggle EdgeDetectionPass.xray on PostproductionRenderer for true ghost
   // edges. Fragment visibility/opacity is owned by the coalesced visibility
@@ -5461,14 +5715,9 @@ export default function ViewerPanel({
       if (prevLocal == null) return;
       treeHoverPaintedLocalRef.current = null;
       treeHoverStateRef.current = onTreeHoverPainted(treeHoverStateRef.current, null);
-      const st = useStore.getState();
-      if (!shouldSkipResetForSelection(prevExpress, st.selectedElementId, st.selectedIds)) {
-        await model.resetHighlight([prevLocal]).catch(() => {});
-        // resetHighlight alone doesn't dirty LOD tiles under the manual-render
-        // renderer, so kick one coalesced frame - otherwise the un-paint may
-        // linger until the next camera/visibility event (Appendix B picking #6).
-        requestFragmentUpdate('hover-highlight');
-      }
+      await restoreDurableHighlight(model, prevLocal, prevExpress).catch(() => {});
+      // Highlight changes don't dirty LOD tiles under the manual renderer.
+      requestFragmentUpdate('hover-highlight');
       return;
     }
 
@@ -5496,7 +5745,8 @@ export default function ViewerPanel({
       const st = useStore.getState();
       if (shouldSkipResetForSelection(expressId, st.selectedElementId, st.selectedIds)) {
         if (prevLocal != null && !shouldSkipResetForSelection(prevExpress, st.selectedElementId, st.selectedIds)) {
-          await model.resetHighlight([prevLocal]).catch(() => {});
+          await restoreDurableHighlight(model, prevLocal, prevExpress).catch(() => {});
+          requestFragmentUpdate('hover-highlight');
         }
         treeHoverPaintedLocalRef.current = null;
         treeHoverStateRef.current = onTreeHoverPainted(treeHoverStateRef.current, null);
@@ -5505,9 +5755,7 @@ export default function ViewerPanel({
       if (prevLocal === localId) return;  // already painted; nothing to do
 
       if (prevLocal != null) {
-        if (!shouldSkipResetForSelection(prevExpress, st.selectedElementId, st.selectedIds)) {
-          await model.resetHighlight([prevLocal]).catch(() => {});
-        }
+        await restoreDurableHighlight(model, prevLocal, prevExpress).catch(() => {});
       }
 
       if (isResolutionStale(treeHoverStateRef.current, myGen)) return;
@@ -5519,10 +5767,11 @@ export default function ViewerPanel({
       // #2). HOVER_HIGHLIGHT_MATERIAL already encodes the same amber / 0.45 /
       // transparent / RenderedFaces.ONE the canvas hover path uses.
       model.highlight([localId], HOVER_HIGHLIGHT_MATERIAL).catch(() => {});
+      requestFragmentUpdate('hover-highlight');
     } catch {
       // Resolution failure is non-fatal - just leave the previous paint alone.
     }
-  }, [expressToLocalIds, requestFragmentUpdate]);
+  }, [expressToLocalIds, requestFragmentUpdate, restoreDurableHighlight]);
 
   useEffect(() => {
     if (!viewerReady) return;
@@ -5531,13 +5780,18 @@ export default function ViewerPanel({
       useStore.getState().setTreeHoverPreviewFn(null);
       // Clear any leftover paint on unmount / model swap.
       const prevLocal = treeHoverPaintedLocalRef.current;
+      const prevExpress = treeHoverStateRef.current.paintedId;
       treeHoverPaintedLocalRef.current = null;
       treeHoverStateRef.current = INITIAL_TREE_HOVER_STATE;
       if (prevLocal != null && viewerRef.current) {
-        viewerRef.current.model.resetHighlight([prevLocal]).catch(() => {});
+        void restoreDurableHighlight(
+          viewerRef.current.model,
+          prevLocal,
+          prevExpress,
+        ).catch(() => {});
       }
     };
-  }, [viewerReady, treeHoverPreview]);
+  }, [viewerReady, treeHoverPreview, restoreDurableHighlight]);
 
   // Keyboard zoom: + / = zoom in, - zoom out, 0 fit to model.
   // Only fires when no text input is focused (avoids hijacking form fields).

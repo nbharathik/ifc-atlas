@@ -1196,12 +1196,25 @@ export const useStore = create<AppState>()(
       }, durationMs);
     },
     toggleSelectId: (id) => set((s) => {
-      const has = s.selectedIds.includes(id);
+      // A normal click stores its selection only in selectedElementId. When
+      // Shift-click starts a multi-selection, carry that primary selection
+      // into the set before toggling the newly-clicked id.
+      const current = s.selectedIds.length > 0
+        ? s.selectedIds
+        : s.selectedElementId !== null
+        ? [s.selectedElementId]
+        : [];
+      const has = current.includes(id);
       const next = has
-        ? s.selectedIds.filter((x) => x !== id)
-        : [...s.selectedIds, id];
-      // Keep selectedElementId in sync with the last-toggled id
-      return { selectedIds: next, selectedElementId: next.length > 0 ? next[next.length - 1] : s.selectedElementId };
+        ? current.filter((x) => x !== id)
+        : [...current, id];
+      // Keep selectedElementId in sync with the remaining set. Clearing the
+      // final id must also clear the primary selection; otherwise the amber
+      // highlight immediately reappears through the single-selection fallback.
+      return {
+        selectedIds: next,
+        selectedElementId: next.length > 0 ? next[next.length - 1] : null,
+      };
     }),
     clearSelectedIds: () => set({ selectedIds: [] }),
     setSelectedIds: (ids) => set((s) => {

@@ -11566,13 +11566,21 @@ html[data-theme="light"] .stats-type-row:hover { background: #f3f4f6; }
 html[data-theme="light"] .stats-type-row.active { background: rgba(37, 99, 235, 0.06); }
 
 /* ==========================================================================
-   Demo-mode banner - visible only on the GH-Pages
-   viewer-only build (`VITE_PUBLIC_DEMO=true`). Sits above the menubar;
-   `:has()` extends the app-shell grid to make room for it without
-   touching layout when the banner isn't rendered.
+   Optional shell banners. Each rendered banner needs its own intrinsic row;
+   otherwise auto-placement pushes the workspace into the fixed status row.
+   The combined selector keeps the layout correct if both banners are ever
+   enabled together.
    ========================================================================== */
+.app-shell:has(> .edit-scope-banner) {
+  grid-template-rows: var(--h-menubar) var(--h-topbar) auto minmax(0, 1fr) var(--h-status);
+}
+
 .app-shell:has(> .demo-mode-banner) {
-  grid-template-rows: auto var(--h-menubar) var(--h-topbar) 1fr var(--h-status);
+  grid-template-rows: auto var(--h-menubar) var(--h-topbar) minmax(0, 1fr) var(--h-status);
+}
+
+.app-shell:has(> .demo-mode-banner):has(> .edit-scope-banner) {
+  grid-template-rows: auto var(--h-menubar) var(--h-topbar) auto minmax(0, 1fr) var(--h-status);
 }
 
 .demo-mode-banner {

@@ -40,7 +40,11 @@ import {
   resetHistory,
   type SelectionHistoryState,
 } from '../services/viewer/selectionHistoryHelpers';
-import type { SectionWorkspaceDefinition } from '../services/viewer/sectionWorkspace';
+import {
+  reconcileWorkspaceClipPlanes,
+  type RelativeClipPlaneState,
+  type SectionWorkspaceDefinition,
+} from '../services/viewer/sectionWorkspace';
 
 /**
  * Snapshot of AI backend warm-up state held in the store.
@@ -262,7 +266,18 @@ export interface ClipPlaneState {
   axis: ClipAxis;
   offset: number;
   inverted: boolean;
+  /** Workspace plane id when this plane is owned by the active section
+   * workspace. Reconciliation may update/remove such planes; planes without
+   * it are user-created and are never touched by workspace application. */
+  workspacePlaneId?: string;
 }
+
+/** A persisted viewpoint. Section fields are optional so viewpoints saved
+ * before the section workspace existed restore exactly as before. */
+export type SavedViewpoint = Viewpoint & {
+  sectionWorkspace?: SectionWorkspaceDefinition | null;
+  sectionBoxEnabled?: boolean;
+};
 
 /** Maximum number of simultaneous clip planes. */
 export const MAX_CLIP_PLANES = 3;
@@ -338,7 +353,7 @@ interface AppState {
   leftActivePane: LeftPane;               // which pane (tree/search) is expanded; null = icon rail only
 
   // Viewpoints (saved camera + visibility state) for current project
-  viewpoints: Viewpoint[];
+  viewpoints: SavedViewpoint[];
 
   // Chat
   chatMessages: ChatMessage[];
@@ -668,7 +683,7 @@ interface AppState {
 
   // Viewpoints actions
   loadViewpointsForProject: (projectKey: string) => void;
-  saveViewpoint: (vp: Viewpoint) => void;
+  saveViewpoint: (vp: SavedViewpoint) => void;
   deleteViewpoint: (id: string) => void;
   renameViewpoint: (id: string, name: string) => void;
   /** Appends a chat message; the store mints a stable `id` so callers
@@ -775,6 +790,9 @@ interface AppState {
   addClipPlane: () => void;
   /** Add a clip plane positioned at a specific axis + offset (from surface pick). */
   addClipPlaneAt: (axis: ClipAxis, offset: number) => void;
+  /** Reconcile workspace-owned clip planes with the active section workspace
+   *  definition. User-created planes are never modified or removed. */
+  applyWorkspaceClipPlanes: (desired: readonly RelativeClipPlaneState[]) => void;
   /** Enter / exit pick-plane mode. In pick mode the next click on the model
    *  surface places a clip plane at the hit point. */
   setPickPlaneMode: (enabled: boolean) => void;
@@ -937,7 +955,7 @@ function writePref(key: string, value: unknown) {
 
 const VIEWPOINTS_STORAGE_KEY = 'pref.viewpoints.v1';
 
-function readAllViewpoints(): Record<string, Viewpoint[]> {
+function readAllViewpoints(): Record<string, SavedViewpoint[]> {
   try {
     const raw = localStorage.getItem(VIEWPOINTS_STORAGE_KEY);
     if (!raw) return {};
@@ -948,13 +966,13 @@ function readAllViewpoints(): Record<string, Viewpoint[]> {
   }
 }
 
-function writeAllViewpoints(all: Record<string, Viewpoint[]>) {
+function writeAllViewpoints(all: Record<string, SavedViewpoint[]>) {
   try {
     localStorage.setItem(VIEWPOINTS_STORAGE_KEY, JSON.stringify(all));
   } catch {
     // Likely quota exceeded -- try dropping thumbnails to save space
     try {
-      const lite: Record<string, Viewpoint[]> = {};
+      const lite: Record<string, SavedViewpoint[]> = {};
       for (const [k, arr] of Object.entries(all)) {
         lite[k] = arr.map((v) => ({ ...v, thumbnail: null }));
       }
@@ -965,7 +983,7 @@ function writeAllViewpoints(all: Record<string, Viewpoint[]>) {
   }
 }
 
-function persistProjectViewpoints(projectKey: string, list: Viewpoint[]) {
+function persistProjectViewpoints(projectKey: string, list: SavedViewpoint[]) {
   const all = readAllViewpoints();
   if (list.length === 0) {
     delete all[projectKey];
@@ -1011,7 +1029,7 @@ const initialState = {
   leftSidebarOpen: readPref<boolean>('pref.leftSidebarOpen', true),
   leftActivePane: readPref<LeftPane>('pref.leftActivePane', 'tree'),
 
-  viewpoints: [] as Viewpoint[],
+  viewpoints: [] as SavedViewpoint[],
   chatMessages: [] as ChatMessage[],
   chatLoading: false,
   chatProvider: readPref<string>('pref.chatProvider', 'openai'),
@@ -1793,6 +1811,12 @@ export const useStore = create<AppState>()(
       writePref('pref.clipPlanes.v2', next);
       return { clipPlanes: next, pickPlaneMode: false };
     }),
+    applyWorkspaceClipPlanes: (desired) => set((s) => {
+      const { planes, changed } = reconcileWorkspaceClipPlanes(s.clipPlanes, desired, MAX_CLIP_PLANES);
+      if (!changed) return {};
+      writePref('pref.clipPlanes.v2', planes);
+      return { clipPlanes: planes };
+    }),
     setPickPlaneMode: (enabled) => set({ pickPlaneMode: enabled }),
     removeClipPlane: (id) => set((s) => {
       const next = s.clipPlanes.filter(p => p.id !== id);
@@ -1984,7 +2008,7 @@ export const useStore = create<AppState>()(
       // reopening a project doesn't leave clicks hijacked by a stale tool.
       measurement: { ...s.measurement, mode: 'off' as MeasurementMode },
       // Always reset to an empty viewpoints list; the next project load will repopulate
-      viewpoints: [] as Viewpoint[],
+      viewpoints: [] as SavedViewpoint[],
     })),
   })),
 );

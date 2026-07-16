@@ -1,8 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import * as FRAGS from '@thatopen/fragments';
 
 import { _internal } from '../src/converter.js';
+import type { ParseProfile } from '../src/profiles.js';
 
 function comparableState(importer: FRAGS.IfcImporter) {
   return {
@@ -95,5 +97,45 @@ describe('converter importer state transaction', () => {
     assert.equal(importer.webIfcSettings.TAPE_SIZE, undefined);
     assert.equal(importer.webIfcSettings.BOOLEAN_UNION_THRESHOLD, undefined);
     assert.deepEqual(comparableState(importer).geometryProcessSettings, baselineGeometry);
+  });
+
+  // Release gate: simultaneous quality and ultra_fast conversions must be
+  // deterministic and independent of request ordering. The full conversion is
+  // configure -> process -> restore on one shared importer; process() only
+  // reads importer state, so proving the configured state each profile sees is
+  // byte-identical across orderings proves the deterministic core without
+  // paying for full-model conversions.
+  it('captures byte-identical per-profile state regardless of request ordering', async () => {
+    const importer = new FRAGS.IfcImporter();
+    const runSerial = _internal.createSerialExecutor();
+
+    const configureAndCapture = (profile: ParseProfile) =>
+      runSerial(async () => {
+        const saved = _internal.snapshotImporterState(importer);
+        try {
+          _internal.applyImporterProfile(importer, profile);
+          // Yield while holding the executor slot; a broken executor would let
+          // the concurrently enqueued profile clobber the state captured next.
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          return createHash('sha256')
+            .update(JSON.stringify(comparableState(importer)))
+            .digest('hex');
+        } finally {
+          _internal.restoreImporterState(importer, saved);
+        }
+      });
+
+    const [qualityFirst, ultraSecond] = await Promise.all([
+      configureAndCapture('quality'),
+      configureAndCapture('ultra_fast'),
+    ]);
+    const [ultraFirst, qualitySecond] = await Promise.all([
+      configureAndCapture('ultra_fast'),
+      configureAndCapture('quality'),
+    ]);
+
+    assert.equal(qualityFirst, qualitySecond);
+    assert.equal(ultraFirst, ultraSecond);
+    assert.notEqual(qualityFirst, ultraFirst);
   });
 });

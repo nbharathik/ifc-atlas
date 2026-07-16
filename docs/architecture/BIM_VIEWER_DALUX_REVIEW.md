@@ -1,6 +1,6 @@
 # BIM viewer architecture and Dalux benchmark
 
-**Review date:** 14 July 2026  
+**Review date:** 14 July 2026
 **Phase 1 implementation update:** 15 July 2026
 **Phase 3 implementation checkpoint:** 15 July 2026
 **Scope:** IFC Atlas `ifc-editor` branch at `cec7edc`, the public Dalux BIM
@@ -358,8 +358,8 @@ the rendered scene briefly or permanently reflected stale state.
 This directly explains intermittent disappear/reappear behavior and ghost
 opacity that does not match the latest UI. The review's first code change adds
 a latest-state, single-flight scheduler to these two paths. It prevents overlap
-inside each path and discards intermediate snapshots. Remaining writers—user
-visibility versus culling, highlight composition, LOD, and furnishing state—
+inside each path and discards intermediate snapshots. Remaining writers - user
+visibility versus culling, highlight composition, LOD, and furnishing state -
 still need the shared coordinator described below.
 
 ### 2. Highlight rebuilds use a reset-first operation
@@ -389,17 +389,20 @@ resident geometry, and a sudden full-detail cost when a user interacts. It is
 better than deleting the model, but it cannot provide stable per-element
 appearance. Keep it experimental until spatial-tile LOD replaces it.
 
-There is a second, separate LOD path inside `@thatopen/fragments`.
-Medium/large models retain `LodMode.DEFAULT`, whose worker classifies objects
-from screen coverage and can degrade small/far objects to wire bounds or cull
-them. Tiny models use `ALL_VISIBLE`. IFC Atlas now pins medium/large runtime
-graphics quality to its idle value because a measured navigation-time quality
-drop widened the cull bands without improving FPS, but the default coverage
-classifier still changes representation as camera distance and projected size
-change. It does not destroy the source geometry, yet it can look like objects
-vanishing. Selected, measured, issue-linked, or explicitly forced-visible
-objects should be exempt from coverage culling, and thresholds need hysteresis
-and a visible diagnostic in performance mode.
+There is a second, separate LOD path inside `@thatopen/fragments`: the
+worker's `LodMode.DEFAULT` screen-coverage classifier can degrade small/far
+objects to wire bounds or cull them as the camera moves, which reads as
+objects popping in and out with distance. Since 16 July 2026 small AND medium
+models (below 20,000 elements) pin `ALL_VISIBLE`, so every element stays
+resident and drawable at any camera distance or angle; the measured
+navigation-time benefit of the classifier on this model class was within
+noise while its visual instability was the single most reported viewer
+complaint. Large models keep `DEFAULT` with graphics quality pinned to its
+idle value (a navigation-time drop widened the cull bands without improving
+FPS) until per-tile error-bounded LOD replaces the classifier; there,
+selected, measured, issue-linked, or explicitly forced-visible objects should
+be exempt from coverage culling, and thresholds need hysteresis and a visible
+diagnostic in performance mode.
 
 ### 4. Optional furnishing merge creates an interactive replacement gap
 
@@ -601,7 +604,7 @@ tile's semantic IDs and appearance masks do not change between LODs.
 
 Frustum culling belongs at tile/batch/instance level. Hardware occlusion
 queries or hierarchical-Z culling are later optimizations and should be added
-only when measurements show overdraw—not as a substitute for batching and
+only when measurements show overdraw - not as a substitute for batching and
 spatial LOD.
 
 ## BIM interaction priorities
@@ -661,8 +664,8 @@ The current three-column shell is a strong starting point, but actions are
 duplicated across the top bar, viewer tools, floating measurement UI, bottom
 navigation, context menu, status bar, and command palette. Independent overlays
 can collide. The fixed 244 px left and 288 px right columns have weak narrow-
-screen behavior. Some state is duplicated—for example, storey UI state can
-drift from isolation state—and filter, AI, classification, and search results
+screen behavior. Some state is duplicated - for example, storey UI state can
+drift from isolation state - and filter, AI, classification, and search results
 share one highlight set.
 
 ### Proposed BIM workbench
@@ -696,7 +699,7 @@ Design rules:
   section count, model/discipline scope, and offline/cache state. Each chip has
   a clear action.
 - **Selection is contextual.** Frame, hide, isolate, ghost others, measure,
-  section-to, add issue, and explain properties appear beside selection—not in
+  section-to, add issue, and explain properties appear beside selection - not in
   several permanent toolbars.
 - **Touch is designed, not scaled.** Use 44 px targets, long-press context,
   bottom sheets for properties/actions, and a default location/split workflow.
@@ -714,8 +717,8 @@ Design rules:
    currently advertises fewer modes than the floating measurement toolbar.
 4. Add retry, open-another-model, and copy-diagnostics actions to load errors.
    A renderer error boundary must not silently leave a blank center.
-5. Use one load state machine—reading, hashing, upload, preprocessing,
-   downloading, GPU upload, ready—across overlay and status bar.
+5. Use one load state machine - reading, hashing, upload, preprocessing,
+   downloading, GPU upload, ready - across overlay and status bar.
 6. Consolidate shortcut definitions into one command registry that generates
    handlers, menus, palette entries, tooltips, and help documentation.
 7. Preserve local tree/search/filter scroll and expansion state when switching
@@ -788,7 +791,7 @@ Effort uses **S** (days), **M** (one to three focused iterations), **L**
 “Now” means the next stabilization releases; “Later” means after its named
 dependencies; “No” means do not pursue under the current product goals.
 
-### Phase 1 — rendering stability and critical performance
+### Phase 1 - rendering stability and critical performance
 
 | Change | Problem and main use case | Expected benefit | Recommended implementation and architecture | Effort | Risks, trade-offs, dependencies | Required tests | Decision |
 |---|---|---|---|---|---|---|---|
@@ -800,7 +803,7 @@ dependencies; “No” means do not pursue under the current product goals.
 | Renderer-level regression/performance corpus | 1,900+ unit tests do not prove WebGL appearance or FPS | Prevents recurring flicker, memory, and latency regressions | Add Playwright/WebGL harness with IFC2X3, IFC4, repeated-object, georeferenced, MEP-heavy, and federated fixtures; capture hardware/browser metadata and frame percentiles | M | Public fixtures/licensing and CI GPU variance; use relative plus hardware-qualified budgets | See full test matrix below | **Harness and BasicHouse correctness gate pass; broader hardware/fixture baselines remain** |
 | Split `ViewerPanel` by lifecycle ownership | One 7,100-line component makes ordering and resource ownership hard to verify | Maintainability, smaller subscriptions, safer cleanup | Extract model/load session, render state, picking, navigation, measurement, and HUD controllers behind typed interfaces; no behavior redesign during extraction | L | Mechanical refactor can hide regressions without E2E first | Lifecycle mount/unmount, repeated load, all shortcuts/tools smoke suite | **Now after initial E2E harness** |
 
-### Phase 2 — geometry preprocessing, spatial data, and LOD
+### Phase 2 - geometry preprocessing, spatial data, and LOD
 
 | Change | Problem and main use case | Expected benefit | Recommended implementation and architecture | Effort | Risks, trade-offs, dependencies | Required tests | Decision |
 |---|---|---|---|---|---|---|---|
@@ -812,7 +815,7 @@ dependencies; “No” means do not pursue under the current product goals.
 | Genuine invalidation rendering | Continuous and helper passes consume power while view is static | Lower idle CPU/GPU, better laptop/mobile thermals | Schedule frames only for motion, streaming, animation, overlays, state application, or diagnostics; park all rAF loops; make log depth/AA profile- and model-dependent | M | CSS2D labels and controls must explicitly invalidate; diagnostics sampling changes | Zero/near-zero idle frames, wake-on-every-event, label correctness, battery/power observation | **Parkable invalidation loop implemented behind release flag; renderer qualification remains** |
 | Lower-copy desktop load path | Tauri IPC/web upload duplicates large IFC buffers | Lower peak memory and faster local open | Pass a validated local path/capability token to backend, stream/hash file there, and return artifact progress; web path remains upload-based | M | Path security and lifetime; desktop/web behavior must converge | 1-5 GB local file peak RSS, path traversal/security, cancel/reopen | **Now for desktop large-model support** |
 
-#### Phase 2 implementation checkpoint — 15 July 2026
+#### Phase 2 implementation checkpoint - 15 July 2026
 
 The first Phase 2 slice is implemented end to end without making simplified
 geometry eligible for exact selection:
@@ -868,7 +871,7 @@ tile artifacts; and qualify spatial culling plus on-demand rendering on the
 hardware renderer corpus. Centroid ownership also requires neighbour prefetch
 and hysteresis for geometry crossing tile boundaries.
 
-### Phase 3 — core BIM interaction tools
+### Phase 3 - core BIM interaction tools
 
 | Change | Problem and main use case | Expected benefit | Recommended implementation and architecture | Effort | Risks, trade-offs, dependencies | Required tests | Decision |
 |---|---|---|---|---|---|---|---|
@@ -878,7 +881,7 @@ and hysteresis for geometry crossing tile boundaries.
 | Indexed named filters | Property filter was capped and used transient shared highlight; no reusable predicate object | Fast discovery and durable workflows | Compile typed AND/OR predicates against a revision-aware semantic index; save definitions and scope; actions create their own visibility/appearance layer; revision re-evaluates predicate | L | Missing/heterogeneous IFC properties; backend/frontend index consistency | Numeric/string/null operators, 100k+ results, revision update, independent clear, query explain | **Indexed evaluation, named local definitions, and independent result actions implemented; automatic revision re-evaluation later** |
 | Unified selection/actions | Actions are spread across panels and selection ownership is ambiguous | Faster keyboard/mouse/touch work with persistent state | One selection model keyed by model+element; contextual action bar/menu; add/remove/range/set selection; history; saved sets; frame/hide/isolate/issue/measure commands share registry | M | Federated identity dependency for cross-model sets | Multi-select stress, history after hide/filter/reload, keyboard/touch parity | **Now** |
 
-#### Phase 3 implementation checkpoint — 15 July 2026
+#### Phase 3 implementation checkpoint - 15 July 2026
 
 The first Phase 3 slice is integrated around construction inspection without
 expanding the beta structural-editing surface:
@@ -933,7 +936,7 @@ and index semantics, and the exact-hover reuse guard. Hardware renderer and
 large-model latency qualification remain release gates. Structural editing
 continues as beta and is deliberately unchanged by this phase.
 
-### Phase 4 — UI and UX workbench
+### Phase 4 - UI and UX workbench
 
 | Change | Problem and main use case | Expected benefit | Recommended implementation and architecture | Effort | Risks, trade-offs, dependencies | Required tests | Decision |
 |---|---|---|---|---|---|---|---|
@@ -944,7 +947,7 @@ continues as beta and is deliberately unchanged by this phase.
 | Responsive and touch tiers | Fixed sidebars squeeze web/tablet view; small targets | Usable web and future field workflows | Breakpoints with one drawer at a time, bottom-sheet inspector, 44 px coarse-pointer targets, long-press context, gesture help, safe areas | L | Full mobile feature parity is not the goal; WebGL memory varies | Playwright touch profiles, rotation, 400% zoom, keyboard-only and axe | **Later for field tier; compact desktop now** |
 | Command/accessibility consolidation | Shortcut documentation and handlers drift; rows/dialogs lack complete keyboard semantics | Discoverability and WCAG improvement | One command registry generates menus/palette/help; semantic buttons/tree roles; focus management/traps; live toasts; reduced-motion support | M | Large cross-cutting migration | Keyboard-only workflows, axe, focus restoration, shortcut conflict tests | **Now** |
 
-### Phase 5 — advanced viewer workflows
+### Phase 5 - advanced viewer workflows
 
 | Change | Problem and main use case | Expected benefit | Recommended implementation and architecture | Effort | Risks, trade-offs, dependencies | Required tests | Decision |
 |---|---|---|---|---|---|---|---|
@@ -954,7 +957,7 @@ continues as beta and is deliberately unchanged by this phase.
 | Deep BCF/view integration | Current BCF is strong but not a complete contextual review loop | Better interoperable issue review without building a task suite | Serialize complete view state and model references, durable issue layer, viewpoint restore, markup, clash import adapters, assignment/status audit | L | BCF version/vendor variance and remote collaboration identity | BCF round trip with reference tools, missing model, comments/view state | **Now for view fidelity; collaboration later** |
 | Explicit offline package | Cache behavior is implicit and not task-scoped | Predictable site/desktop use without network | Select models/drawings/views to package; show size/version/integrity; pin and evict; queue collaborative mutations for later sync | L | Storage and conflict resolution; only useful with hosted collaboration | Interrupted download, integrity, eviction, stale version, outbox conflict | **Later** |
 
-### Phase 6 — AI-assisted BIM capabilities
+### Phase 6 - AI-assisted BIM capabilities
 
 | Change | Problem and main use case | Expected benefit | Recommended implementation and architecture | Effort | Risks, trade-offs, dependencies | Required tests | Decision |
 |---|---|---|---|---|---|---|---|
@@ -1088,18 +1091,24 @@ triangle/draw-call counts, and cache state.
   (p50 16.6 ms, p95 17.8 ms) with zero context losses. The same run exposed a
   real click-to-highlight failure (~2.1 s), root-caused and fixed the same
   day; see the 16 July checkpoint below.
-- Add the visual-material assertion for simultaneous highlight color and ghost
-  opacity, plus navigation/tile-replacement and WebGL context-restoration
-  replay, using more than one representative IFC fixture.
+- ~~Add the visual-material assertion for simultaneous highlight color and
+  ghost opacity.~~ Done 16 July 2026: the phase 1 spec samples real pixels
+  (selection amber versus ghosted and background points) on both GPU
+  profiles. A WebGL context-restoration replay spec also exists and found
+  that fragment geometry cannot re-upload after a forced loss because the
+  engine frees its CPU-side buffers post-upload; the spec is marked fixme
+  and gates that fix. Additional representative IFC fixtures beyond
+  BasicHouse remain outstanding.
 - Replace whole-model proxy LOD with spatial residency and screen-space-error
   tile LOD. LOD is intentionally not part of the coordinator's stable normal
-  path yet.
+  path yet. Small and medium models now pin ALL_VISIBLE, so distance-based
+  element popping is gone below 20,000 elements.
 - Keep whole-model proxy LOD and dynamic furnishing merge experimental/off by
   default until their real renderer transitions and pick behavior pass.
 - Structural model revision remounting remains beta and outside this viewer-
   first Phase 1 slice, as requested.
 
-## Verification and hardening checkpoint — 16 July 2026
+## Verification and hardening checkpoint - 16 July 2026
 
 A full verification pass (multi-agent audit of every phase claim, adversarial
 verification of each finding, all suites, and real-GPU end-to-end runs)
@@ -1164,6 +1173,40 @@ Verified after the changes: backend 1,662 passed (fast lane), frontend
 typecheck plus 2,728 vitest tests, sidecar 30 node tests plus typecheck,
 strict mkdocs and generated API-doc checks, and the full three-spec Chromium
 renderer suite on both the SwiftShader and Intel Arc hardware profiles.
+
+### Pending-item closure pass (same day, release preparation)
+
+A second pass closed the tractable items from the pending inventory ahead of
+the v1.1 merge:
+
+- Small and medium models (below 20,000 elements) pin `ALL_VISIBLE`: no
+  element appears or disappears with camera distance or angle. Large models
+  keep the coverage classifier until per-tile LOD ships.
+- Superseded and legacy fragment/tile artifacts are garbage-collected on
+  publish; `GET /api/ifc/fragments/storey` prefers the ID-preserving sidecar
+  subset path with parity proofs and falls back to sub-IFC reconstruction.
+- Applied saved filters re-evaluate automatically after a model revision;
+  saved viewpoints round-trip the section workspace; workspace plane
+  definitions (including storey cut-plane presets) apply as real clip planes.
+- The sidecar cancels queued jobs on client disconnect, proves mixed-profile
+  determinism in tests, covers the subset failure path, and drops the stale
+  auto-promotion vocabulary.
+- The harness adds the orbit-stress phase (visibility toggles during a
+  continuous 60 FPS orbit, zero zero-geometry frames), the pixel-level
+  selection-plus-ghost assertion, an opt-in click p95 budget gate, and the
+  context-restore replay spec with its documented engine limitation.
+- Dead pre-coordinator modules (reset-first rebuild scheduler, visibility
+  rebuild helpers, the unmounted storey navigator bar and its helpers) are
+  removed; the That Open logo overlay is disabled in the viewport.
+
+Not in v1.1 and unchanged in status: progressive multi-tile mounting and
+simplified tile payloads, GPU/tile-scoped picking, the ViewerPanel split,
+precomputed batching/instancing, the Phase 4 workbench layout (HUD lanes,
+mode machine, Navigator filters pane, command registry), semantic snap feeds,
+georeferenced position frames, object-set clearance, shared/project filters,
+the sidecar worker pool, the lower-copy desktop path, federation, 2D split
+view, and the Phase 6 AI flows. These remain correctly documented as later
+phases above.
 
 ## Recommended delivery order
 

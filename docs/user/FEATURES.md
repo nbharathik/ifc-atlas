@@ -42,7 +42,7 @@ A compact chip at the top-left of the viewport summarises the current selection:
 | **Model Tree** (`T`, left sidebar) | Spatial-tree outliner. Auto-scrolls to the selected element. Type-frequency chips filter the tree to a single IFC type. Hover any row to preview-highlight the geometry (requires hover highlight, off by default). |
 | **Search panel** (`/` or `Ctrl/Cmd+F`, left sidebar) | Multi-field query syntax: bare words fuzzy-match name, IFC class, type, and GlobalId (every word must match), plus `type:IfcWall`, `storey:"Ground Floor"`, `pset:Pset_WallCommon.IsExternal=true` (or `pset:FireRating` for a presence check), and `class:Uniclass` for classification codes. Results are grouped by IFC class; rows offer zoom and isolate actions plus a one-click **Isolate all**. Property and classification filters use an index built on demand, with progress shown while it builds. |
 | **IDS validation panel** (Panels → IDS validation) | Drag buildingSMART `.ids` specification files into a saved library and validate the loaded model against them. Per-spec pass / fail cards list the failing elements: click one to select it, or highlight / isolate every failure at once. Failures export as CSV, and the last run is restored when you reopen the panel with the same model. |
-| **BIM Filter panel** (`Shift+F`, Inspector → Tools → Element filter) | Combine up to 20 property conditions with AND/OR and operators for equality, text, numeric comparison, exists, or missing. Limit the full expression by IFC types, storeys, or property sets; save named definitions in this browser. Results show an exact count and preview, own an independent colour layer, and offer Paint, Isolate, Hide, Frame, Show all, and Clear result. Saved definitions are local—not shared—and must be applied again after a model revision. |
+| **BIM Filter panel** (`Shift+F`, Inspector → Tools → Element filter) | Combine up to 20 property conditions with AND/OR and operators for equality, text, numeric comparison, exists, or missing. Limit the full expression by IFC types, storeys, or property sets; save named definitions in this browser. Results show an exact count and preview, own an independent colour layer, and offer Paint, Isolate, Hide, Frame, Show all, and Clear result. Saved definitions are local - not shared. An applied saved definition re-evaluates automatically after a model revision; if the re-run fails, the stale result is cleared and can be applied again manually. |
 | **Classification browser** (`G`, left sidebar) | Lists every `IfcClassification` system. Filter by class code or name; click to highlight all members. |
 | **Model Statistics** (`Shift+S`) | Overlay panel showing element counts by IFC type and by storey. Click any row to isolate those elements. |
 | **Storey controls** (Viewer Tools → Storeys) | Click a storey pill to isolate it; Show all clears storey isolation and Ghost xray keeps the surrounding model as transparent context. |
@@ -103,7 +103,7 @@ not available yet.
 | Shortcut | Action |
 |---|---|
 | `S` | Capture the current view as a PNG. |
-| `V` | Save the current camera as a named viewpoint with a thumbnail. The Viewpoints tab in the right sidebar lists them. |
+| `V` | Save the current camera as a named viewpoint with a thumbnail. Viewpoints also capture the section box workspace and restore it on click. The Viewpoints tab in the right sidebar lists them. |
 | `Shift+L` | Copy a share link that encodes the camera, isolation state, highlights, and active panel into a URL hash. Open it elsewhere to restore the exact view. |
 
 All CSV, Markdown, and PNG exports land in your downloads folder with an ISO timestamp suffix.
@@ -182,25 +182,25 @@ Open Chat Manager → **Documents** (or press `Ctrl+Shift+I`). Drag a PDF, Markd
 
 ---
 
-## Model editing (native IFC — on by default)
+## Model editing (native IFC - on by default)
 
 IFC Atlas edits **native IFC** through one audited operation layer shared by
 the editor UI, the AI assistant, and MCP clients. See the full guide:
 [Editing models](EDITING.md). Set `EDIT_MODE_ENABLED=0` on the backend for a
-read-only deployment (the whole edit surface — UI, AI write tools, MCP direct
-ops — disappears together; the frontend probes the flag at runtime).
+read-only deployment (the whole edit surface - UI, AI write tools, MCP direct
+ops - disappears together; the frontend probes the flag at runtime).
 
 | Feature | Description |
 |---|---|
 | **Edit mode** | View/Edit toggle in the top bar. Inline-editable Name, Description, ObjectType, Tag, and existing property values in the Properties panel, with validation and instant refresh. |
-| **Operation layer** | Every mutation — human, AI, or MCP — is a named, validated, actor-attributed, logged, undoable operation over `ifcopenshell.api` (ADR 003). |
-| **Creation ops** | `create_wall` (two-point, storey work plane), `create_slab` (polygon), `create_storey`, `assign_to_storey`, `set_storey_elevation`, `delete_element` — available from the UI, the AI, the REST API, and MCP. |
+| **Operation layer** | Every mutation - human, AI, or MCP - is a named, validated, actor-attributed, logged, undoable operation over `ifcopenshell.api` (ADR 003). |
+| **Creation ops** | `create_wall` (two-point, storey work plane), `create_slab` (polygon), `create_storey`, `assign_to_storey`, `set_storey_elevation`, `delete_element` - available from the UI, the AI, the REST API, and MCP. |
 | **Wall drawing** | In Edit mode, draw walls with two clicks on the storey work plane: live preview line, length label, grid snap, height/thickness/storey controls. |
 | **Undo / redo** | `Ctrl+Z` / `Ctrl+Y` (also status-bar buttons and the Edit menu), backed by the operation log. Creation undo removes the created elements; deletion undo restores an exact pre-delete snapshot (express IDs preserved). |
 | **Save** | File → Save writes edits back to the loaded file with stable IDs; unsaved-changes badge, close guards, and a browser warning protect against data loss. Save-As still downloads a copy. |
-| **AI edits stay previewed** | Every AI write is staged in a sandbox and presented as a before/after diff with **Apply** / **Discard** — plus an automatic **verifier verdict** (model health delta + geometry sanity) so broken proposals are flagged before you apply them. |
+| **AI edits stay previewed** | Every AI write is staged in a sandbox and presented as a before/after diff with **Apply** / **Discard** - plus an automatic **verifier verdict** (model health delta + geometry sanity) so broken proposals are flagged before you apply them. |
 | **Bulk operations** | `rename_elements_batch` and `update_properties_batch` change N elements in one atomic, one-undo step. |
-| **Script sandbox** | In Ask mode, `execute_ifc_query_code` runs read-only IfcOpenShell analyses. In Edit mode, `execute_ifc_code` produces edit-capable diffs that flow through Diff Preview — with docs-grounded codegen (the agent consults `get_docs` before writing `ifcopenshell.api` code). |
+| **Script sandbox** | In Ask mode, `execute_ifc_query_code` runs read-only IfcOpenShell analyses. In Edit mode, `execute_ifc_code` produces edit-capable diffs that flow through Diff Preview - with docs-grounded codegen (the agent consults `get_docs` before writing `ifcopenshell.api` code). |
 | **Timeline** | `Shift+H` opens the Timeline: every operation with its actor (you / AI / MCP) merged with automatic git checkpoints; two-point semantic compare (ifcdiff, including property changes); restore any checkpoint. |
 | **Live sync** | Applied changes broadcast to every open viewer: metadata patches update in place; structural changes trigger a debounced, camera-preserving model refresh. |
 

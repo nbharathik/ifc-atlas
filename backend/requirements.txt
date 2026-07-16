@@ -38,10 +38,10 @@ pypdf>=5,<7
 # BM25+semantic hybrid search, no API key. The imports in
 # document_index_service stay guarded so a stripped env still runs (BM25-only).
 # fastembed downloads a ~25 MB ONNX model (BAAI/bge-small-en-v1.5) on FIRST USE,
-# not at install — see document_index_service for the first-use download.
+# not at install - see document_index_service for the first-use download.
 #
 # Desktop sidecar note (plan D6): the PyInstaller freeze (scripts/build_sidecar.*)
-# must EXCLUDE these — onnxruntime bloats the frozen exe and the desktop build
+# must EXCLUDE these - onnxruntime bloats the frozen exe and the desktop build
 # is fine on BM25-only. Add `--exclude-module fastembed --exclude-module
 # onnxruntime --exclude-module hnswlib` when that workstream lands.
 fastembed>=0.8

@@ -5,7 +5,7 @@ import Icon from '../ui/Icon';
  * Beta warning banner shown while Edit mode is in the **structural** scope.
  *
  * Structural edits (create walls/slabs, delete elements) change geometry and
- * reload the 3D viewer — briefly disruptive. Semantic edits (names, properties)
+ * reload the 3D viewer - briefly disruptive. Semantic edits (names, properties)
  * update in place with no reload. This live banner makes the trade-off explicit
  * so the user knows why the viewer reloads after a geometry edit. See
  * dev/docs/EDIT_SCOPES.md.

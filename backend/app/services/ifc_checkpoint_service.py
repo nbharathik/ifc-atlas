@@ -296,7 +296,7 @@ class IFCCheckpointService:
 
         Called on every model load. Deletes NOTHING: reloading the same file
         rebinds to the same repo, so checkpoints persist across sessions
-        (ADR 004's "git across sessions" — the old behavior rmtree'd the one
+        (ADR 004's "git across sessions" - the old behavior rmtree'd the one
         global repo on every load, destroying all history). Distinct models
         get distinct repos, so histories can't interleave.
         """

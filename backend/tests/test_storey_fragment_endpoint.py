@@ -15,11 +15,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services import spatial_fragment_service
 from app.services.fragment_cache import (
     atomic_write_fragment_cache,
+    full_fragment_cache_entry,
     read_fragment_cache,
     storey_fragment_cache_entry,
+    subset_fragment_cache_entry,
 )
+from app.services.spatial_fragment_service import SpatialSubsetUnavailable
 from app.services.storey_splitter import StoreyFragmentSplitter, StoreyInfo, StoreyManifest
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -536,7 +540,129 @@ def test_storey_fragment_sidecar_writes_cache(tmp_path):
     assert read_fragment_cache(cache_entry) == b"FRAG"
 
 
-# 28. Sidecar called with correct model_id and profile.
+# 28. ID-preserving subset path is preferred when the full fragment is cached
+#     and the sidecar subset succeeds; headers carry the subset source and the
+#     cache key of the filtered element-ID list.
+def test_storey_fragment_prefers_subset_path_when_full_fragment_cached(tmp_path):
+    atomic_write_fragment_cache(
+        full_fragment_cache_entry(tmp_path, _SHA, "balanced"), b"FULL-FRAG"
+    )
+    subset_meta = {
+        "resolvedCount": 3,
+        "identityCount": 3,
+        "identityVerified": True,
+        "contentVerified": True,
+        "identitySha256": "1" * 64,
+        "contentSha256": "2" * 64,
+        "guidRemapCount": 0,
+        "elapsedMs": 5,
+    }
+    subset_sidecar = MagicMock()
+    subset_sidecar.subset = AsyncMock(return_value=(b"SUBSET-FRAG", subset_meta))
+
+    with (
+        patch("app.api.ifc_routes.ifc_service", _loaded_svc()),
+        patch("app.api.ifc_routes.storey_splitter") as mock_spl,
+        patch("app.api.ifc_routes.FRAGMENT_CACHE_DIR", tmp_path),
+        patch.object(spatial_fragment_service, "FRAGMENT_CACHE_DIR", tmp_path),
+        patch.object(spatial_fragment_service, "sidecar_manager", subset_sidecar),
+    ):
+        mock_spl.get_manifest.return_value = _MANIFEST
+        first = _client().get("/api/ifc/fragments/storey", params={"sha": _SHA, "idx": 0})
+        second = _client().get("/api/ifc/fragments/storey", params={"sha": _SHA, "idx": 0})
+
+    assert first.status_code == 200
+    assert first.content == b"SUBSET-FRAG"
+    assert first.headers["X-Fragment-Source"] == "storey-subset-sidecar"
+    assert first.headers["X-Fragment-Source-Sha"] == _SHA
+    assert first.headers["X-Fragment-Storey-Idx"] == "0"
+    assert first.headers["X-Fragment-Storey-Name"] == "Ground Floor"
+    expected_entry = subset_fragment_cache_entry(
+        tmp_path,
+        _SHA,
+        "balanced",
+        subset_kind="storey",
+        subset_id="0",
+        element_ids=[10, 20, 30],
+    )
+    assert first.headers["X-Fragment-Cache-Key"] == expected_entry.key.digest
+    # The verified subset is persisted, so the repeat request is a cache hit.
+    assert second.status_code == 200
+    assert second.headers["X-Fragment-Source"] == "storey-subset-cache"
+    subset_sidecar.subset.assert_awaited_once()
+    # Sub-IFC reconstruction never runs when the subset path succeeds.
+    mock_spl.serialize_storey.assert_not_called()
+
+
+# 29. Mocked subset builder success short-circuits before any sidecar convert.
+def test_storey_fragment_subset_builder_receives_storey_subset_request(tmp_path):
+    builder = AsyncMock(return_value=(b"SUBSET-FRAG", "sidecar"))
+    with (
+        patch("app.api.ifc_routes.ifc_service", _loaded_svc()),
+        patch("app.api.ifc_routes.storey_splitter") as mock_spl,
+        patch("app.api.ifc_routes.sidecar_manager") as mock_sidecar,
+        patch("app.api.ifc_routes.get_or_build_spatial_fragment", builder),
+        patch("app.api.ifc_routes.FRAGMENT_CACHE_DIR", tmp_path),
+    ):
+        mock_spl.get_manifest.return_value = _MANIFEST
+        resp = _client().get("/api/ifc/fragments/storey", params={"sha": _SHA, "idx": 1})
+
+    assert resp.status_code == 200
+    assert resp.headers["X-Fragment-Source"] == "storey-subset-sidecar"
+    assert resp.headers["X-Fragment-Storey-Idx"] == "1"
+    kwargs = builder.await_args.kwargs
+    assert kwargs["fingerprint"] == _SHA
+    assert kwargs["profile"] == "balanced"
+    assert kwargs["subset_kind"] == "storey"
+    assert kwargs["subset_id"] == "1"
+    assert kwargs["element_ids"] == [40, 50]
+    mock_sidecar.convert.assert_not_called()
+    mock_spl.serialize_storey.assert_not_called()
+
+
+# 30. SpatialSubsetUnavailable falls back to sub-IFC reconstruction unchanged.
+def test_storey_fragment_falls_back_when_subset_unavailable(tmp_path):
+    builder = AsyncMock(side_effect=SpatialSubsetUnavailable("full fragment missing"))
+    with (
+        patch("app.api.ifc_routes.ifc_service", _loaded_svc()),
+        patch("app.api.ifc_routes.storey_splitter") as mock_spl,
+        patch("app.api.ifc_routes.sidecar_manager") as mock_sidecar,
+        patch("app.api.ifc_routes.get_or_build_spatial_fragment", builder),
+        patch("app.api.ifc_routes.FRAGMENT_CACHE_DIR", tmp_path),
+    ):
+        mock_spl.get_manifest.return_value = _MANIFEST
+        mock_spl.serialize_storey.return_value = b"RAW_SUB_IFC"
+        mock_sidecar.capabilities = AsyncMock(return_value={"available": False})
+
+        resp = _client().get("/api/ifc/fragments/storey", params={"sha": _SHA, "idx": 0})
+
+    assert resp.status_code == 200
+    assert resp.headers["X-Fragment-Source"] == "sub-ifc"
+    assert resp.content == b"RAW_SUB_IFC"
+    builder.assert_awaited_once()
+
+
+# 31. SpatialSubsetUnavailable still serves the reconstruction disk cache.
+def test_storey_fragment_subset_unavailable_uses_reconstruction_cache(tmp_path):
+    cache_entry = storey_fragment_cache_entry(tmp_path, _SHA, 0)
+    atomic_write_fragment_cache(cache_entry, b"CACHED_FRAG_BYTES")
+    builder = AsyncMock(side_effect=SpatialSubsetUnavailable("full fragment missing"))
+
+    with (
+        patch("app.api.ifc_routes.ifc_service", _loaded_svc()),
+        patch("app.api.ifc_routes.storey_splitter") as mock_spl,
+        patch("app.api.ifc_routes.get_or_build_spatial_fragment", builder),
+        patch("app.api.ifc_routes.FRAGMENT_CACHE_DIR", tmp_path),
+    ):
+        mock_spl.get_manifest.return_value = _MANIFEST
+        resp = _client().get("/api/ifc/fragments/storey", params={"sha": _SHA, "idx": 0})
+
+    assert resp.status_code == 200
+    assert resp.headers["X-Fragment-Source"] == "cache"
+    assert resp.content == b"CACHED_FRAG_BYTES"
+
+
+# 32. Sidecar called with correct model_id and profile.
 def test_storey_fragment_sidecar_called_with_correct_args(tmp_path):
     with (
         patch("app.api.ifc_routes.ifc_service", _loaded_svc()),

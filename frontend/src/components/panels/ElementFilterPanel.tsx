@@ -14,6 +14,7 @@ import {
   type IndexedPropertyFilterResult,
   type PropertyFilterOperator,
 } from '../../services/api';
+import { decideFilterRevisionAction } from '../../services/ifc/filterRevisionReevaluation';
 import {
   NAMED_FILTER_SCHEMA_VERSION,
   NamedElementFilterEngine,
@@ -338,7 +339,12 @@ export function ElementFilterPanel({ embedded = false }: { embedded?: boolean } 
   const inputRef = useRef<HTMLInputElement>(null);
   const requestRef = useRef<AbortController | null>(null);
   const activeLayerRef = useRef<string | null>(null);
-  const resultContractRef = useRef<{ fingerprint: string | null; version: number } | null>(null);
+  const resultContractRef = useRef<{
+    fingerprint: string | null;
+    version: number;
+    definitionId: string | null;
+  } | null>(null);
+  const revisionAttemptRef = useRef<{ fingerprint: string | null; version: number } | null>(null);
 
   useEffect(() => {
     try {
@@ -388,11 +394,12 @@ export function ElementFilterPanel({ embedded = false }: { embedded?: boolean } 
     });
   }, [activeSavedId, clearColourLayer, colour, filterName, setColourLayer]);
 
-  const handleApply = useCallback(async () => {
-    const validationError = validateFilterConditions(conditions);
+  const handleApply = useCallback(async (source?: NamedFilterDraft): Promise<boolean> => {
+    const draft = source ?? { name: filterName, logic, conditions, ifcTypes, storeys };
+    const validationError = validateFilterConditions(draft.conditions);
     if (validationError) {
       setError(validationError);
-      return;
+      return false;
     }
     requestRef.current?.abort();
     const controller = new AbortController();
@@ -402,16 +409,16 @@ export function ElementFilterPanel({ embedded = false }: { embedded?: boolean } 
     setLoading(true);
     try {
       const response = await filterElementsIndexed({
-        name: filterName.trim() || undefined,
-        logic,
-        conditions: conditions.map((condition) => ({
+        name: draft.name.trim() || undefined,
+        logic: draft.logic,
+        conditions: draft.conditions.map((condition) => ({
           property_name: condition.propertyName.trim(),
           operator: condition.operator,
           ...(!isUnaryOperator(condition.operator) ? { value: condition.value.trim() } : {}),
           ...(condition.psetName.trim() ? { pset_name: condition.psetName.trim() } : {}),
         })),
-        ifc_types: splitScopeValues(ifcTypes),
-        storeys: splitScopeValues(storeys),
+        ifc_types: splitScopeValues(draft.ifcTypes),
+        storeys: splitScopeValues(draft.storeys),
         max_result_ids: 200_000,
         detail_limit: 20,
       }, { signal: controller.signal });
@@ -421,26 +428,29 @@ export function ElementFilterPanel({ embedded = false }: { embedded?: boolean } 
         || response.model_fingerprint !== currentModel.modelFingerprint
         || response.index_version !== currentModel.modelVersion
       ) {
-        return;
+        return false;
       }
       resultContractRef.current = {
         fingerprint: response.model_fingerprint,
         version: response.index_version,
+        definitionId: activeSavedId,
       };
       setResult(response);
       setFilterResultIds(response.element_ids);
       paintResult(response.element_ids, response.count);
+      return true;
     } catch (reason) {
       if (!controller.signal.aborted) {
         setError(reason instanceof Error ? reason.message : 'Filter request failed.');
       }
+      return false;
     } finally {
       if (requestRef.current === controller) {
         requestRef.current = null;
         setLoading(false);
       }
     }
-  }, [conditions, filterName, ifcTypes, logic, paintResult, setFilterResultIds, storeys]);
+  }, [activeSavedId, conditions, filterName, ifcTypes, logic, paintResult, setFilterResultIds, storeys]);
 
   const handleSave = useCallback(() => {
     try {
@@ -504,20 +514,49 @@ export function ElementFilterPanel({ embedded = false }: { embedded?: boolean } 
     setLoading(false);
   }, [clearColourLayer, setFilterResultIds]);
 
-  // Express IDs are model-local. Drop an applied result as soon as the model
-  // unloads or its semantic revision changes so stale actions cannot target a
-  // different element that happens to reuse the same numeric id.
+  // Express IDs are model-local. When the semantic revision changes while the
+  // applied result belongs to the still-active saved definition, re-run that
+  // definition once against the new revision; every other stale result is
+  // dropped immediately so stale actions cannot target a different element
+  // that happens to reuse the same numeric id. A failed re-run falls back to
+  // the same clear.
   useEffect(() => {
     const contract = resultContractRef.current;
     if (!contract) return;
-    if (
-      !modelLoaded
-      || contract.fingerprint !== modelFingerprint
-      || contract.version !== modelVersion
-    ) {
-      clearResult();
+    const action = decideFilterRevisionAction({
+      result: contract,
+      model: { loaded: modelLoaded, fingerprint: modelFingerprint, version: modelVersion },
+      activeDefinitionId: activeSavedId,
+      attempted: revisionAttemptRef.current,
+    });
+    if (action === 'none') return;
+    if (action === 'reevaluate') {
+      const definition = savedFilters.find((candidate) => candidate.id === activeSavedId);
+      let draft: NamedFilterDraft | null = null;
+      if (definition) {
+        try {
+          draft = draftFromNamedDefinition(definition);
+        } catch {
+          draft = null;
+        }
+      }
+      if (draft) {
+        revisionAttemptRef.current = { fingerprint: modelFingerprint, version: modelVersion };
+        void handleApply(draft).then((applied) => {
+          if (applied) {
+            setNotice('Saved filter re-evaluated for the updated model.');
+            return;
+          }
+          // A newer manual request owns the panel now; otherwise fall back to
+          // dropping the stale result.
+          if (resultContractRef.current !== contract || requestRef.current !== null) return;
+          clearResult();
+        });
+        return;
+      }
     }
-  }, [clearResult, modelFingerprint, modelLoaded, modelVersion]);
+    clearResult();
+  }, [activeSavedId, clearResult, handleApply, modelFingerprint, modelLoaded, modelVersion, savedFilters]);
 
   const handleReset = useCallback(() => {
     clearResult();

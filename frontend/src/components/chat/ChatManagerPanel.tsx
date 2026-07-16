@@ -11,9 +11,9 @@
  *   └──────────┴───────────────────┴──────────────────────────┘─┘
  *
  * Three top-level sections:
- *   - Tools     - manage tool sets (named bundles of tool names)
- *   - Prompts   - manage system prompt library
- *   - Config    - global chat defaults (model, temperature, etc.)
+ * - Tools - manage tool sets (named bundles of tool names)
+ * - Prompts - manage system prompt library
+ * - Config - global chat defaults (model, temperature, etc.)
  *
  * The sections are independent of agents. The 3 chat-mode pills
  * (Ask / Plan / Edit) consume the *active* tool set and prompt - set
@@ -286,7 +286,7 @@ export default function ChatManagerPanel({ onClose }: Props) {
                       : s.id === 'skills'   ? `${skillsCount} items`
                       : s.id === 'tools'    ? `${visibleTools.length} tools`
                       : s.id === 'docs'     ? `${docCount} files`
-                      : s.id === 'knowledge' ? (refDocsStatus === null ? '—'
+                      : s.id === 'knowledge' ? (refDocsStatus === null ? ' - '
                           : refDocsStatus.indexed ? `${refDocsStatus.doc_count} domains`
                           : 'not indexed')
                       : s.id === 'mcp'      ? `${mcpServerCount} servers`
@@ -389,7 +389,7 @@ function AgentRosterSection({ agents, tools }: AgentRosterSectionPropsExt) {
     defaults.sort(
       (x, y) =>
         DEFAULT_AGENT_IDS.indexOf(x.id as (typeof DEFAULT_AGENT_IDS)[number])
-        - DEFAULT_AGENT_IDS.indexOf(y.id as (typeof DEFAULT_AGENT_IDS)[number]),
+ - DEFAULT_AGENT_IDS.indexOf(y.id as (typeof DEFAULT_AGENT_IDS)[number]),
     );
     return defaults;
   }, [agents]);
@@ -524,12 +524,12 @@ function AgentRosterDetail({
       <div className="cm-skills-detail-body">
         {agent.id === 'edit-assistant' && (
           <div className="cm-editscope-note">
-            <span className="cm-skills-section-title">Edit scopes — what it can change</span>
+            <span className="cm-skills-section-title">Edit scopes - what it can change</span>
             <div className="cm-editscope-row">
               <span className="cm-editscope-badge cm-editscope-badge--semantic">Semantic</span>
               <span>
                 Names, property &amp; pset values, classifications. Updates the 3D
-                viewer <strong>in place — no reload</strong>. Safe to run in bulk.
+                viewer <strong>in place - no reload</strong>. Safe to run in bulk.
                 The default scope.
               </span>
             </div>

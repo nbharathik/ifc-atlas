@@ -62,7 +62,7 @@ def _registry_rates(model: str) -> Optional[tuple[float, float]]:
 
     The registry is UI-editable and covers the models people actually run;
     the static ``_COST_PER_1M`` table only knows a handful of legacy ids.
-    Registry entries are keyed by slug but priced per ``model_id`` — when
+    Registry entries are keyed by slug but priced per ``model_id`` - when
     several entries share a model_id the first priced one wins.
     """
     try:
@@ -1194,7 +1194,7 @@ async def stream_via_langgraph(
 
     # Token usage accumulated across every model round in the turn (a ReAct
     # turn is many model calls). Emitted as ONE usage event before every exit
-    # path so the ChatUsageChip and budget enforcement see graph-path turns —
+    # path so the ChatUsageChip and budget enforcement see graph-path turns -
     # without this only the fallback streamers reported usage, i.e. budget caps
     # silently never accrued on the primary path. Accumulators deliberately
     # survive the transient retry below: the failed attempt's tokens were still

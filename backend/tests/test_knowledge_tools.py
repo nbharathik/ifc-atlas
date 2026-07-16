@@ -29,7 +29,7 @@ def test_knowledge_tools_are_read_knowledge_tier():
 
 
 # ──────────────────────────────────────────────────────────────────────
-# bSDD tool dispatch — works with NO model loaded (gate exemption), async bridged
+# bSDD tool dispatch - works with NO model loaded (gate exemption), async bridged
 # ──────────────────────────────────────────────────────────────────────
 
 

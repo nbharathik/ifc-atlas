@@ -153,11 +153,9 @@ export default function ViewerToolsPanel() {
   const setIsolatedIds = useStore((s) => s.setIsolatedIds);
   const clearVisibility = useStore((s) => s.clearVisibility);
   const logActivity = useStore((s) => s.logActivity);
-  // The active storey chip is DERIVED from the visibility model: a chip is
-  // active only while the isolation set is exactly that storey's leaf set.
-  // Component-local chip state drifted whenever isolation changed elsewhere
-  // (element isolate, Shift+1..9, AI commands), leaving "Section storey"
-  // aimed at a stale storey.
+  // The active storey chip is derived from the visibility model: a chip is
+  // active only while the isolation set is exactly that storey's leaf set,
+  // no matter which surface (chips, Shift+1..9, AI commands) isolated it.
   const storeyLeafSets = useMemo(() => {
     const map = new Map<string, number[]>();
     for (const name of stats?.storeys ?? []) {

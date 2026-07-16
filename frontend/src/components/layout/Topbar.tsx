@@ -240,7 +240,7 @@ export default function Topbar({
                 <button
                   className={`edit-scope-opt${editScope === 'semantic' ? ' active' : ''}`}
                   onClick={() => setEditScope('semantic')}
-                  title="Semantic edits: names, properties, classifications. Updates the viewer in place — no reload."
+                  title="Semantic edits: names, properties, classifications. Updates the viewer in place - no reload."
                 >
                   Semantic
                 </button>

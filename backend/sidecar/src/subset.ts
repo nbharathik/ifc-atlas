@@ -11,6 +11,7 @@ import { createHash, type Hash } from 'node:crypto';
 
 import * as FRAGS from '@thatopen/fragments';
 
+import { ConversionCancelledError } from './converter.js';
 import {
   assertFragmentIdentityEqual,
   createFragmentIdentitySnapshot,
@@ -304,8 +305,17 @@ let subsetQueueTail: Promise<void> = Promise.resolve();
 export function subsetFragments(
   fragBytes: Uint8Array,
   requests: SubsetIdentityRequest[],
+  signal?: AbortSignal,
 ): Promise<{ bytes: Uint8Array; stats: SubsetStats }> {
-  const job = subsetQueueTail.then(() => subsetFragmentsNow(fragBytes, requests));
+  const job = subsetQueueTail.then(async () => {
+    if (signal) {
+      // Same event-loop yield as the conversion executor: let a pending
+      // socket-close notification abort the signal before work starts.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (signal.aborted) throw new ConversionCancelledError();
+    }
+    return subsetFragmentsNow(fragBytes, requests);
+  });
   subsetQueueTail = job.then(
     () => undefined,
     () => undefined,

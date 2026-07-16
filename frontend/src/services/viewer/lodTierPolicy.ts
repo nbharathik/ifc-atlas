@@ -16,10 +16,11 @@
  *
  *   small  (< ALL_VISIBLE_MAX_ELEMENTS): ALL_VISIBLE LodMode - the worker
  *          skips coverage/frustum culling entirely, quality is irrelevant.
- *   medium (up to LARGE_MODEL_MIN_ELEMENTS): quality PINNED to the ladder's
- *          idle level at all times - navigation must not widen the cull band.
- *   large  (above): quality remains at the idle level until a representative
- *          >20k-element benchmark proves a navigation drop helps.
+ *   medium (up to LARGE_MODEL_MIN_ELEMENTS): ALL_VISIBLE LodMode - every
+ *          element stays resident and drawable at any camera distance, so
+ *          nothing pops during orbit or zoom; quality is irrelevant.
+ *   large  (above): DEFAULT coverage classifier with quality pinned to the
+ *          ladder's idle level, until per-tile LOD replaces it.
  *
  * Thresholds are provisional pending scaling probes; keep them as named
  * constants so tuning lands in one place.
@@ -42,12 +43,16 @@ export function resolveLodTier(elementCount: number): LodTier {
 }
 
 /**
- * Only tiny models should bypass the fragments worker's view-dependent LOD.
- * Pinning medium/large models to ALL_VISIBLE keeps every tile resident and
- * drawable while orbiting, which is a severe draw-call/GPU regression.
+ * Small and medium models bypass the fragments worker's view-dependent LOD
+ * entirely: every element stays resident and drawable regardless of camera
+ * distance or angle, matching the stable-geometry invariant. The classifier's
+ * measured frame-time benefit on this class of model is within noise, while
+ * its wire/cull bands make elements visibly pop during orbit and zoom.
+ * Large models keep the classifier until per-tile LOD ships; drawing every
+ * triangle of a 20k+ element model unculled is a real GPU regression.
  */
 export function shouldPinAllVisible(tier: LodTier): boolean {
-  return tier === 'small';
+  return tier === 'small' || tier === 'medium';
 }
 
 export function shouldAttachNavigationLod(tier: LodTier, enabled: boolean): boolean {

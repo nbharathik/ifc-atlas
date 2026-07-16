@@ -177,7 +177,7 @@ def _seed(
 
 # Seed $ rates are tier-consistent ESTIMATES (USD per 1M tokens) so budget
 # tracking accrues out of the box; verify against the provider's price page and
-# edit in the Models tab. Free-tier entries carry (0, 0) — a genuine $0 turn —
+# edit in the Models tab. Free-tier entries carry (0, 0) - a genuine $0 turn -
 # not None (unknown).
 _BUILTIN_SEEDS: list[ModelEntry] = [
     # ── OpenAI ──────────────────────────────────────────────────────────────

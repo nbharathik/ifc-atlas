@@ -298,6 +298,136 @@ def test_empty_write_does_not_replace_existing_entry(tmp_path: Path) -> None:
     assert read_fragment_cache(entry) == b"existing"
 
 
+def _pin_provenance(
+    monkeypatch: pytest.MonkeyPatch, provenance: dict[str, object]
+) -> None:
+    monkeypatch.setattr(
+        fragment_cache, "sidecar_artifact_provenance", lambda: dict(provenance)
+    )
+
+
+def test_publish_removes_superseded_sibling_and_legacy_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pin_provenance(monkeypatch, _PROVENANCE)
+    old_entry = full_fragment_cache_entry(tmp_path, _SHA, "balanced")
+    atomic_write_fragment_cache(old_entry, b"old-bytes")
+    legacy = tmp_path / f"{_SHA}-balanced.frag"
+    legacy.write_bytes(b"legacy-bytes")
+
+    _pin_provenance(monkeypatch, {**_PROVENANCE, "runtime_sha256": "3" * 64})
+    new_entry = full_fragment_cache_entry(tmp_path, _SHA, "balanced")
+    assert new_entry.path != old_entry.path
+    atomic_write_fragment_cache(new_entry, b"new-bytes")
+
+    assert not old_entry.path.exists()
+    assert not old_entry.manifest_path.exists()
+    assert not legacy.exists()
+    assert read_fragment_cache(new_entry) == b"new-bytes"
+
+
+def test_publish_gc_spares_unrelated_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pin_provenance(monkeypatch, _PROVENANCE)
+    unrelated = [
+        full_fragment_cache_entry(tmp_path, "ef01" * 16, "balanced"),
+        full_fragment_cache_entry(tmp_path, _SHA, "performance"),
+        storey_fragment_cache_entry(tmp_path, _SHA, 4),
+        lod_fragment_cache_entry(tmp_path, _SHA, "balanced"),
+        subset_fragment_cache_entry(
+            tmp_path,
+            _SHA,
+            "balanced",
+            subset_kind="tile-g2",
+            subset_id="0-0-0",
+            element_ids=[1, 2],
+        ),
+    ]
+    for entry in unrelated:
+        atomic_write_fragment_cache(entry, b"unrelated-bytes")
+
+    _pin_provenance(monkeypatch, {**_PROVENANCE, "runtime_sha256": "3" * 64})
+    atomic_write_fragment_cache(
+        full_fragment_cache_entry(tmp_path, _SHA, "balanced"), b"new-bytes"
+    )
+
+    for entry in unrelated:
+        assert read_fragment_cache(entry) == b"unrelated-bytes"
+
+
+def test_publish_gc_scopes_to_matching_subset_and_lod_markers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pin_provenance(monkeypatch, _PROVENANCE)
+    old_subset = subset_fragment_cache_entry(
+        tmp_path,
+        _SHA,
+        "balanced",
+        subset_kind="tile-g2",
+        subset_id="0-0-0",
+        element_ids=[1, 2],
+    )
+    other_tile = subset_fragment_cache_entry(
+        tmp_path,
+        _SHA,
+        "balanced",
+        subset_kind="tile-g2",
+        subset_id="0-1-1",
+        element_ids=[1, 2],
+    )
+    old_lod = lod_fragment_cache_entry(tmp_path, _SHA, "balanced")
+    old_storey = storey_fragment_cache_entry(tmp_path, _SHA, 4)
+    other_storey = storey_fragment_cache_entry(tmp_path, _SHA, 5)
+    for entry in (old_subset, other_tile, old_lod, old_storey, other_storey):
+        atomic_write_fragment_cache(entry, b"old-bytes")
+
+    _pin_provenance(monkeypatch, {**_PROVENANCE, "runtime_sha256": "3" * 64})
+    new_subset = subset_fragment_cache_entry(
+        tmp_path,
+        _SHA,
+        "balanced",
+        subset_kind="tile-g2",
+        subset_id="0-0-0",
+        element_ids=[1, 2],
+    )
+    atomic_write_fragment_cache(new_subset, b"new-bytes")
+    new_lod = lod_fragment_cache_entry(tmp_path, _SHA, "balanced")
+    atomic_write_fragment_cache(new_lod, b"new-bytes")
+    new_storey = storey_fragment_cache_entry(tmp_path, _SHA, 4)
+    atomic_write_fragment_cache(new_storey, b"new-bytes")
+
+    assert not old_subset.path.exists()
+    assert not old_lod.path.exists()
+    assert not old_storey.path.exists()
+    assert read_fragment_cache(other_tile) == b"old-bytes"
+    assert read_fragment_cache(other_storey) == b"old-bytes"
+    assert read_fragment_cache(new_subset) == b"new-bytes"
+    assert read_fragment_cache(new_lod) == b"new-bytes"
+    assert read_fragment_cache(new_storey) == b"new-bytes"
+
+
+def test_publish_succeeds_when_gc_deletion_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pin_provenance(monkeypatch, _PROVENANCE)
+    old_entry = full_fragment_cache_entry(tmp_path, _SHA, "balanced")
+    atomic_write_fragment_cache(old_entry, b"old-bytes")
+
+    _pin_provenance(monkeypatch, {**_PROVENANCE, "runtime_sha256": "3" * 64})
+    new_entry = full_fragment_cache_entry(tmp_path, _SHA, "balanced")
+
+    def _deny_remove(path: object) -> None:
+        raise PermissionError(f"locked: {path}")
+
+    monkeypatch.setattr(fragment_cache.os, "remove", _deny_remove)
+    info = atomic_write_fragment_cache(new_entry, b"new-bytes")
+
+    assert info.size_bytes == len(b"new-bytes")
+    assert read_fragment_cache(new_entry) == b"new-bytes"
+    assert old_entry.path.exists()
+
+
 def test_concurrent_publishers_leave_a_self_consistent_entry(tmp_path: Path) -> None:
     entry = full_fragment_cache_entry(tmp_path, _SHA, "balanced")
     payloads = [f"payload-{index}".encode() for index in range(16)]

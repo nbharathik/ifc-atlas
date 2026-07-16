@@ -432,6 +432,82 @@ export function fromRelativeClipPlaneStates(input: {
   });
 }
 
+export interface WorkspaceClipPlaneLike {
+  readonly id: string;
+  readonly enabled: boolean;
+  readonly axis: SectionAxis;
+  readonly offset: number;
+  readonly inverted: boolean;
+  /** Present only on planes materialized from a workspace definition. */
+  readonly workspacePlaneId?: string;
+}
+
+export interface WorkspaceClipPlaneReconciliation<T extends WorkspaceClipPlaneLike> {
+  readonly planes: (T | WorkspaceClipPlaneLike)[];
+  readonly changed: boolean;
+}
+
+/**
+ * Reconcile workspace-owned clip planes against a definition's plane list.
+ * Planes without a `workspacePlaneId` belong to the user and are never
+ * modified, reordered, or removed; workspace planes are updated in place,
+ * removed when they leave the definition, and appended (up to `maxPlanes`
+ * total) when new. Untouched planes keep their object identity.
+ */
+export function reconcileWorkspaceClipPlanes<T extends WorkspaceClipPlaneLike>(
+  current: readonly T[],
+  desired: readonly RelativeClipPlaneState[],
+  maxPlanes: number,
+): WorkspaceClipPlaneReconciliation<T> {
+  const desiredById = new Map(desired.map((plane) => [plane.id, plane]));
+  const matched = new Set<string>();
+  let changed = false;
+  const planes: (T | WorkspaceClipPlaneLike)[] = [];
+  for (const plane of current) {
+    const workspaceId = plane.workspacePlaneId;
+    if (!workspaceId) {
+      planes.push(plane);
+      continue;
+    }
+    const next = desiredById.get(workspaceId);
+    if (!next) {
+      changed = true;
+      continue;
+    }
+    matched.add(workspaceId);
+    if (
+      plane.enabled === next.enabled
+      && plane.axis === next.axis
+      && plane.offset === next.offset
+      && plane.inverted === next.inverted
+    ) {
+      planes.push(plane);
+      continue;
+    }
+    changed = true;
+    planes.push({
+      ...plane,
+      enabled: next.enabled,
+      axis: next.axis,
+      offset: next.offset,
+      inverted: next.inverted,
+    });
+  }
+  for (const plane of desired) {
+    if (matched.has(plane.id) || planes.length >= maxPlanes) continue;
+    changed = true;
+    planes.push({
+      id: `workspace:${plane.id}`,
+      enabled: plane.enabled,
+      axis: plane.axis,
+      offset: plane.offset,
+      inverted: plane.inverted,
+      workspacePlaneId: plane.id,
+    });
+  }
+  return { planes, changed };
+}
+
 /**
  * Single-flight, latest-state controller for renderer section mutations.
  * Synchronous bursts coalesce before application; changes arriving during an

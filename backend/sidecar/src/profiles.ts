@@ -22,6 +22,9 @@ import type * as OBC from '@thatopen/components';
 
 export type ParseProfile = 'quality' | 'balanced' | 'performance' | 'ultra_fast';
 
+// Not consumed in the sidecar; kept so this file stays in lock-step with the
+// frontend mirror, whose browser-only load path still reads the perf
+// threshold for auto-selection (ViewerPanel.tsx).
 export const AUTO_PERF_PROFILE_THRESHOLD_BYTES = 40 * 1024 * 1024;
 export const AUTO_ULTRA_PROFILE_THRESHOLD_BYTES = 60 * 1024 * 1024;
 

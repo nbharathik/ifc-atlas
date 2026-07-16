@@ -165,7 +165,7 @@ export default function EditToolbar({ controller }: Props) {
       void applyOperation('create_wall', params).then((result) => {
         // applyOperation already toasts failures.
         if (result?.ok && result.changed) {
-          addToast('Wall staged — the viewer will refresh', 'success');
+          addToast('Wall staged - the viewer will refresh', 'success');
         }
       });
     },

@@ -3239,7 +3239,7 @@ html[data-theme="light"] .prop-relations-error {
 }
 
 /* Tool call display in chat */
-/* ── Tool call cards (chat) — modern, shadcn-style ─────────────────────────
+/* ── Tool call cards (chat) - modern, shadcn-style ─────────────────────────
    Rendered interleaved with assistant text in transcript order. */
 .tc-card {
   border: 1px solid var(--b-2);

@@ -465,8 +465,7 @@ export default function KeyboardShortcuts({
             storeyNode = find(tree);
             if (!storeyNode) break;
             // Isolate the same leaf-element set as the Viewer Tools storey
-            // chips - including container nodes made the isolation set differ
-            // from the chip's leaf set, so the chip never lit up for Shift+N.
+            // chips so the matching chip lights up.
             const subtreeIds = collectLeavesUnder(storeyNode);
             // Toggle: if this storey is already isolated, clear; else isolate.
             const cur = state.isolatedIds;

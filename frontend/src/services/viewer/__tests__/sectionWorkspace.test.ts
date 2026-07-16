@@ -11,11 +11,14 @@ import {
   normalizeSectionWorkspace,
   padSectionBounds,
   parseSectionWorkspace,
+  reconcileWorkspaceClipPlanes,
   sameSectionWorkspace,
   serializeSectionWorkspace,
   toRelativeClipPlaneStates,
+  type RelativeClipPlaneState,
   type SectionWorkspaceApplyContext,
   type SectionWorkspaceDefinition,
+  type WorkspaceClipPlaneLike,
 } from '../sectionWorkspace';
 
 function workspace(id: string, position = 0): SectionWorkspaceDefinition {
@@ -370,3 +373,109 @@ describe('LatestSectionWorkspaceController', () => {
   });
 });
 
+
+describe('reconcileWorkspaceClipPlanes', () => {
+  const userPlane: WorkspaceClipPlaneLike = {
+    id: 'primary',
+    enabled: false,
+    axis: 'y',
+    offset: 0,
+    inverted: false,
+  };
+
+  function desired(id: string, offset = 1, enabled = true): RelativeClipPlaneState {
+    return { id, enabled, axis: 'y', offset, inverted: false };
+  }
+
+  function owned(id: string, offset = 1, enabled = true): WorkspaceClipPlaneLike {
+    return {
+      id: `workspace:${id}`,
+      enabled,
+      axis: 'y',
+      offset,
+      inverted: false,
+      workspacePlaneId: id,
+    };
+  }
+
+  it('adds workspace planes after user planes and tags ownership', () => {
+    const { planes, changed } = reconcileWorkspaceClipPlanes([userPlane], [desired('cut', 4)], 3);
+    expect(changed).toBe(true);
+    expect(planes).toHaveLength(2);
+    expect(planes[0]).toBe(userPlane);
+    expect(planes[1]).toMatchObject({
+      id: 'workspace:cut',
+      workspacePlaneId: 'cut',
+      enabled: true,
+      axis: 'y',
+      offset: 4,
+      inverted: false,
+    });
+  });
+
+  it('updates an owned plane in place instead of duplicating it', () => {
+    const current = [userPlane, owned('cut', 4)];
+    const { planes, changed } = reconcileWorkspaceClipPlanes(current, [desired('cut', 9, false)], 3);
+    expect(changed).toBe(true);
+    expect(planes).toHaveLength(2);
+    expect(planes[1]).toMatchObject({
+      id: 'workspace:cut',
+      workspacePlaneId: 'cut',
+      offset: 9,
+      enabled: false,
+    });
+  });
+
+  it('keeps object identity and reports changed=false when already reconciled', () => {
+    const existing = owned('cut', 4);
+    const { planes, changed } = reconcileWorkspaceClipPlanes(
+      [userPlane, existing],
+      [desired('cut', 4)],
+      3,
+    );
+    expect(changed).toBe(false);
+    expect(planes[0]).toBe(userPlane);
+    expect(planes[1]).toBe(existing);
+  });
+
+  it('removes owned planes that leave the definition', () => {
+    const { planes, changed } = reconcileWorkspaceClipPlanes(
+      [userPlane, owned('cut', 4)],
+      [],
+      3,
+    );
+    expect(changed).toBe(true);
+    expect(planes).toEqual([userPlane]);
+  });
+
+  it('never touches user planes even when the definition churns', () => {
+    const secondUser: WorkspaceClipPlaneLike = {
+      id: 'clip-123',
+      enabled: true,
+      axis: 'x',
+      offset: -2,
+      inverted: true,
+    };
+    const { planes } = reconcileWorkspaceClipPlanes(
+      [userPlane, owned('old', 1), secondUser],
+      [desired('new', 7)],
+      3,
+    );
+    expect(planes[0]).toBe(userPlane);
+    expect(planes[1]).toBe(secondUser);
+    expect(planes[2]).toMatchObject({ workspacePlaneId: 'new', offset: 7 });
+  });
+
+  it('caps additions at maxPlanes without dropping updates', () => {
+    const current = [userPlane, owned('a', 1), owned('b', 2)];
+    const { planes } = reconcileWorkspaceClipPlanes(
+      current,
+      [desired('a', 5), desired('b', 6), desired('c', 7)],
+      3,
+    );
+    expect(planes).toHaveLength(3);
+    expect(planes[1]).toMatchObject({ workspacePlaneId: 'a', offset: 5 });
+    expect(planes[2]).toMatchObject({ workspacePlaneId: 'b', offset: 6 });
+    expect(planes.some((plane) => plane.workspacePlaneId === 'c')).toBe(false);
+  });
+});

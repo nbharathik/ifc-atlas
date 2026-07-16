@@ -18,6 +18,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import tempfile
 import threading
 from dataclasses import dataclass, field
@@ -374,6 +375,54 @@ def lod_fragment_cache_entry(
     return FragmentCacheEntry(key=key, path=cache_dir / filename)
 
 
+# Every filename this module mints ends with "-v{schema}-{digest}.frag"; the
+# greedy prefix therefore captures the logical identity (source fingerprint,
+# profile and, where present, the storey/subset/lod marker).
+_VERSIONED_FRAGMENT_NAME = re.compile(
+    r"^(?P<prefix>.+)-v(?P<schema>\d+)-(?P<digest>[0-9a-f]{8,64})\.frag$"
+)
+
+
+def _unlink_quietly(path: Path) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _garbage_collect_superseded(entry: FragmentCacheEntry) -> None:
+    """Delete files this module minted earlier for the same logical artifact.
+
+    Attribution is filename-based only: a sibling qualifies when it shares the
+    published entry's logical prefix and carries the module's own versioned
+    suffix with a different digest, or is the pre-versioned ``{prefix}.frag``
+    name. Files that cannot be positively attributed are left alone, and
+    deletion failures never fail the publish.
+    """
+
+    published = _VERSIONED_FRAGMENT_NAME.match(entry.path.name)
+    if published is None:
+        return
+    prefix = published.group("prefix")
+    try:
+        candidates = list(entry.path.parent.glob(f"{prefix}-v*.frag"))
+    except OSError:
+        return
+    stale = [entry.path.parent / f"{prefix}.frag"]
+    for candidate in candidates:
+        if candidate.name == entry.path.name:
+            continue
+        sibling = _VERSIONED_FRAGMENT_NAME.match(candidate.name)
+        # The glob can over-match subset names whose kind segment starts with
+        # "v"; the prefix comparison rejects those.
+        if sibling is None or sibling.group("prefix") != prefix:
+            continue
+        stale.append(candidate)
+    for path in stale:
+        _unlink_quietly(path)
+        _unlink_quietly(path.with_name(f"{path.name}.manifest.json"))
+
+
 def _write_temp(path: Path, data: bytes) -> Path:
     fd, raw_path = tempfile.mkstemp(
         dir=path.parent,
@@ -465,6 +514,7 @@ def atomic_write_fragment_cache(
                 manifest_temp.unlink(missing_ok=True)
 
     _validated_file_digest.cache_clear()
+    _garbage_collect_superseded(entry)
     return CachedFragmentInfo(
         size_bytes=len(payload),
         sha256=expected_sha256,

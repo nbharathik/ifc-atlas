@@ -71,14 +71,14 @@ describe('navigation LOD policy', () => {
 });
 
 describe('shouldPinAllVisible', () => {
-  it('keeps view-dependent LOD enabled for the reported 1,032-element class', () => {
+  it('keeps every element resident for the reported 1,032-element class', () => {
     expect(resolveLodTier(1_032)).toBe('medium');
-    expect(shouldPinAllVisible(resolveLodTier(1_032))).toBe(false);
+    expect(shouldPinAllVisible(resolveLodTier(1_032))).toBe(true);
   });
 
-  it('bypasses coverage culling only for tiny models', () => {
+  it('bypasses coverage culling for small and medium models only', () => {
     expect(shouldPinAllVisible('small')).toBe(true);
-    expect(shouldPinAllVisible('medium')).toBe(false);
+    expect(shouldPinAllVisible('medium')).toBe(true);
     expect(shouldPinAllVisible('large')).toBe(false);
   });
 });

@@ -21,7 +21,7 @@ import {
 export interface ConvertResult {
   /** The produced fragment binary. */
   bytes: Uint8Array;
-  /** Profile actually used (after auto-promotion). */
+  /** Profile used, exactly as requested (resolveParseProfile does not auto-promote). */
   effectiveProfile: ParseProfile;
   /** Wall-clock milliseconds. */
   elapsedMs: number;
@@ -33,6 +33,16 @@ export interface ConvertOptions {
   profile: ParseProfile;
   /** Called on each progress update. */
   onProgress?: (stage: string, progress: number) => void;
+  /** Aborting skips the job if it is still queued; a running job finishes. */
+  signal?: AbortSignal;
+}
+
+/** Rejection used when a queued job is skipped because its client is gone. */
+export class ConversionCancelledError extends Error {
+  constructor() {
+    super('job cancelled before execution');
+    this.name = 'ConversionCancelledError';
+  }
 }
 
 /**
@@ -63,13 +73,27 @@ let cachedWasmDir: string | null = null;
 /**
  * Build a FIFO executor for async work. Rejections are observed on the
  * returned promise but are swallowed on the internal tail so one failed job
- * never blocks the jobs queued behind it.
+ * never blocks the jobs queued behind it. A job whose signal has aborted by
+ * the time it reaches the head of the queue is rejected without running.
  */
-function createSerialExecutor(): <T>(work: () => Promise<T>) => Promise<T> {
+function createSerialExecutor(): <T>(
+  work: () => Promise<T>,
+  signal?: AbortSignal,
+) => Promise<T> {
   let tail: Promise<void> = Promise.resolve();
 
-  return <T>(work: () => Promise<T>): Promise<T> => {
-    const result = tail.then(work);
+  return <T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> => {
+    const result = tail.then(async () => {
+      if (signal) {
+        // Heavy jobs starve the poll phase, so a socket-close notification
+        // for THIS job may still be undelivered when the previous job's
+        // resolution chains straight into this microtask. Yield one full
+        // event-loop turn so the disconnect can abort the signal first.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        if (signal.aborted) throw new ConversionCancelledError();
+      }
+      return work();
+    });
     tail = result.then(
       () => undefined,
       () => undefined,
@@ -227,7 +251,7 @@ export async function convert(
       // defaults, not this call's mutated version.
       restoreImporterState(importer, saved);
     }
-  });
+  }, options.signal);
 }
 
 /** Expose the resolved wasm directory for `/health` diagnostics. */

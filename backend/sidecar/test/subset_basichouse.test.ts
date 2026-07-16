@@ -21,6 +21,21 @@ function vmOf(model: FRAGS.SingleThreadedFragmentsModel): VirtualModel {
   return (model as unknown as { _virtualModel: VirtualModel })._virtualModel;
 }
 
+// Convert once and share across tests; the conversion dominates the suite's
+// runtime while every test only needs the resulting fragment bytes.
+let convertedBytesPromise: Promise<Uint8Array> | null = null;
+
+function getConvertedBytes(): Promise<Uint8Array> {
+  if (!convertedBytesPromise) {
+    convertedBytesPromise = (async () => {
+      const ifcBytes = new Uint8Array(await readFile(BASIC_HOUSE));
+      const converted = await convert(ifcBytes, { profile: 'performance' });
+      return converted.bytes;
+    })();
+  }
+  return convertedBytesPromise;
+}
+
 describe('BasicHouse ID-preserving fragment subset', () => {
   if (!existsSync(BASIC_HOUSE)) {
     it('skipped - BasicHouse.ifc fixture is unavailable', () => {});
@@ -28,11 +43,10 @@ describe('BasicHouse ID-preserving fragment subset', () => {
   }
 
   it('reloads standalone with exact IDs, GUIDs, geometry, and materials', async () => {
-    const ifcBytes = new Uint8Array(await readFile(BASIC_HOUSE));
-    const converted = await convert(ifcBytes, { profile: 'performance' });
+    const fragBytes = await getConvertedBytes();
     const source = new FRAGS.SingleThreadedFragmentsModel(
       'subset-test-source',
-      converted.bytes,
+      fragBytes,
       false,
     );
     await vmOf(source).setupData();
@@ -44,13 +58,13 @@ describe('BasicHouse ID-preserving fragment subset', () => {
         sourceId: index === 0 ? sourceId + 999_999 : sourceId,
         guid: guids[index],
       }));
-      const result = await subsetFragments(converted.bytes, requests);
+      const result = await subsetFragments(fragBytes, requests);
 
       assert.equal(result.stats.identityVerified, true);
       assert.equal(result.stats.contentVerified, true);
       assert.equal(result.stats.resolvedCount, localIds.length);
       assert.equal(result.stats.guidRemapCount, 1);
-      assert.ok(result.bytes.byteLength < converted.bytes.byteLength);
+      assert.ok(result.bytes.byteLength < fragBytes.byteLength);
 
       const subset = new FRAGS.SingleThreadedFragmentsModel(
         'subset-test-output',
@@ -65,6 +79,40 @@ describe('BasicHouse ID-preserving fragment subset', () => {
       } finally {
         subset.dispose();
       }
+    } finally {
+      source.dispose();
+    }
+  });
+
+  it('fails closed when the only requested item is unresolvable', async () => {
+    const fragBytes = await getConvertedBytes();
+    await assert.rejects(
+      subsetFragments(fragBytes, [
+        { sourceId: 987_654_321, guid: '0BoGuSGuIdThatIsNot22c' },
+      ]),
+      /unable to resolve 1 subset items/,
+    );
+  });
+
+  it('refuses a mixed request instead of publishing a partial subset', async () => {
+    const fragBytes = await getConvertedBytes();
+    const source = new FRAGS.SingleThreadedFragmentsModel(
+      'subset-test-mixed',
+      fragBytes,
+      false,
+    );
+    await vmOf(source).setupData();
+    try {
+      const [validId] = [...source.getItemsWithGeometry()].sort((a, b) => a - b);
+      assert.ok(validId !== undefined, 'BasicHouse fragment should contain geometry items');
+      const [validGuid] = source.getGuidsByLocalIds([validId]);
+      await assert.rejects(
+        subsetFragments(fragBytes, [
+          { sourceId: validId, guid: validGuid },
+          { sourceId: 987_654_321, guid: '0BoGuSGuIdThatIsNot22c' },
+        ]),
+        /unable to resolve 1 subset items/,
+      );
     } finally {
       source.dispose();
     }

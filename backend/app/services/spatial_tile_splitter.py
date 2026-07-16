@@ -192,6 +192,47 @@ def _manifest_payload(manifest: TileManifest, aabb_source: str) -> dict[str, obj
     }
 
 
+def _garbage_collect_spatial_artifacts(
+    path: Path,
+    identity: dict[str, object],
+) -> None:
+    """Delete superseded tile artifacts for the same model and grid.
+
+    The filename digest covers the complete identity, so every storey/AABB
+    transition (placement -> mixed -> real) mints a new file. The sha and grid
+    are not recoverable from the filename, so attribution reads each
+    candidate's identity block; unreadable or foreign documents are left
+    alone, and deletion failures never fail the publish.
+    """
+
+    sha = identity.get("source_sha256")
+    grid_resolution = identity.get("grid_resolution")
+    try:
+        candidates = list(path.parent.glob("tiles-v*.json"))
+    except OSError:
+        return
+    for candidate in candidates:
+        if candidate.name == path.name:
+            continue
+        try:
+            document = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(document, dict):
+            continue
+        candidate_identity = document.get("identity")
+        if not isinstance(candidate_identity, dict):
+            continue
+        if candidate_identity.get("source_sha256") != sha:
+            continue
+        if candidate_identity.get("grid_resolution") != grid_resolution:
+            continue
+        try:
+            os.remove(candidate)
+        except OSError:
+            continue
+
+
 def _atomic_write_spatial_artifact(
     path: Path,
     identity: dict[str, object],
@@ -220,6 +261,7 @@ def _atomic_write_spatial_artifact(
         os.replace(temp_path, path)
     finally:
         temp_path.unlink(missing_ok=True)
+    _garbage_collect_spatial_artifacts(path, identity)
 
 
 def _triple(value: object) -> tuple[float, float, float]:
@@ -664,9 +706,8 @@ class SpatialTileSplitter:
             self._aabb_source.pop(key, None)
             self._artifact_identity.pop(key, None)
 
-        # Single-model sessions never revisit another fingerprint. Entries for
-        # other models hold full element-ID manifests, so a long-running
-        # backend would otherwise accumulate one per model ever loaded.
+        # Single-model sessions never revisit another fingerprint; entries
+        # for other models hold full element-ID manifests.
         if sha:
             for stale_key in [k for k in self._cache if k[0] != sha]:
                 self._cache.pop(stale_key, None)

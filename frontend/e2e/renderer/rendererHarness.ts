@@ -1,5 +1,6 @@
 import { expect, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
+import { PNG } from 'pngjs';
 
 export interface RenderStateSnapshot {
   generation: number;
@@ -145,6 +146,7 @@ interface ViewerDebugWindow extends Window {
     };
   };
   __ifcWasmVariant?: string;
+  __ifcE2ELoseContext?: WEBGL_lose_context;
 }
 
 export interface ViewerDiagnostics {
@@ -584,6 +586,153 @@ export async function findGeometryHit(page: Page, canvas: Locator): Promise<{
     if (hit) return { x, y, expressId: hit.expressId };
   }
   throw new Error('No selectable BasicHouse geometry found in the bounded canvas scan');
+}
+
+export async function findGeometryHitWhere(
+  page: Page,
+  canvas: Locator,
+  accept: (expressId: number) => boolean,
+  options: { avoid?: { x: number; y: number }; minAvoidDistancePx?: number } = {},
+): Promise<{ x: number; y: number; expressId: number } | null> {
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error('Viewer canvas has no bounding box');
+  // Center-out scan: the orbit target keeps the model near the canvas center,
+  // so an accepted element is usually found within the first few probes.
+  const steps = [0.50, 0.44, 0.56, 0.38, 0.62, 0.32, 0.68, 0.26, 0.74, 0.20, 0.80];
+  const avoid = options.avoid ?? null;
+  const minAvoidDistancePx = options.minAvoidDistancePx ?? 0;
+  for (const ry of steps) {
+    for (const rx of steps) {
+      const x = box.x + box.width * rx;
+      const y = box.y + box.height * ry;
+      if (avoid && Math.hypot(x - avoid.x, y - avoid.y) < minAvoidDistancePx) continue;
+      const hit = await page.evaluate(async ({ clientX, clientY }) => {
+        const pickAt = (window as ViewerDebugWindow).__ifcPickAt;
+        if (!pickAt) throw new Error('__ifcPickAt is unavailable');
+        return pickAt(clientX, clientY);
+      }, { clientX: x, clientY: y });
+      if (hit && accept(hit.expressId)) return { x, y, expressId: hit.expressId };
+    }
+  }
+  return null;
+}
+
+export async function findBackgroundPoint(
+  page: Page,
+  canvas: Locator,
+): Promise<{ x: number; y: number } | null> {
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error('Viewer canvas has no bounding box');
+  // Stay off the canvas corners, where HUD controls overlay the scene and a
+  // pixel sample would read UI chrome instead of the scene background.
+  const ratios: Array<[number, number]> = [
+    [0.50, 0.08], [0.35, 0.08], [0.65, 0.08],
+    [0.12, 0.30], [0.88, 0.30], [0.12, 0.70], [0.88, 0.70],
+  ];
+  for (const [rx, ry] of ratios) {
+    const x = box.x + box.width * rx;
+    const y = box.y + box.height * ry;
+    const hit = await page.evaluate(async ({ clientX, clientY }) => {
+      const pickAt = (window as ViewerDebugWindow).__ifcPickAt;
+      if (!pickAt) throw new Error('__ifcPickAt is unavailable');
+      return pickAt(clientX, clientY);
+    }, { clientX: x, clientY: y });
+    if (!hit) return { x, y };
+  }
+  return null;
+}
+
+export interface RgbSample {
+  x: number;
+  y: number;
+  size: number;
+  pixels: number;
+  r: number;
+  g: number;
+  b: number;
+  luminance: number;
+}
+
+export async function sampleScreenRegion(
+  page: Page,
+  centerX: number,
+  centerY: number,
+  size = 9,
+): Promise<RgbSample> {
+  // deviceScaleFactor is pinned to 1 in the renderer config, so page
+  // coordinates map 1:1 onto screenshot pixels.
+  const half = Math.floor(size / 2);
+  const buffer = await page.screenshot({
+    clip: {
+      x: Math.max(0, Math.round(centerX) - half),
+      y: Math.max(0, Math.round(centerY) - half),
+      width: size,
+      height: size,
+    },
+  });
+  const png = PNG.sync.read(buffer);
+  const pixels = png.width * png.height;
+  if (pixels <= 0) throw new Error('Screenshot clip decoded to an empty PNG');
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  for (let i = 0; i < pixels; i += 1) {
+    r += png.data[i * 4];
+    g += png.data[i * 4 + 1];
+    b += png.data[i * 4 + 2];
+  }
+  r /= pixels;
+  g /= pixels;
+  b /= pixels;
+  const round1 = (value: number) => Math.round(value * 10) / 10;
+  return {
+    x: Math.round(centerX),
+    y: Math.round(centerY),
+    size,
+    pixels,
+    r: round1(r),
+    g: round1(g),
+    b: round1(b),
+    luminance: round1(0.2126 * r + 0.7152 * g + 0.0722 * b),
+  };
+}
+
+export async function forceWebglContextLoss(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const win = window as ViewerDebugWindow;
+    const gl = win.__ifcViewer?.world?.renderer?.three?.getContext?.();
+    if (!gl) throw new Error('__ifcViewer WebGL context is unavailable; run the Vite development build');
+    const ext = win.__ifcE2ELoseContext
+      ?? gl.getExtension('WEBGL_lose_context')
+      ?? undefined;
+    if (!ext) throw new Error('WEBGL_lose_context extension is unavailable in this browser');
+    // The extension handle must survive to the restore call; a re-queried
+    // handle on a lost context is not guaranteed to restore the same context.
+    win.__ifcE2ELoseContext = ext;
+    ext.loseContext();
+  });
+}
+
+export async function restoreWebglContext(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const ext = (window as ViewerDebugWindow).__ifcE2ELoseContext;
+    if (!ext) throw new Error('forceWebglContextLoss must run before restoreWebglContext');
+    ext.restoreContext();
+  });
+}
+
+export async function isWebglContextLost(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const gl = (window as ViewerDebugWindow).__ifcViewer?.world?.renderer?.three?.getContext?.();
+    if (!gl) throw new Error('__ifcViewer WebGL context is unavailable');
+    return gl.isContextLost();
+  });
+}
+
+export async function readWebglContextLossCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    return (window as ViewerDebugWindow).__ifcE2EProbe?.webglContextLosses ?? 0;
+  });
 }
 
 export async function startFrameProbe(page: Page, safetyCapMs = 60_000): Promise<void> {

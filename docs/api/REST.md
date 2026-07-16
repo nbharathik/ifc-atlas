@@ -1412,15 +1412,18 @@ Get Storey Fragment
 Return binary fragment bytes for one IfcBuildingStorey.
 
 Workflow (fastest first):
-1. **Disk cache hit** - returns cached ``.frag`` bytes instantly (<20 ms).
-2. **Sidecar convert** - serializes the storey to a sub-IFC via
+1. **ID-preserving subset** - copies the storey's elements out of the
+   validated full fragment through the sidecar subset path (identity and
+   content parity proofs, original local-ID/GUID bridge preserved).
+2. **Disk cache hit** - returns cached reconstruction ``.frag`` bytes.
+3. **Sidecar convert** - serializes the storey to a sub-IFC via
    ``copy_deep``, sends to the Node sidecar, caches result, returns binary.
-3. **Sub-IFC fallback** - when the sidecar is unavailable, returns raw
+4. **Sub-IFC fallback** - when the sidecar is unavailable, returns raw
    sub-IFC bytes so the frontend can convert via ``IfcConvertWorker``.
 
 Response codes:
 
-- ``200`` - binary bytes (check ``X-Fragment-Source`` for cache/sidecar/sub-ifc)
+- ``200`` - binary bytes (check ``X-Fragment-Source`` for the source)
 - ``204`` - storey has no elements (no bytes to send)
 - ``400`` - no model loaded
 - ``404`` - SHA mismatch or storey index out of range
@@ -1428,10 +1431,11 @@ Response codes:
 
 Response headers:
 
-- ``X-Fragment-Source`` - ``cache`` | ``sidecar`` | ``sub-ifc``
+- ``X-Fragment-Source`` - ``storey-subset-cache`` |
+  ``storey-subset-sidecar`` | ``cache`` | ``sidecar`` | ``sub-ifc``
 - ``X-Fragment-Storey-Idx`` - storey index (mirrors ``idx``)
 - ``X-Fragment-Storey-Name`` - IfcBuildingStorey.Name
-- ``X-Fragment-Elapsed-Ms`` - sidecar convert time (sidecar path only)
+- ``X-Fragment-Elapsed-Ms`` - sidecar convert time (sub-IFC sidecar path only)
 
 **Query parameters:**
 

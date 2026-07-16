@@ -15,6 +15,8 @@ import {
   LatestSectionWorkspaceController,
   createSectionWorkspace,
   createSelectionSectionPreset,
+  parseSectionWorkspace,
+  toRelativeClipPlaneStates,
   type SectionBounds,
 } from '../../services/viewer/sectionWorkspace';
 import { ClipEdgesService } from '../../services/viewer/clipEdgesService';
@@ -577,11 +579,9 @@ export default function ViewerPanel({
         resolve();
       };
       // Hidden/background WebViews can suspend rAF indefinitely, so a hidden
-      // document keeps a short bounded fallback. A visible viewport must not:
-      // under heavy load (frame times beyond ~160 ms) a short unconditional
-      // timeout would acknowledge the commit before any paint, silently
-      // breaking the "acknowledged only after a paint boundary" contract
-      // exactly when it matters. The visible bound is only a shutdown safety.
+      // document keeps a short bounded fallback. A visible viewport must
+      // prefer the true paint boundary even under heavy load; its longer
+      // bound exists only to keep shutdown finite.
       const armTimeout = () => {
         window.clearTimeout(timeout);
         timeout = window.setTimeout(
@@ -1325,7 +1325,7 @@ export default function ViewerPanel({
   // Section box controller for the viewer lifetime.
   useEffect(() => {
     if (!viewerReady || !viewerRef.current) return;
-    const { components, world } = viewerRef.current;
+    const { components, world, modelCenter } = viewerRef.current;
     const clipper = components.get(OBC.Clipper);
     const ctrl = new SectionBoxController(clipper, world as unknown as OBC.World);
     const workspaceCtrl = new LatestSectionWorkspaceController({
@@ -1342,6 +1342,13 @@ export default function ViewerPanel({
         } else {
           ctrl.disable();
         }
+        // Workspace planes are durable world-space definitions; the clip-plane
+        // sync effect consumes the reconciled store planes and re-enables the
+        // shared clipper, so no direct controller write happens here.
+        useStore.getState().applyWorkspaceClipPlanes(toRelativeClipPlaneStates(
+          definition,
+          [modelCenter.x, modelCenter.y, modelCenter.z],
+        ));
         requestFragmentUpdate('manual', false, 'camera');
       },
       onError: (error) => console.warn('Section workspace apply failed:', error),
@@ -1634,9 +1641,8 @@ export default function ViewerPanel({
         if (state.isolatedIds.length === 0 && state.hiddenIds.length === 0) {
           const camera = world.camera.three as THREE.Camera;
           if (spatialTileCuller?.isBuilt) {
-            // Mirror getSpatialTileViewOptions: the selection's tile must stay
-            // pinned through this idle hide pass, or unmerging can hide the
-            // just-selected element until the next camera settle.
+            // Mirror getSpatialTileViewOptions: the selection's tile stays
+            // pinned through this idle hide pass.
             const selectedExpressIds = new Set<number>([
               ...state.selectedIds,
               ...(state.selectedElementId == null ? [] : [state.selectedElementId]),
@@ -2002,11 +2008,9 @@ export default function ViewerPanel({
               });
             }
           } catch (tickError) {
-            // The controller is installed and owns the visibility layer now.
-            // Its initial hide pass can abort mid-orbit; the next camera
-            // settle re-applies it. Falling through to the retry loop here
-            // would install a second controller over this one and orphan its
-            // hides in the shared layer.
+            // The controller is installed and owns the visibility layer; the
+            // next camera settle re-applies the hide pass. Retrying the whole
+            // install would orphan this controller's hides in the shared layer.
             if (import.meta.env.DEV) {
               console.debug('[viewer] initial spatial tile tick deferred', tickError);
             }
@@ -2175,6 +2179,7 @@ export default function ViewerPanel({
     let viewHelperCleanup: (() => void) | null = null;
     let pixelRatioCleanup: (() => void) | null = null;
     let renderOnDemandCleanup: (() => void) | null = null;
+    let contextRecoveryCleanup: (() => void) | null = null;
     let zFightingCleanup: (() => void) | null = null;
     let fragmentUpdateScheduler: FragmentUpdateScheduler | null = null;
     let devPickAtHook: ((x: number, y: number) => Promise<{
@@ -2233,6 +2238,7 @@ export default function ViewerPanel({
           stencil: false,
           preserveDrawingBuffer: false,
         });
+        world.renderer.showLogo = false;
         try {
           const ppRenderer = world.renderer as unknown as OBCF.PostproductionRenderer;
           // Keep postprocessing manual-mode churn off when the composer is disabled.
@@ -2295,6 +2301,41 @@ export default function ViewerPanel({
           }
         }
         renderKickRef.current = renderKick;
+        // The @thatopen renderer recreates its THREE.WebGLRenderer on context
+        // restore, but application render state (selection highlights,
+        // visibility masks, ghost opacity) lives in the coordinator's applied
+        // caches and must be replayed onto the fresh GPU state.
+        {
+          const rendererCanvas = world.renderer!.three.domElement;
+          const onContextLost = () => {
+            useStore.getState().logActivity({
+              kind: 'error',
+              summary: 'WebGL context lost',
+              detail: 'Waiting for the browser to restore the 3D context.',
+            });
+          };
+          const onContextRestored = () => {
+            renderKick(600);
+            // repair() invalidates the applied caches, so visibility AND
+            // appearance replay in full - invalidateAppearance alone would
+            // leave hidden/isolated masks unrepainted.
+            void renderStateCoordinatorRef.current
+              ?.repair({ urgency: 'visual', reason: 'webgl-context-restored' })
+              .catch(() => {});
+            requestFragmentUpdate('manual');
+            useStore.getState().logActivity({
+              kind: 'info',
+              summary: 'WebGL context restored',
+              detail: 'Reapplied selection, visibility, and appearance state.',
+            });
+          };
+          rendererCanvas.addEventListener('webglcontextlost', onContextLost);
+          rendererCanvas.addEventListener('webglcontextrestored', onContextRestored);
+          contextRecoveryCleanup = () => {
+            rendererCanvas.removeEventListener('webglcontextlost', onContextLost);
+            rendererCanvas.removeEventListener('webglcontextrestored', onContextRestored);
+          };
+        }
         // Postproduction starts disabled until an effect needs it.
         try {
           const pp = (world.renderer as unknown as OBCF.PostproductionRenderer).postproduction;
@@ -2742,11 +2783,9 @@ export default function ViewerPanel({
             // returned promise is already the acknowledgement. Non-forced
             // camera work returns earlier and must wait for onViewUpdated.
             if (accepted && !force && !finished) {
-              // A no-change tick never emits FINISH. Holding the single-flight
-              // slot for the full watchdog is what queued clicks behind idle
-              // auto-redraw ticks for seconds, so newly enqueued immediate
-              // work preempts this wait and bounded silence resolves as a
-              // benign no-op acknowledgement rather than a failure.
+              // A no-change tick never emits FINISH. Newly enqueued immediate
+              // work preempts this wait so clicks never queue behind it, and
+              // bounded silence resolves as a benign no-op acknowledgement.
               let preempted = false;
               const preempt = () => {
                 preempted = true;
@@ -4185,10 +4224,9 @@ export default function ViewerPanel({
           };
         };
 
-        // Tiny models can skip coverage culling without a meaningful GPU cost.
-        // Medium/large models must retain DEFAULT view-dependent LOD; forcing
-        // ALL_VISIBLE here regressed the reported 1,032-element model to 828 draw calls
-        // and all 6.43M triangles during navigation.
+        // Small and medium models pin ALL_VISIBLE so no element ever pops in
+        // or out with camera distance; only large models keep the worker's
+        // coverage classifier (see lodTierPolicy.ts for the tier contract).
         void (async () => {
           try {
             const ids = await model.getLocalIds();
@@ -6044,6 +6082,7 @@ export default function ViewerPanel({
       viewHelperCleanup?.();
       pixelRatioCleanup?.();
       renderOnDemandCleanup?.();
+      contextRecoveryCleanup?.();
       // Dispose storey frustum culler (restores any auto-culled visibility)
       if (storeyFrustumCullerRef.current) {
         deferredTeardown.push(storeyFrustumCullerRef.current.dispose());
@@ -6606,6 +6645,8 @@ export default function ViewerPanel({
       hiddenIds: [...state.hiddenIds],
       selectedId: state.selectedElementId,
       highlightedIds: [...state.highlightedIds],
+      sectionWorkspace: state.sectionWorkspace,
+      sectionBoxEnabled: state.sectionBoxEnabled,
       thumbnail: captureThumbnail(),
     };
 
@@ -6640,6 +6681,20 @@ export default function ViewerPanel({
 
     state.setHighlightedIds(vp.highlightedIds);
     state.selectElement(vp.selectedId);
+
+    // Viewpoints saved before the section workspace existed lack these fields
+    // and must leave the current section state untouched.
+    if (vp.sectionWorkspace !== undefined || vp.sectionBoxEnabled !== undefined) {
+      // Persisted payloads are untrusted; parse validates and returns null on
+      // schema drift so a corrupt workspace clears instead of throwing.
+      const workspace = vp.sectionWorkspace ? parseSectionWorkspace(vp.sectionWorkspace) : null;
+      state.setSectionWorkspace(workspace);
+      // setSectionWorkspace derives enabled from the box; a workspace kept
+      // while temporarily disabled needs the saved flag re-applied after it.
+      if (typeof vp.sectionBoxEnabled === 'boolean') {
+        state.setSectionBoxEnabled(vp.sectionBoxEnabled);
+      }
+    }
 
     state.logActivity({
       kind: 'view',

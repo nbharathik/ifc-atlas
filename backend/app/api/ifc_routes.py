@@ -1994,15 +1994,18 @@ async def get_storey_fragment(
     """Return binary fragment bytes for one IfcBuildingStorey.
 
     Workflow (fastest first):
-    1. **Disk cache hit** - returns cached ``.frag`` bytes instantly (<20 ms).
-    2. **Sidecar convert** - serializes the storey to a sub-IFC via
+    1. **ID-preserving subset** - copies the storey's elements out of the
+       validated full fragment through the sidecar subset path (identity and
+       content parity proofs, original local-ID/GUID bridge preserved).
+    2. **Disk cache hit** - returns cached reconstruction ``.frag`` bytes.
+    3. **Sidecar convert** - serializes the storey to a sub-IFC via
        ``copy_deep``, sends to the Node sidecar, caches result, returns binary.
-    3. **Sub-IFC fallback** - when the sidecar is unavailable, returns raw
+    4. **Sub-IFC fallback** - when the sidecar is unavailable, returns raw
        sub-IFC bytes so the frontend can convert via ``IfcConvertWorker``.
 
     Response codes:
 
-    - ``200`` - binary bytes (check ``X-Fragment-Source`` for cache/sidecar/sub-ifc)
+    - ``200`` - binary bytes (check ``X-Fragment-Source`` for the source)
     - ``204`` - storey has no elements (no bytes to send)
     - ``400`` - no model loaded
     - ``404`` - SHA mismatch or storey index out of range
@@ -2010,10 +2013,11 @@ async def get_storey_fragment(
 
     Response headers:
 
-    - ``X-Fragment-Source`` - ``cache`` | ``sidecar`` | ``sub-ifc``
+    - ``X-Fragment-Source`` - ``storey-subset-cache`` |
+      ``storey-subset-sidecar`` | ``cache`` | ``sidecar`` | ``sub-ifc``
     - ``X-Fragment-Storey-Idx`` - storey index (mirrors ``idx``)
     - ``X-Fragment-Storey-Name`` - IfcBuildingStorey.Name
-    - ``X-Fragment-Elapsed-Ms`` - sidecar convert time (sidecar path only)
+    - ``X-Fragment-Elapsed-Ms`` - sidecar convert time (sub-IFC sidecar path only)
     """
     _check_loaded()
 
@@ -2026,22 +2030,72 @@ async def get_storey_fragment(
             f"requested {sha[:16]}…",
         )
 
-    # Fetch manifest (cached) to validate idx + check element count.
-    manifest = storey_splitter.get_manifest(ifc_service.model, current_sha)
+    model = ifc_service.model
 
-    if idx >= len(manifest.storeys):
+    def _resolve_storey():
+        # Fetch manifest (cached) to validate idx + check element count.
+        resolved = storey_splitter.get_manifest(model, current_sha)
+        if idx >= len(resolved.storeys):
+            return resolved, None, None
+        info = resolved.storeys[idx]
+        # The profile-dropped categories (openings under 'balanced', ...)
+        # physically cannot resolve in the cached fragment; the subset request
+        # and the response identity must both describe the convertible set.
+        convertible = filter_convertible_element_ids(
+            model, info.element_ids, "balanced"
+        )
+        return resolved, info, convertible
+
+    manifest, storey_info, convertible_ids = await asyncio.to_thread(_resolve_storey)
+
+    if storey_info is None:
         raise HTTPException(
             404,
             detail=f"Storey index {idx} out of range "
             f"(model has {len(manifest.storeys)} storeys)",
         )
 
-    storey_info = manifest.storeys[idx]
     if storey_info.element_count == 0:
         return Response(status_code=204)
 
-    # Check on-disk fragment cache.
     FRAGMENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    # ID-preserving subset of the validated full fragment first: it keeps the
+    # original local-ID/GUID bridge and carries the sidecar parity proofs.
+    try:
+        subset_bytes, subset_source = await get_or_build_spatial_fragment(
+            model=model,
+            fingerprint=current_sha,
+            profile="balanced",
+            subset_kind="storey",
+            subset_id=str(idx),
+            element_ids=convertible_ids or [],
+        )
+    except SpatialSubsetUnavailable:
+        pass  # fall back to sub-IFC reconstruction below
+    else:
+        subset_entry = subset_fragment_cache_entry(
+            FRAGMENT_CACHE_DIR,
+            current_sha,
+            "balanced",
+            subset_kind="storey",
+            subset_id=str(idx),
+            element_ids=convertible_ids or [],
+        )
+        return Response(
+            content=subset_bytes,
+            media_type="application/octet-stream",
+            headers={
+                "X-Fragment-Source": f"storey-subset-{subset_source}",
+                "X-Fragment-Source-Sha": current_sha,
+                "X-Fragment-Profile": "balanced",
+                "X-Fragment-Storey-Idx": str(idx),
+                "X-Fragment-Storey-Name": storey_info.name,
+                **_fragment_cache_key_headers(subset_entry),
+            },
+        )
+
+    # Check on-disk fragment cache.
     frag_cache_entry = storey_fragment_cache_entry(
         FRAGMENT_CACHE_DIR,
         current_sha,

@@ -345,6 +345,99 @@ def test_splitter_rebuilds_when_disk_artifact_checksum_is_corrupt(
     assert manifest.total_elements == 1
 
 
+def test_splitter_gc_removes_superseded_disk_artifacts(tmp_path, monkeypatch):
+    """A placement -> real identity transition deletes the stale artifact."""
+    _patched_ifcopenshell(monkeypatch)
+    elements = [
+        ElementAABB(element_id=1, aabb_min=(0.0, 0.0, 0.0), aabb_max=(1.0, 1.0, 1.0))
+    ]
+    storeys = SimpleNamespace(storeys=[SimpleNamespace(idx=0, element_ids=[1])])
+    monkeypatch.setattr(
+        "app.services.spatial_tile_splitter.extract_element_aabbs",
+        lambda _model, _storeys: elements,
+    )
+    splitter = SpatialTileSplitter(cache_dir=tmp_path)
+    splitter.get_manifest(MagicMock(), storeys, sha="gc-sha", grid_resolution=2)
+    first_artifact = next(tmp_path.glob("tiles-v1-*.json"))
+
+    splitter.get_manifest(
+        _model_with_elements([1]),
+        storeys,
+        sha="gc-sha",
+        grid_resolution=2,
+        aabb_lookup={1: ((0.0, 0.0, 0.0), (1.0, 1.0, 1.0))},
+    )
+
+    artifacts = list(tmp_path.glob("tiles-v1-*.json"))
+    assert len(artifacts) == 1
+    assert artifacts[0].name != first_artifact.name
+
+
+def test_splitter_gc_spares_other_sha_and_grid_artifacts(tmp_path, monkeypatch):
+    _patched_ifcopenshell(monkeypatch)
+    elements = [
+        ElementAABB(element_id=1, aabb_min=(0.0, 0.0, 0.0), aabb_max=(1.0, 1.0, 1.0))
+    ]
+    storeys = SimpleNamespace(storeys=[SimpleNamespace(idx=0, element_ids=[1])])
+    monkeypatch.setattr(
+        "app.services.spatial_tile_splitter.extract_element_aabbs",
+        lambda _model, _storeys: elements,
+    )
+    SpatialTileSplitter(cache_dir=tmp_path).get_manifest(
+        MagicMock(), storeys, sha="other-sha", grid_resolution=2
+    )
+    splitter = SpatialTileSplitter(cache_dir=tmp_path)
+    splitter.get_manifest(MagicMock(), storeys, sha="gc-sha", grid_resolution=4)
+    splitter.get_manifest(MagicMock(), storeys, sha="gc-sha", grid_resolution=2)
+    assert len(list(tmp_path.glob("tiles-v1-*.json"))) == 3
+
+    splitter.get_manifest(
+        _model_with_elements([1]),
+        storeys,
+        sha="gc-sha",
+        grid_resolution=2,
+        aabb_lookup={1: ((0.0, 0.0, 0.0), (1.0, 1.0, 1.0))},
+    )
+
+    survivors = []
+    for artifact in tmp_path.glob("tiles-v1-*.json"):
+        identity = json.loads(artifact.read_text(encoding="utf-8"))["identity"]
+        survivors.append((identity["source_sha256"], identity["grid_resolution"]))
+    assert sorted(survivors) == [("gc-sha", 2), ("gc-sha", 4), ("other-sha", 2)]
+
+
+def test_splitter_gc_deletion_failure_does_not_fail_publish(tmp_path, monkeypatch):
+    _patched_ifcopenshell(monkeypatch)
+    elements = [
+        ElementAABB(element_id=1, aabb_min=(0.0, 0.0, 0.0), aabb_max=(1.0, 1.0, 1.0))
+    ]
+    storeys = SimpleNamespace(storeys=[SimpleNamespace(idx=0, element_ids=[1])])
+    monkeypatch.setattr(
+        "app.services.spatial_tile_splitter.extract_element_aabbs",
+        lambda _model, _storeys: elements,
+    )
+    splitter = SpatialTileSplitter(cache_dir=tmp_path)
+    splitter.get_manifest(MagicMock(), storeys, sha="gc-sha", grid_resolution=2)
+
+    import app.services.spatial_tile_splitter as splitter_module
+
+    def _deny_remove(path):
+        raise PermissionError(f"locked: {path}")
+
+    monkeypatch.setattr(splitter_module.os, "remove", _deny_remove)
+    manifest = splitter.get_manifest(
+        _model_with_elements([1]),
+        storeys,
+        sha="gc-sha",
+        grid_resolution=2,
+        aabb_lookup={1: ((0.0, 0.0, 0.0), (1.0, 1.0, 1.0))},
+    )
+
+    assert manifest.total_elements == 1
+    # Both the superseded and the fresh artifact remain on disk.
+    assert len(list(tmp_path.glob("tiles-v1-*.json"))) == 2
+
+
 def test_splitter_different_grid_resolutions_cache_separately(monkeypatch):
     splitter = SpatialTileSplitter()
     monkeypatch.setattr(

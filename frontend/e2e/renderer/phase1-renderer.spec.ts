@@ -4,7 +4,9 @@ import { expect, test } from '@playwright/test';
 import {
   attachJson,
   captureDiagnostics,
+  findBackgroundPoint,
   findGeometryHit,
+  findGeometryHitWhere,
   finishFrameProbe,
   installBrowserProbe,
   loadIfcFixture,
@@ -12,6 +14,7 @@ import {
   readRenderStats,
   readViewerState,
   runOrbitBench,
+  sampleScreenRegion,
   startFrameProbe,
   waitForRenderStateIdle,
   type ViewerDiagnostics,
@@ -36,6 +39,9 @@ test.describe('Phase 1 IFC renderer regression', () => {
   );
 
   test('keeps painted geometry and selection stable through navigation and visibility modes', async ({ page }, testInfo) => {
+    // The pixel-sample and orbit-stress phases extend the original sequence;
+    // SwiftShader can consume nearly the whole load budget before they start.
+    test.setTimeout(LOAD_TIMEOUT_MS + 180_000);
     const pageErrors: string[] = [];
     const consoleErrors: string[] = [];
     const phaseDiagnostics: Record<string, unknown> = {};
@@ -114,9 +120,10 @@ test.describe('Phase 1 IFC renderer regression', () => {
         .toBeGreaterThan(0);
 
       // The probe runs across the WHOLE hide/show-all/isolate/ghost/restore
-      // sequence and is stopped explicitly by finishFrameProbe() after the
-      // final restore settles; 60 s is only a leak-prevention safety cap.
-      await startFrameProbe(page, 60_000);
+      // sequence plus the pixel-sample and orbit-stress phases, and is stopped
+      // explicitly by finishFrameProbe(); 120 s is only a leak-prevention
+      // safety cap sized for SwiftShader.
+      await startFrameProbe(page, 120_000);
 
       const hideBaseline = (await readRenderState(page)).generation;
       await page.keyboard.press('h');
@@ -160,6 +167,54 @@ test.describe('Phase 1 IFC renderer regression', () => {
       expect((await readRenderStats(page)).triangles).toBeGreaterThan(0);
       phaseDiagnostics.ghost = ghostState;
 
+      // Real-pixel proof that the amber selection highlight and the ghost
+      // opacity render simultaneously. The camera has orbited since the
+      // original click, so both sample points are re-located with the exact
+      // picker in the CURRENT view: in ghost mode every element is rendered,
+      // so the nearest pick hit is also the visually topmost surface.
+      const selectionPoint = await findGeometryHitWhere(
+        page,
+        canvas,
+        (expressId) => expressId === selectedId,
+      );
+      if (!selectionPoint) {
+        throw new Error('Exact pick could not relocate the selected element while ghost mode is active');
+      }
+      const ghostPoint = await findGeometryHitWhere(
+        page,
+        canvas,
+        (expressId) => expressId !== selectedId,
+        { avoid: selectionPoint, minAvoidDistancePx: 32 },
+      );
+      if (!ghostPoint) {
+        throw new Error('Exact pick found no ghosted element while ghost mode is active');
+      }
+      const backgroundPoint = await findBackgroundPoint(page, canvas);
+      const selectionSample = await sampleScreenRegion(page, selectionPoint.x, selectionPoint.y);
+      const ghostSample = await sampleScreenRegion(page, ghostPoint.x, ghostPoint.y);
+      const backgroundSample = backgroundPoint
+        ? await sampleScreenRegion(page, backgroundPoint.x, backgroundPoint.y)
+        : null;
+      phaseDiagnostics.ghostPixelSamples = {
+        selectionPoint,
+        ghostPoint,
+        backgroundPoint,
+        selectionSample,
+        ghostSample,
+        backgroundSample,
+      };
+      // Selection amber 0xf59e0b keeps red far above blue even after lighting
+      // modulation; SwiftShader and real GPUs shade it slightly differently,
+      // so the margins are deliberately tolerant.
+      expect(selectionSample.r).toBeGreaterThan(selectionSample.b + 16);
+      const selectionVsGhostDelta = Math.abs(selectionSample.r - ghostSample.r)
+        + Math.abs(selectionSample.g - ghostSample.g)
+        + Math.abs(selectionSample.b - ghostSample.b);
+      expect(selectionVsGhostDelta).toBeGreaterThan(24);
+      if (backgroundSample) {
+        expect(selectionSample.luminance).toBeGreaterThan(backgroundSample.luminance + 16);
+      }
+
       const ghostOrbit = await runOrbitBench(page, 1, 70);
       phaseDiagnostics.ghostOrbit = ghostOrbit;
       expect(ghostOrbit.triangles).toBeGreaterThan(0);
@@ -183,6 +238,45 @@ test.describe('Phase 1 IFC renderer regression', () => {
       expect((await readViewerState(page)).selectedElementId).toBe(selectedId);
       expect((await readRenderStats(page)).triangles).toBeGreaterThan(0);
       phaseDiagnostics.restored = restoredState;
+
+      // Orbit-stress phase (review scenario 1): the same visibility workflow
+      // is replayed while a scripted orbit is continuously navigating, then
+      // the final commanded state must win with the coordinator converged.
+      const stressOrbitPromise = runOrbitBench(page, 4, 300);
+      for (const key of ['h', 'a', 'i', 'Shift+g']) {
+        await page.keyboard.press(key);
+        await page.waitForTimeout(250);
+      }
+      // Idle after the stress must be observed on a generation newer than the
+      // one that existed before the final show-all was commanded.
+      const stressRestoreBaseline = (await readRenderState(page)).generation;
+      await page.keyboard.press('a');
+      const stressOrbit = await stressOrbitPromise;
+      phaseDiagnostics.orbitStress = stressOrbit;
+      expect(stressOrbit.frames).toBeGreaterThan(5);
+      expect(stressOrbit.drawCalls).toBeGreaterThan(0);
+      expect(stressOrbit.triangles).toBeGreaterThan(0);
+
+      await expect.poll(async () => {
+        const state = await readViewerState(page);
+        return {
+          hidden: state.hiddenIds.length,
+          isolated: state.isolatedIds.length,
+          ghost: state.ghostModeOn,
+        };
+      }).toEqual({ hidden: 0, isolated: 0, ghost: false });
+      await waitForRenderStateIdle(page, undefined, {
+        baselineGeneration: stressRestoreBaseline,
+      });
+      const stressRenderState = await readRenderState(page);
+      phaseDiagnostics.orbitStressRenderState = stressRenderState;
+      expect(stressRenderState.lastError).toBeNull();
+      expect(stressRenderState.appliedGeneration).toBe(stressRenderState.generation);
+      expect(stressRenderState.renderedGeneration).toBe(stressRenderState.generation);
+      expect(stressRenderState.effectiveHiddenCount).toBe(0);
+      expect(stressRenderState.opacityLayers['opacity:isolation-ghost']).toBeUndefined();
+      expect(stressRenderState.highlightLayers['appearance:selection']?.count).toBeGreaterThan(0);
+      expect((await readViewerState(page)).selectedElementId).toBe(selectedId);
 
       const transitionFrames = await finishFrameProbe(page);
       phaseDiagnostics.transitionFrames = transitionFrames;

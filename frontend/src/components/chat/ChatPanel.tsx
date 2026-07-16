@@ -261,7 +261,7 @@ function PendingEditApproval({
       <div className="tc-approval-info">
         <span className="tc-approval-label">Review edit</span>
         {summary && <span className="tc-approval-counts">{summary}</span>}
-        {outcome === 'error' && <span className="tc-approval-err">Apply failed — retry?</span>}
+        {outcome === 'error' && <span className="tc-approval-err">Apply failed - retry?</span>}
       </div>
       <div className="tc-approval-actions">
         <button

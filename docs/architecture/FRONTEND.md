@@ -117,7 +117,7 @@ fragment replacement state are unchanged. A cached miss never clears selection;
 all other clicks use the exact fragment-worker raycast. This is an exact-result
 reuse optimization, not GPU ID-buffer or tile-scoped coarse picking.
 
-## Phase 3 BIM interaction contracts — 15 July 2026
+## Phase 3 BIM interaction contracts - 15 July 2026
 
 ### Construction measurement and snapping
 
@@ -321,10 +321,10 @@ No renderer-side knob exists yet (no LOD threshold, no edge-detection toggle, no
 - `PROFILE_KNOBS: Record<ParseProfile, ProfileKnobs>`, per-profile knob snapshot.
 - `diffProfileKnobs(a, b)` → `ProfileKnob[]`, deterministic order, `[]` when `a === b`.
 - `decideProfileTransition({ prev, next, modelLoaded })` → `{ kind, reason, changedKnobs }`:
-  - `'noop'` (`prev === next`)
-  - `'noop-no-model'`, just persist the pref; next load consumes it.
-  - `'tweak-in-place'`, reserved for a future renderer-side knob; **unreachable today**.
-  - `'reload-required'`, at least one parse-time knob differs; needs a re-parse.
+ - `'noop'` (`prev === next`)
+ - `'noop-no-model'`, just persist the pref; next load consumes it.
+ - `'tweak-in-place'`, reserved for a future renderer-side knob; **unreachable today**.
+ - `'reload-required'`, at least one parse-time knob differs; needs a re-parse.
 - `tallyProfileTransitions(stream)`, `noop` / `noopNoModel` / `tweakInPlace` / `reloadRequired` / `total` counters for telemetry + regression pinning.
 
 Pin for the regression: any future wire-up that lets `tweak-in-place` fire must (a) add the corresponding renderer-side knob to `KNOB_REBUILD_REQUIREMENT` and (b) flip the audit test that asserts `tweak-in-place` is unreachable.

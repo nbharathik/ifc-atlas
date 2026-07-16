@@ -24,6 +24,16 @@ const LOAD_TIMEOUT_MS = Number.isFinite(configuredLoadTimeoutMs)
   && configuredLoadTimeoutMs > 0
   ? configuredLoadTimeoutMs
   : 480_000;
+// Opt-in calibrated gate: unset keeps the click window record-only, because a
+// universal latency budget is meaningless across SwiftShader and real GPUs.
+const configuredClickP95BudgetMs = Number.parseInt(
+  process.env.IFC_E2E_CLICK_P95_BUDGET_MS ?? '',
+  10,
+);
+const CLICK_P95_BUDGET_MS = Number.isFinite(configuredClickP95BudgetMs)
+  && configuredClickP95BudgetMs > 0
+  ? configuredClickP95BudgetMs
+  : null;
 
 test.describe('Phase 4 click-selection regression', () => {
   test.skip(
@@ -124,7 +134,20 @@ test.describe('Phase 4 click-selection regression', () => {
           medianMs: finalPerf.clickToHighlightMedianMs,
           p95Ms: finalPerf.clickToHighlightP95Ms,
           maxMs: finalPerf.clickToHighlightMaxMs,
+          budgetMs: CLICK_P95_BUDGET_MS,
         };
+        if (CLICK_P95_BUDGET_MS != null) {
+          expect(
+            finalPerf.clickToHighlightP95Ms,
+            'IFC_E2E_CLICK_P95_BUDGET_MS is set but no click p95 was recorded',
+          ).not.toBeNull();
+          expect(finalPerf.clickToHighlightP95Ms ?? Number.POSITIVE_INFINITY)
+            .toBeLessThanOrEqual(CLICK_P95_BUDGET_MS);
+        }
+      } else if (CLICK_P95_BUDGET_MS != null) {
+        throw new Error(
+          'IFC_E2E_CLICK_P95_BUDGET_MS is set but the canvas bounding box was unavailable for the latency window',
+        );
       }
       finalDiagnostics = await captureDiagnostics(page);
     } catch (error) {

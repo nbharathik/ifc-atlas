@@ -25,8 +25,8 @@ export default function StatusBar() {
 
   return (
     <div className="stats-bar">
-      <span className="status-item">
-        <span className={`status-dot-live ${dotClass}`} />
+      <span className="status-item" role="status" aria-live="polite" aria-atomic="true">
+        <span className={`status-dot-live ${dotClass}`} aria-hidden="true" />
         {statusLabel}
       </span>
       <span className="stats-separator" />

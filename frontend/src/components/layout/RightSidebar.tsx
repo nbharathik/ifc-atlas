@@ -10,6 +10,7 @@ import ResizeHandle from './ResizeHandle';
 import { BROWSER_ONLY } from '../../config/featureFlags';
 import Icon from '../ui/Icon';
 import type { IconName } from '../ui/Icon';
+import { nextHorizontalTabIndex } from './tabKeyboardNavigation';
 
 interface RightSidebarProps {
   onSaveViewpoint: (name: string) => void;
@@ -41,6 +42,7 @@ export default function RightSidebar({
   const focusRightTab = useStore((s) => s.focusRightTab);
   const setRightSidebarOpen = useStore((s) => s.setRightSidebarOpen);
   const expanded = useStore((s) => s.rightSidebarExpanded);
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   // Horizontal scroll fallback - by default the browser's mousewheel only
   // scrolls vertically, which is invisible on a `overflow-x: auto` row.
@@ -93,9 +95,20 @@ export default function RightSidebar({
       badge: activityCount > 0 ? (activityCount > 99 ? '99+' : String(activityCount)) : undefined,
     },
   ];
+  const visibleActiveTab = tabs.some((tab) => tab.id === activeTab)
+    ? activeTab
+    : tabs[0].id;
+
+  const onTabKeyDown = (event: React.KeyboardEvent, index: number) => {
+    const nextIndex = nextHorizontalTabIndex(index, tabs.length, event.key);
+    if (nextIndex === null) return;
+    event.preventDefault();
+    focusRightTab(tabs[nextIndex].id);
+    tabRefs.current[nextIndex]?.focus();
+  };
 
   const renderActive = () => {
-    switch (activeTab) {
+    switch (visibleActiveTab) {
       case 'props': return <PropertiesPanel embedded />;
       case 'views':
         return (
@@ -126,20 +139,30 @@ export default function RightSidebar({
           max={640}
         />
       )}
-      <nav className="itabs" aria-label="Inspector tabs" role="tablist">
+      <nav
+        className="itabs"
+        aria-label="Inspector tabs"
+        role="tablist"
+        aria-orientation="horizontal"
+      >
         <div
           className="itabs-scroll"
           ref={scrollRef}
           onWheel={onWheel}
         >
-          {tabs.map((t) => (
+          {tabs.map((t, index) => (
             <button
               key={t.id}
-              className={`itab ${t.id === activeTab ? 'active' : ''}`}
+              ref={(element) => { tabRefs.current[index] = element; }}
+              id={`inspector-tab-${t.id}`}
+              className={`itab ${t.id === visibleActiveTab ? 'active' : ''}`}
               onClick={() => focusRightTab(t.id)}
+              onKeyDown={(event) => onTabKeyDown(event, index)}
               title={t.shortcut ? `${t.label} (${t.shortcut})` : t.label}
               role="tab"
-              aria-selected={t.id === activeTab}
+              aria-selected={t.id === visibleActiveTab}
+              aria-controls={`inspector-panel-${t.id}`}
+              tabIndex={t.id === visibleActiveTab ? 0 : -1}
             >
               <span className="itab-icon"><Icon name={t.icon} size={12} /></span>
               <span className="itab-label">{t.label}</span>
@@ -164,7 +187,12 @@ export default function RightSidebar({
           <Icon name="x" size={11} />
         </button>
       </nav>
-      <div className="right-tab-body">
+      <div
+        className="right-tab-body"
+        id={`inspector-panel-${visibleActiveTab}`}
+        role="tabpanel"
+        aria-labelledby={`inspector-tab-${visibleActiveTab}`}
+      >
         {renderActive()}
       </div>
     </aside>

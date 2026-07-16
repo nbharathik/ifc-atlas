@@ -5,6 +5,8 @@ with synthetic ElementAABB lists, and the extraction wrapper is exercised
 with MagicMock IFC model objects. Safe on Windows / Python 3.13.
 """
 
+import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,8 +14,6 @@ import pytest
 from app.services.spatial_tile_splitter import (
     ElementAABB,
     SpatialTileSplitter,
-    TileInfo,
-    TileManifest,
     _cell_index,
     _placement_point,
     compute_world_aabb,
@@ -260,6 +260,91 @@ def test_splitter_cache_hit_returns_same_instance(monkeypatch):
     assert a is b
 
 
+def test_splitter_disk_artifact_survives_process_restart(tmp_path, monkeypatch):
+    elements = [
+        ElementAABB(
+            element_id=1,
+            aabb_min=(0.0, 0.0, 0.0),
+            aabb_max=(1.0, 1.0, 1.0),
+        ),
+        ElementAABB(
+            element_id=2,
+            aabb_min=(10.0, 10.0, 0.0),
+            aabb_max=(11.0, 11.0, 1.0),
+        ),
+    ]
+    storeys = SimpleNamespace(
+        storeys=[SimpleNamespace(idx=0, element_ids=[1, 2])]
+    )
+    monkeypatch.setattr(
+        "app.services.spatial_tile_splitter.extract_element_aabbs",
+        lambda _model, _storeys: elements,
+    )
+    first_splitter = SpatialTileSplitter(cache_dir=tmp_path)
+    first = first_splitter.get_manifest(
+        MagicMock(), storeys, sha="disk-sha", grid_resolution=2
+    )
+    artifacts = list(tmp_path.glob("tiles-v1-*.json"))
+    assert len(artifacts) == 1
+
+    def _must_not_rebuild(_model, _storeys):
+        raise AssertionError("valid disk artifact should bypass IFC extraction")
+
+    monkeypatch.setattr(
+        "app.services.spatial_tile_splitter.extract_element_aabbs",
+        _must_not_rebuild,
+    )
+    restarted = SpatialTileSplitter(cache_dir=tmp_path)
+    second = restarted.get_manifest(
+        MagicMock(), storeys, sha="disk-sha", grid_resolution=2
+    )
+
+    assert second is not first
+    assert second.tiles == first.tiles
+    assert restarted.aabb_source("disk-sha", 2) == "placement"
+
+
+def test_splitter_rebuilds_when_disk_artifact_checksum_is_corrupt(
+    tmp_path, monkeypatch
+):
+    elements = [
+        ElementAABB(
+            element_id=7,
+            aabb_min=(0.0, 0.0, 0.0),
+            aabb_max=(1.0, 1.0, 1.0),
+        )
+    ]
+    storeys = SimpleNamespace(storeys=[SimpleNamespace(idx=0, element_ids=[7])])
+    monkeypatch.setattr(
+        "app.services.spatial_tile_splitter.extract_element_aabbs",
+        lambda _model, _storeys: elements,
+    )
+    SpatialTileSplitter(cache_dir=tmp_path).get_manifest(
+        MagicMock(), storeys, sha="corrupt-sha", grid_resolution=2
+    )
+    artifact = next(tmp_path.glob("tiles-v1-*.json"))
+    document = json.loads(artifact.read_text(encoding="utf-8"))
+    document["payload"]["total_elements"] = 999
+    artifact.write_text(json.dumps(document), encoding="utf-8")
+
+    rebuilds = 0
+
+    def _rebuild(_model, _storeys):
+        nonlocal rebuilds
+        rebuilds += 1
+        return elements
+
+    monkeypatch.setattr(
+        "app.services.spatial_tile_splitter.extract_element_aabbs", _rebuild
+    )
+    manifest = SpatialTileSplitter(cache_dir=tmp_path).get_manifest(
+        MagicMock(), storeys, sha="corrupt-sha", grid_resolution=2
+    )
+
+    assert rebuilds == 1
+    assert manifest.total_elements == 1
+
+
 def test_splitter_different_grid_resolutions_cache_separately(monkeypatch):
     splitter = SpatialTileSplitter()
     monkeypatch.setattr(
@@ -283,12 +368,31 @@ def test_splitter_clear_cache_one_sha(monkeypatch):
         "app.services.spatial_tile_splitter.extract_element_aabbs",
         lambda m, s: [],
     )
+    # Two grids of the same model coexist; clear_cache drops them together.
     splitter.get_manifest(MagicMock(), MagicMock(), sha="aaa", grid_resolution=2)
-    splitter.get_manifest(MagicMock(), MagicMock(), sha="bbb", grid_resolution=2)
+    splitter.get_manifest(MagicMock(), MagicMock(), sha="aaa", grid_resolution=4)
     assert splitter.cache_size() == 2
 
     splitter.clear_cache("aaa")
+    assert splitter.cache_size() == 0
+
+
+def test_splitter_evicts_other_models_on_build(monkeypatch):
+    """Building for a new fingerprint drops manifests of previously loaded
+    models - single-model sessions never revisit an old fingerprint, and each
+    retained manifest holds a full element-ID list."""
+    splitter = SpatialTileSplitter()
+    monkeypatch.setattr(
+        "app.services.spatial_tile_splitter.extract_element_aabbs",
+        lambda m, s: [],
+    )
+    splitter.get_manifest(MagicMock(), MagicMock(), sha="aaa", grid_resolution=2)
+    splitter.get_manifest(MagicMock(), MagicMock(), sha="aaa", grid_resolution=4)
+    splitter.get_manifest(MagicMock(), MagicMock(), sha="bbb", grid_resolution=2)
     assert splitter.cache_size() == 1
+    assert splitter.aabb_source("bbb", 2) == "placement"
+    # Evicted entries fall back to the cold default.
+    assert splitter.aabb_source("aaa", 2) == "placement"
 
 
 def test_splitter_clear_cache_all(monkeypatch):
@@ -436,3 +540,66 @@ def test_splitter_clear_cache_drops_source_too(monkeypatch):
     splitter.clear_cache("sha-clr")
     # After eviction, fallback to default 'placement'.
     assert splitter.aabb_source("sha-clr", 2) == "placement"
+
+
+# ── Feature-element exclusion (algorithm v2) ────────────────────────────────
+
+
+def test_extract_element_aabbs_excludes_feature_elements():
+    """Openings and other IfcFeatureElement subtypes never join a tile.
+
+    Every conversion profile except 'quality' drops them from the fragment,
+    so a tile listing one can never pass the fail-closed subset proof.
+    """
+    wall = _mock_element(1, (0.0, 0.0, 0.0))
+    wall.is_a.return_value = False
+    opening = _mock_element(2, (1.0, 0.0, 0.0))
+    opening.is_a.return_value = True
+    model = MagicMock()
+    model.by_type.return_value = [wall, opening]
+    manifest = MagicMock()
+    manifest.storeys = []
+
+    out = extract_element_aabbs(model, manifest)
+
+    assert [a.element_id for a in out] == [1]
+    opening.is_a.assert_called_with("IfcFeatureElement")
+
+
+def test_extract_from_cache_excludes_feature_elements():
+    wall = _mock_element(1, (0.0, 0.0, 0.0))
+    wall.is_a.return_value = False
+    opening = _mock_element(2, (1.0, 0.0, 0.0))
+    opening.is_a.return_value = True
+    model = MagicMock()
+    model.by_type.return_value = [wall, opening]
+    manifest = MagicMock()
+    manifest.storeys = []
+    lookup = {
+        1: ((0.0, 0.0, 0.0), (1.0, 1.0, 1.0)),
+        2: ((1.0, 0.0, 0.0), (2.0, 1.0, 1.0)),
+    }
+
+    out, source = extract_element_aabbs_from_cache(model, manifest, lookup)
+
+    assert [a.element_id for a in out] == [1]
+    assert source == "real"
+
+
+def test_extract_element_aabbs_keeps_elements_with_mock_is_a():
+    """Non-boolean is_a results (mocks, exotic wrappers) must be kept.
+
+    Excluding on a truthy-but-not-True result could silently drop real
+    geometry; keeping it only defers to the fail-closed subset proof.
+    """
+    el = _mock_element(1, (0.0, 0.0, 0.0))
+    # MagicMock() return value is truthy but not the literal True.
+    assert el.is_a("IfcFeatureElement") is not True
+    model = MagicMock()
+    model.by_type.return_value = [el]
+    manifest = MagicMock()
+    manifest.storeys = []
+
+    out = extract_element_aabbs(model, manifest)
+
+    assert [a.element_id for a in out] == [1]

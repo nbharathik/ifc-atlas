@@ -56,6 +56,19 @@ from app.models.ifc_models import (
 )
 from app.services.aabb_service import aabb_service
 from app.services.frag_delta_service import frag_delta_service
+from app.services.fragment_cache import (
+    FRAGMENT_ARTIFACT_SCHEMA_VERSION,
+    FragmentCacheEntry,
+    atomic_write_fragment_cache,
+    fragments_format_version,
+    full_fragment_cache_entry,
+    inspect_fragment_cache,
+    lod_fragment_cache_entry,
+    read_fragment_cache,
+    safe_cache_component,
+    storey_fragment_cache_entry,
+    subset_fragment_cache_entry,
+)
 from app.services.fragment_prebuild_service import fragment_prebuild_service
 from app.services.ids_service import (
     IDS_ENGINE,
@@ -69,7 +82,7 @@ from app.services.ifc_service import ifc_service
 from app.services.lod_service import (
     LodUnavailable,
     get_or_build_lod_fragment,
-    lod_frag_cache_path,
+    is_lod_fragment_cached,
 )
 from app.services.metadata_index_service import metadata_index_service
 from app.services.model_health import run_health_check
@@ -77,9 +90,18 @@ from app.services.readiness_service import broadcast_readiness_changed, readines
 from app.services.model_sync import model_sync_broker
 from app.services.operation_service import Actor, operation_service
 from app.services.patch_generator import patch_generator
+from app.services.property_filter_index import (
+    PropertyFilterCondition as IndexedPropertyFilterCondition,
+    property_filter_index,
+)
 from app.services.sandbox_service import sandbox_service
 from app.services.sidecar_manager import sidecar_manager
 from app.services.spatial_tile_splitter import spatial_tile_splitter
+from app.services.spatial_fragment_service import (
+    SpatialSubsetUnavailable,
+    filter_convertible_element_ids,
+    get_or_build_spatial_fragment,
+)
 from app.services.storey_splitter import storey_splitter
 
 from app.models.metadata_index_models import NativeParseResponse
@@ -87,6 +109,18 @@ from app.models.metadata_index_models import NativeParseResponse
 router = APIRouter(prefix="/api/ifc", tags=["ifc"])
 
 _IFC_UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+def _full_fragment_entry(fingerprint: str, profile: str) -> FragmentCacheEntry:
+    return full_fragment_cache_entry(FRAGMENT_CACHE_DIR, fingerprint, profile)
+
+
+def _fragment_cache_key_headers(entry: FragmentCacheEntry) -> dict[str, str]:
+    return {
+        "X-Fragment-Cache-Key": entry.key.digest,
+        "X-Fragment-Artifact-Schema": str(FRAGMENT_ARTIFACT_SCHEMA_VERSION),
+        "X-Fragments-Format-Version": fragments_format_version(entry),
+    }
 
 
 def _format_upload_cap(size_bytes: int) -> str:
@@ -270,10 +304,11 @@ async def upload_ifc(
 
     FRAGMENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     if prebuild_fragments:
-        prebuild_cache_path = FRAGMENT_CACHE_DIR / f"{source_sha}-{prebuild_profile}.frag"
-        if prebuild_cache_path.exists():
+        prebuild_entry = _full_fragment_entry(source_sha, prebuild_profile)
+        prebuild_info = inspect_fragment_cache(prebuild_entry)
+        if prebuild_info is not None:
             await fragment_prebuild_service.mark_complete(
-                source_sha, prebuild_profile, size_bytes=prebuild_cache_path.stat().st_size
+                source_sha, prebuild_profile, size_bytes=prebuild_info.size_bytes
             )
         # A cold cache is registered inflight by the background task itself,
         # right before it starts converting. Registering it here as well made
@@ -296,10 +331,11 @@ async def upload_ifc(
         if prebuild_fragments:
             FRAGMENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
             for profile in (prebuild_profile,):
-                cache_path = FRAGMENT_CACHE_DIR / f"{source_sha}-{profile}.frag"
-                if cache_path.exists():
+                cache_entry = _full_fragment_entry(source_sha, profile)
+                cache_info = inspect_fragment_cache(cache_entry)
+                if cache_info is not None:
                     await fragment_prebuild_service.mark_complete(
-                        source_sha, profile, size_bytes=cache_path.stat().st_size
+                        source_sha, profile, size_bytes=cache_info.size_bytes
                     )
                     continue
                 # Dedupe: if the viewer kicked off /convert for this same SHA
@@ -313,7 +349,10 @@ async def upload_ifc(
                     final = await fragment_prebuild_service.wait_for(
                         source_sha, profile, timeout_s=120.0
                     )
-                    if final.status == "complete" and cache_path.exists():
+                    if (
+                        final.status == "complete"
+                        and inspect_fragment_cache(cache_entry) is not None
+                    ):
                         continue
                     # Inflight task failed or timed out - fall through and retry.
                 await fragment_prebuild_service.register_inflight(source_sha, profile)
@@ -333,7 +372,7 @@ async def upload_ifc(
                         logger.warning(msg)
                         await fragment_prebuild_service.mark_failed(source_sha, profile, error=msg)
                         continue
-                    cache_path.write_bytes(frag_bytes)
+                    atomic_write_fragment_cache(cache_entry, frag_bytes)
                     await fragment_prebuild_service.mark_complete(
                         source_sha, profile, size_bytes=len(frag_bytes)
                     )
@@ -1063,8 +1102,8 @@ def _prewarm_fragments_after_geometry_edit() -> None:
     if not fingerprint or not ifc_bytes:
         return
 
-    cache_path = FRAGMENT_CACHE_DIR / f"{fingerprint}-{_PREWARM_PROFILE}.frag"
-    if cache_path.exists():
+    cache_entry = _full_fragment_entry(fingerprint, _PREWARM_PROFILE)
+    if inspect_fragment_cache(cache_entry) is not None:
         return  # already warm (e.g. an undo back to a prior state)
 
     async def _run() -> None:
@@ -1085,7 +1124,7 @@ def _prewarm_fragments_after_geometry_edit() -> None:
                     fingerprint, _PREWARM_PROFILE, error="empty fragment"
                 )
                 return
-            cache_path.write_bytes(frag_bytes)
+            atomic_write_fragment_cache(cache_entry, frag_bytes)
             await fragment_prebuild_service.mark_complete(
                 fingerprint, _PREWARM_PROFILE, size_bytes=len(frag_bytes)
             )
@@ -1731,19 +1770,27 @@ async def get_tile_manifest(
     """
     _check_loaded()
     sha = ifc_service._model_fingerprint  # noqa: SLF001
-    storey_manifest = storey_splitter.get_manifest(ifc_service.model, sha)
-    # Feed the AABB cache when warm; the splitter transparently falls
-    # back to placement-origin point AABBs for any element missing from
-    # the cache.
-    aabb_lookup = aabb_service.get_all_aabbs(sha) if sha else {}
-    manifest = spatial_tile_splitter.get_manifest(
-        ifc_service.model,
-        storey_manifest,
-        sha,
-        grid_resolution=grid,
-        aabb_lookup=aabb_lookup or None,
-    )
-    aabb_source = spatial_tile_splitter.aabb_source(sha, grid)
+    model = ifc_service.model
+
+    def _build_manifest():
+        storey_manifest = storey_splitter.get_manifest(model, sha)
+        # Feed the AABB cache when warm; the splitter transparently falls
+        # back to placement-origin point AABBs for any element missing from
+        # the cache.
+        aabb_lookup = aabb_service.get_all_aabbs(sha) if sha else {}
+        built = spatial_tile_splitter.get_manifest(
+            model,
+            storey_manifest,
+            sha,
+            grid_resolution=grid,
+            aabb_lookup=aabb_lookup or None,
+        )
+        return built, spatial_tile_splitter.aabb_source(sha, grid)
+
+    # Manifest construction copies the full AABB map and recomputes the
+    # identity digest over every element - CPU work that must not freeze
+    # convert polls and websockets on the event loop.
+    manifest, aabb_source = await asyncio.to_thread(_build_manifest)
     return TileManifest(
         source_sha256=manifest.source_sha256,
         grid_resolution=manifest.grid_resolution,
@@ -1765,6 +1812,103 @@ async def get_tile_manifest(
             )
             for t in manifest.tiles
         ],
+    )
+
+
+@router.get("/fragments/tile")
+async def get_spatial_tile_fragment(
+    sha: str = Query(..., description="SHA-256 fingerprint of the loaded IFC model"),
+    tile_id: str = Query(..., min_length=1, max_length=96),
+    grid: int = Query(2, ge=1, le=16, description="NxN grid resolution per storey"),
+    profile: Literal["quality", "balanced", "performance", "ultra_fast"] = Query(
+        "balanced"
+    ),
+):
+    """Return an independently loadable, ID-preserving spatial tile fragment.
+
+    Tiles are copied from the validated full fragment with the fragments
+    library's dependency-aware subset authoring path.  The sidecar reloads the
+    result and proves local-ID/GUID plus geometry/material parity before the
+    backend publishes it to the versioned cache.
+    """
+
+    _check_loaded()
+    current_sha: str = ifc_service._model_fingerprint  # noqa: SLF001
+    if sha != current_sha:
+        raise HTTPException(
+            404,
+            detail=f"SHA mismatch: loaded model is {current_sha[:16]}..., "
+            f"requested {sha[:16]}...",
+        )
+
+    model = ifc_service.model
+
+    def _resolve_tile():
+        storey_manifest = storey_splitter.get_manifest(model, current_sha)
+        aabb_lookup = aabb_service.get_all_aabbs(current_sha)
+        manifest = spatial_tile_splitter.get_manifest(
+            model,
+            storey_manifest,
+            current_sha,
+            grid_resolution=grid,
+            aabb_lookup=aabb_lookup or None,
+        )
+        found = next(
+            (candidate for candidate in manifest.tiles if candidate.tile_id == tile_id),
+            None,
+        )
+        if found is None:
+            return None, None, ""
+        # The profile-dropped categories (openings under 'balanced', ...)
+        # physically cannot resolve in the cached fragment; the subset request
+        # and the response identity must both describe the convertible set.
+        convertible = filter_convertible_element_ids(
+            model, found.element_ids, profile
+        )
+        # Capture the AABB provenance before the async subset build below - a
+        # background AABB warm-up completing mid-request must not relabel
+        # this response's manifest identity.
+        return found, convertible, spatial_tile_splitter.aabb_source(current_sha, grid)
+
+    tile, convertible_ids, aabb_source = await asyncio.to_thread(_resolve_tile)
+    if tile is None:
+        raise HTTPException(
+            404,
+            detail=f"Tile {tile_id!r} is not present in the grid={grid} manifest",
+        )
+
+    try:
+        fragment_bytes, source = await get_or_build_spatial_fragment(
+            model=model,
+            fingerprint=current_sha,
+            profile=profile,
+            subset_kind=f"tile-g{grid}",
+            subset_id=tile.tile_id,
+            element_ids=convertible_ids or [],
+        )
+    except SpatialSubsetUnavailable as exc:
+        raise HTTPException(503, detail=str(exc)) from exc
+
+    cache_entry = subset_fragment_cache_entry(
+        FRAGMENT_CACHE_DIR,
+        current_sha,
+        profile,
+        subset_kind=f"tile-g{grid}",
+        subset_id=tile.tile_id,
+        element_ids=convertible_ids or [],
+    )
+    return Response(
+        content=fragment_bytes,
+        media_type="application/octet-stream",
+        headers={
+            "X-Fragment-Source": f"tile-{source}",
+            "X-Fragment-Source-Sha": current_sha,
+            "X-Fragment-Profile": profile,
+            "X-Fragment-Tile-Id": tile.tile_id,
+            "X-Fragment-Grid": str(grid),
+            "X-Fragment-AABB-Source": aabb_source,
+            **_fragment_cache_key_headers(cache_entry),
+        },
     )
 
 
@@ -1898,16 +2042,23 @@ async def get_storey_fragment(
 
     # Check on-disk fragment cache.
     FRAGMENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    frag_cache_path = FRAGMENT_CACHE_DIR / f"{current_sha}-s{idx}.frag"
+    frag_cache_entry = storey_fragment_cache_entry(
+        FRAGMENT_CACHE_DIR,
+        current_sha,
+        idx,
+        profile="balanced",
+    )
+    cached_storey = read_fragment_cache(frag_cache_entry)
 
-    if frag_cache_path.exists():
+    if cached_storey is not None:
         return Response(
-            content=frag_cache_path.read_bytes(),
+            content=cached_storey,
             media_type="application/octet-stream",
             headers={
                 "X-Fragment-Source": "cache",
                 "X-Fragment-Storey-Idx": str(idx),
                 "X-Fragment-Storey-Name": storey_info.name,
+                **_fragment_cache_key_headers(frag_cache_entry),
             },
         )
 
@@ -1929,8 +2080,8 @@ async def get_storey_fragment(
                 model_id=f"storey-{current_sha[:8]}-s{idx}",
             )
             try:
-                frag_cache_path.write_bytes(frag_bytes)
-            except OSError:
+                atomic_write_fragment_cache(frag_cache_entry, frag_bytes)
+            except (OSError, ValueError):
                 pass
             return Response(
                 content=frag_bytes,
@@ -1940,6 +2091,7 @@ async def get_storey_fragment(
                     "X-Fragment-Storey-Idx": str(idx),
                     "X-Fragment-Storey-Name": storey_info.name,
                     "X-Fragment-Elapsed-Ms": str(meta.get("elapsedMs", 0)),
+                    **_fragment_cache_key_headers(frag_cache_entry),
                 },
             )
         except RuntimeError:
@@ -2013,6 +2165,7 @@ async def convert_ifc_to_fragments(
       - `X-Fragment-Profile`: resolved profile
       - `X-Fragment-Elapsed-Ms`: sidecar conversion time (only when fresh)
       - `X-Fragment-Source-Sha256`: sha256 of the input IFC
+      - `X-Fragments-Format-Version`: producing @thatopen/fragments version
     """
     started = time.perf_counter()
     ifc_bytes = await request.body()
@@ -2020,7 +2173,12 @@ async def convert_ifc_to_fragments(
         raise HTTPException(400, "empty body; POST the IFC bytes as octet-stream")
     _enforce_ifc_upload_size(len(ifc_bytes))
 
-    source_sha = hashlib.sha256(ifc_bytes).hexdigest()
+    # Hashing a multi-hundred-MB upload and checksum-verifying the cached
+    # artifact are CPU-bound; run both off the event loop so convert-progress
+    # polls and websockets stay responsive.
+    source_sha = await asyncio.to_thread(
+        lambda: hashlib.sha256(ifc_bytes).hexdigest()
+    )
     logger.info(
         "IFC convert request: sha=%s profile=%s model_id=%s input=%.2fMB",
         source_sha[:12],
@@ -2029,7 +2187,7 @@ async def convert_ifc_to_fragments(
         len(ifc_bytes) / (1024 * 1024),
     )
     FRAGMENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_path = FRAGMENT_CACHE_DIR / f"{source_sha}-{profile}.frag"
+    cache_entry = _full_fragment_entry(source_sha, profile)
 
     if no_cache:
         logger.info(
@@ -2038,21 +2196,25 @@ async def convert_ifc_to_fragments(
             profile,
         )
 
-    if not no_cache and cache_path.exists():
+    cached_bytes = None if no_cache else await asyncio.to_thread(
+        read_fragment_cache, cache_entry
+    )
+    if cached_bytes is not None:
         logger.info(
             "IFC convert cache hit: sha=%s profile=%s size=%.2fMB elapsed_ms=%.1f",
             source_sha[:12],
             profile,
-            cache_path.stat().st_size / (1024 * 1024),
+            len(cached_bytes) / (1024 * 1024),
             (time.perf_counter() - started) * 1000,
         )
         return Response(
-            content=cache_path.read_bytes(),
+            content=cached_bytes,
             media_type="application/octet-stream",
             headers={
                 "X-Fragment-Source": "cache",
                 "X-Fragment-Profile": profile,
                 "X-Fragment-Source-Sha256": source_sha,
+                **_fragment_cache_key_headers(cache_entry),
             },
         )
 
@@ -2066,22 +2228,24 @@ async def convert_ifc_to_fragments(
         prebuild_report = await fragment_prebuild_service.wait_for(
             source_sha, profile, timeout_s=30.0
         )
-        if cache_path.exists():
+        cached_bytes = read_fragment_cache(cache_entry)
+        if cached_bytes is not None:
             logger.info(
                 "IFC convert prebuild hit: sha=%s profile=%s size=%.2fMB elapsed_ms=%.1f",
                 source_sha[:12],
                 profile,
-                cache_path.stat().st_size / (1024 * 1024),
+                len(cached_bytes) / (1024 * 1024),
                 (time.perf_counter() - started) * 1000,
             )
             return Response(
-                content=cache_path.read_bytes(),
+                content=cached_bytes,
                 media_type="application/octet-stream",
                 headers={
                     "X-Fragment-Source": "cache",
                     "X-Fragment-Profile": profile,
                     "X-Fragment-Elapsed-Ms": str(prebuild_report.elapsed_ms or 0),
                     "X-Fragment-Source-Sha256": source_sha,
+                    **_fragment_cache_key_headers(cache_entry),
                 },
             )
 
@@ -2129,18 +2293,28 @@ async def convert_ifc_to_fragments(
     # When no_cache=1 we skip the write so the toggle truly disables reuse
     # (otherwise the next "uncached" request would still see this file in
     # cache_path on a subsequent toggle-on).
+    cache_persisted = False
+    cache_write_error: Optional[str] = None
     if not no_cache:
         try:
-            cache_path.write_bytes(frag_bytes)
-        except OSError:
-            pass
+            atomic_write_fragment_cache(cache_entry, frag_bytes)
+            cache_persisted = True
+        except (OSError, ValueError) as exc:
+            cache_write_error = str(exc)
+            logger.warning("Failed to persist fragment cache at %s: %s", cache_entry.path, exc)
 
     # Notify any waiters (the upload `_bg_tasks` for the same SHA) that the
     # conversion is done and the cache is hot. With no_cache=1 we never
     # wrote the cache, so there is nothing for waiters to consume.
-    if not no_cache:
+    if cache_persisted:
         await fragment_prebuild_service.mark_complete(
             source_sha, profile, size_bytes=len(frag_bytes)
+        )
+    elif not no_cache:
+        await fragment_prebuild_service.mark_failed(
+            source_sha,
+            profile,
+            error=cache_write_error or "fragment cache publication failed",
         )
     logger.info(
         "IFC convert sidecar done: sha=%s profile=%s output=%.2fMB sidecar_ms=%s total_ms=%.1f",
@@ -2163,6 +2337,7 @@ async def convert_ifc_to_fragments(
             "X-Fragment-Profile": meta.get("effectiveProfile") or profile,
             "X-Fragment-Elapsed-Ms": str(meta.get("elapsedMs", 0)),
             "X-Fragment-Source-Sha256": source_sha,
+            **_fragment_cache_key_headers(cache_entry),
         },
     )
 
@@ -2221,14 +2396,19 @@ async def get_fragment_manifest(
       - ``serve_url`` - URL the frontend can GET to fetch the fragment bytes
     """
     FRAGMENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    safe_fp = fingerprint.replace("/", "").replace("\\", "").replace("..", "")[:128]
-    cache_path = FRAGMENT_CACHE_DIR / f"{safe_fp}-{profile}.frag"
-    cached = cache_path.exists()
+    safe_fp = safe_cache_component(fingerprint)
+    cache_entry = _full_fragment_entry(safe_fp, profile)
+    cache_info = inspect_fragment_cache(cache_entry)
+    cached = cache_info is not None
     return {
         "cached": cached,
         "fingerprint": safe_fp,
         "profile": profile,
-        "size_bytes": cache_path.stat().st_size if cached else None,
+        "size_bytes": cache_info.size_bytes if cache_info else None,
+        "artifact_schema_version": FRAGMENT_ARTIFACT_SCHEMA_VERSION,
+        "cache_key": cache_entry.key.digest,
+        "fragments_format_version": fragments_format_version(cache_entry),
+        "artifact_sha256": cache_info.sha256 if cache_info else None,
         "serve_url": (
             f"/api/ifc/fragments/serve?fingerprint={safe_fp}&profile={profile}"
             if cached
@@ -2272,15 +2452,15 @@ async def get_convert_status(
     If ``wait_ms > 0`` the call blocks until the task reaches a terminal state
     or the timeout fires; the same payload shape is returned either way.
     """
-    safe_fp = fingerprint.replace("/", "").replace("\\", "").replace("..", "")[:128]
+    safe_fp = safe_cache_component(fingerprint)
     FRAGMENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     def _cache_exists(fp: str, prof: str) -> bool:
-        return (FRAGMENT_CACHE_DIR / f"{fp}-{prof}.frag").exists()
+        return inspect_fragment_cache(_full_fragment_entry(fp, prof)) is not None
 
     def _cached_size(fp: str, prof: str) -> Optional[int]:
-        path = FRAGMENT_CACHE_DIR / f"{fp}-{prof}.frag"
-        return path.stat().st_size if path.exists() else None
+        info = inspect_fragment_cache(_full_fragment_entry(fp, prof))
+        return info.size_bytes if info else None
 
     if wait_ms > 0:
         await fragment_prebuild_service.wait_for(
@@ -2294,6 +2474,10 @@ async def get_convert_status(
         cached_size=_cached_size(safe_fp, profile),
     )
     payload = report.as_dict()
+    cache_entry = _full_fragment_entry(safe_fp, profile)
+    payload["artifact_schema_version"] = FRAGMENT_ARTIFACT_SCHEMA_VERSION
+    payload["cache_key"] = cache_entry.key.digest
+    payload["fragments_format_version"] = fragments_format_version(cache_entry)
     if report.status == "complete":
         payload["serve_url"] = (
             f"/api/ifc/fragments/serve?fingerprint={safe_fp}&profile={profile}"
@@ -2315,20 +2499,22 @@ async def serve_fragment_by_fingerprint(
     otherwise; the caller should fall back to the full ``/api/ifc/convert``
     upload path.
     """
-    safe_fp = fingerprint.replace("/", "").replace("\\", "").replace("..", "")[:128]
-    cache_path = FRAGMENT_CACHE_DIR / f"{safe_fp}-{profile}.frag"
-    if not cache_path.exists():
+    safe_fp = safe_cache_component(fingerprint)
+    cache_entry = _full_fragment_entry(safe_fp, profile)
+    cached_bytes = read_fragment_cache(cache_entry)
+    if cached_bytes is None:
         raise HTTPException(
             status_code=404,
             detail=f"Fragment not in disk cache for fingerprint {safe_fp[:16]}… profile={profile}",
         )
     return Response(
-        content=cache_path.read_bytes(),
+        content=cached_bytes,
         media_type="application/octet-stream",
         headers={
             "X-Fragment-Source": "manifest-cache",
             "X-Fragment-Profile": profile,
             "X-Fragment-Source-Sha256": safe_fp,
+            **_fragment_cache_key_headers(cache_entry),
         },
     )
 
@@ -2358,16 +2544,15 @@ async def get_lod_fragment(
         None,
         ge=0.0,
         le=1.0,
-        description="Relative error ceiling for the sloppy simplifier. Omit for the default (0.1).",
+        description="Relative error ceiling for the sloppy simplifier. Omit for the default (0.05).",
     ),
 ):
     """Serve a decimated (LOD) fragment for a previously-converted model.
 
-    Reuses the full ``.frag`` the convert path already cached
-    (``{sha}-{profile}.frag``), decimates it via the Node sidecar's
-    ``/decimate`` endpoint, and caches the result as
-    ``{sha}-{profile}-lod.frag``. The first call builds + caches (a few
-    seconds); subsequent calls serve from disk (<20 ms).
+    Reuses the full, validated ``.frag`` artifact the convert path already
+    cached, decimates it via the Node sidecar's ``/decimate`` endpoint, and
+    atomically publishes a versioned LOD artifact. The first call builds and
+    caches; subsequent calls serve from disk.
 
     The decimated frag preserves element identity (localIds + GUIDs + spatial
     structure), so the frontend can swap it in during camera motion and swap the
@@ -2386,13 +2571,20 @@ async def get_lod_fragment(
     - ``X-Fragment-Profile`` - the resolved profile
     - ``X-Fragment-Source-Sha256`` - the requested fingerprint (sanitised)
     """
-    safe_fp = fingerprint.replace("/", "").replace("\\", "").replace("..", "")[:128]
-    served_from = "lod-cache" if lod_frag_cache_path(safe_fp, profile).exists() else "lod-sidecar"
+    safe_fp = safe_cache_component(fingerprint)
+    served_from = (
+        "lod-cache"
+        if is_lod_fragment_cached(safe_fp, profile, ratio=ratio, error=error)
+        else "lod-sidecar"
+    )
     try:
         lod_bytes = await get_or_build_lod_fragment(safe_fp, profile, ratio=ratio, error=error)
     except LodUnavailable as exc:
         raise HTTPException(503, detail=str(exc)) from exc
 
+    lod_entry = lod_fragment_cache_entry(
+        FRAGMENT_CACHE_DIR, safe_fp, profile, ratio=ratio, error=error
+    )
     return Response(
         content=lod_bytes,
         media_type="application/octet-stream",
@@ -2400,6 +2592,10 @@ async def get_lod_fragment(
             "X-Fragment-Source": served_from,
             "X-Fragment-Profile": profile,
             "X-Fragment-Source-Sha256": safe_fp,
+            "X-Fragments-Format-Version": fragments_format_version(
+                _full_fragment_entry(safe_fp, profile)
+            ),
+            **_fragment_cache_key_headers(lod_entry),
         },
     )
 
@@ -2651,3 +2847,97 @@ async def filter_elements_by_property(req: PropertyFilterRequest):
         pset_name=req.pset_name or None,
         limit=limit,
     )
+
+
+class IndexedFilterConditionRequest(_BaseModel):
+    property_name: str = Field(min_length=1, max_length=255)
+    operator: Literal[
+        "eq",
+        "neq",
+        "contains",
+        "startswith",
+        "gt",
+        "lt",
+        "gte",
+        "lte",
+        "exists",
+        "not_exists",
+    ]
+    value: Optional[str] = Field(default=None, max_length=2048)
+    pset_name: Optional[str] = Field(default=None, max_length=255)
+
+
+class IndexedPropertyFilterRequest(_BaseModel):
+    name: Optional[str] = Field(default=None, max_length=120)
+    logic: Literal["and", "or"] = "and"
+    conditions: list[IndexedFilterConditionRequest] = Field(min_length=1, max_length=20)
+    ifc_types: list[str] = Field(default_factory=list, max_length=100)
+    storeys: list[str] = Field(default_factory=list, max_length=100)
+    max_result_ids: int = Field(default=200_000, ge=1, le=200_000)
+    detail_limit: int = Field(default=50, ge=0, le=200)
+
+
+@router.post(
+    "/elements/filter",
+    summary="Evaluate an indexed, reusable BIM property filter",
+)
+async def filter_elements_indexed(req: IndexedPropertyFilterRequest):
+    """Evaluate a typed AND/OR filter against the current model revision.
+
+    The first request builds a compact property index. Later requests reuse it
+    until ``model_version`` changes. ``count`` is exact; ``elements`` is only a
+    bounded preview while ``element_ids`` carries the viewer action set.
+    """
+
+    _check_loaded()
+    if any(len(value) > 255 for value in (*req.ifc_types, *req.storeys)):
+        raise HTTPException(
+            422,
+            "ifc_types and storey names are limited to 255 characters",
+        )
+    # Keep the response contract tied to the same revision used to build or
+    # query the index. A subsequent upload/edit may advance the global service
+    # while this CPU-bound read is completing, so capture (version, model,
+    # fingerprint) as one stable triple: a mismatched pair would poison the
+    # version-keyed index cache with entries built from the wrong model.
+    for _ in range(3):
+        model_version = ifc_service.model_version
+        model = ifc_service.model
+        model_fingerprint = ifc_service.model_fingerprint
+        if (
+            ifc_service.model_version == model_version
+            and ifc_service.model is model
+        ):
+            break
+    try:
+        # The first request per revision walks every IfcProduct and pset;
+        # keep that CPU-bound build off the event loop like the other
+        # model-traversal routes. The index publishes immutable snapshots
+        # under its own lock, so threaded queries are safe.
+        result = await asyncio.to_thread(
+            property_filter_index.query,
+            model=model,
+            model_version=model_version,
+            storey_resolver=ifc_service.resolve_storey_name,
+            conditions=[
+                IndexedPropertyFilterCondition(
+                    property_name=condition.property_name,
+                    operator=condition.operator,
+                    value=condition.value,
+                    pset_name=condition.pset_name,
+                )
+                for condition in req.conditions
+            ],
+            logic=req.logic,
+            ifc_types=req.ifc_types,
+            storeys=req.storeys,
+            max_result_ids=req.max_result_ids,
+            detail_limit=req.detail_limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {
+        **result,
+        "name": req.name,
+        "model_fingerprint": model_fingerprint,
+    }

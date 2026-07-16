@@ -21,7 +21,7 @@ Layout (created lazily):
         data/                 # custom agents, prompts, tool sets, snippets,
                               #   models.json, aabb-cache/, ifc-index/, doc_index/
         uploads/              # uploaded IFC files (+ hidden .working/ edit copies)
-        fragments/            # converted-fragment cache ({sha}-{profile}.frag)
+        fragments/            # versioned converted-fragment cache + manifests
         snapshots/            # geometry snapshots
         ifc_history/          # git-backed model checkpoints
         mcp_servers.json      # external MCP server registry (optional)

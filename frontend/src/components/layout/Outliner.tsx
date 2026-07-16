@@ -1,3 +1,4 @@
+import { useCallback, useRef } from 'react';
 import { useStore } from '../../store/useStore';
 import Sidebar from './Sidebar';
 import SearchPanel from '../panels/SearchPanel';
@@ -6,6 +7,7 @@ import ClassificationPanel from '../panels/ClassificationPanel';
 import ResizeHandle from './ResizeHandle';
 import Icon from '../ui/Icon';
 import type { IconName } from '../ui/Icon';
+import { nextHorizontalTabIndex } from './tabKeyboardNavigation';
 
 type PaneId = 'tree' | 'search' | 'summary' | 'classify';
 
@@ -38,24 +40,39 @@ export default function Outliner() {
   const activePane = useStore((s) => s.leftActivePane);
   const focusLeftPane = useStore((s) => s.focusLeftPane);
   const setLeftSidebarOpen = useStore((s) => s.setLeftSidebarOpen);
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const pane: PaneId = (activePane ?? 'tree') as PaneId;
 
+  const onTabKeyDown = useCallback((event: React.KeyboardEvent, index: number) => {
+    const nextIndex = nextHorizontalTabIndex(index, PANES.length, event.key);
+    if (nextIndex === null) return;
+    event.preventDefault();
+    focusLeftPane(PANES[nextIndex].id);
+    tabRefs.current[nextIndex]?.focus();
+  }, [focusLeftPane]);
+
   return (
-    <aside className="outliner-column" aria-label="Outliner">
+    <aside className="outliner-column" aria-label="Navigator">
       <div className="outliner-head">
         <Icon name="layers" size={12} />
         <span>{PANE_LABELS[pane]}</span>
         <div className="outliner-head-spacer" />
-        <div className="outliner-pane-switcher" role="tablist">
-          {PANES.map((p) => (
+        <div className="outliner-pane-switcher" role="tablist" aria-label="Navigator panes">
+          {PANES.map((p, index) => (
             <button
               key={p.id}
+              ref={(element) => { tabRefs.current[index] = element; }}
+              id={`navigator-tab-${p.id}`}
               className={`outliner-pane-btn ${pane === p.id ? 'active' : ''}`}
               title={`${p.label} (${p.shortcut})`}
+              aria-label={`${p.label} (${p.shortcut})`}
               onClick={() => focusLeftPane(p.id)}
+              onKeyDown={(event) => onTabKeyDown(event, index)}
               role="tab"
               aria-selected={pane === p.id}
+              aria-controls={`navigator-panel-${p.id}`}
+              tabIndex={pane === p.id ? 0 : -1}
             >
               <Icon name={p.icon} size={12} />
             </button>
@@ -70,7 +87,12 @@ export default function Outliner() {
           <Icon name="panel-left-close" size={12} />
         </button>
       </div>
-      <div className="outliner-body">
+      <div
+        className="outliner-body"
+        id={`navigator-panel-${pane}`}
+        role="tabpanel"
+        aria-labelledby={`navigator-tab-${pane}`}
+      >
         {pane === 'tree' && <Sidebar />}
         {pane === 'search' && <SearchPanel />}
         {pane === 'summary' && <SummaryPanel />}

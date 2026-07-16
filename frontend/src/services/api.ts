@@ -521,7 +521,17 @@ export async function findNearbyElements(
   return fetchJson<NearbyResult>(`/ifc/elements/${elementId}/nearby?${params}`);
 }
 
-export type PropertyFilterOperator = 'eq' | 'neq' | 'contains' | 'startswith' | 'gt' | 'lt' | 'gte' | 'lte';
+export type PropertyFilterOperator =
+  | 'eq'
+  | 'neq'
+  | 'contains'
+  | 'startswith'
+  | 'gt'
+  | 'lt'
+  | 'gte'
+  | 'lte'
+  | 'exists'
+  | 'not_exists';
 
 export interface PropertyFilterRequest {
   property_name: string;
@@ -558,6 +568,68 @@ export async function filterByPropertyValue(req: PropertyFilterRequest): Promise
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
+  });
+}
+
+/** One predicate evaluated against IFC identity attributes, psets or quantities. */
+export interface IndexedPropertyFilterCondition {
+  property_name: string;
+  operator: PropertyFilterOperator;
+  /** Omit for `exists` and `not_exists`; every comparison operator requires it. */
+  value?: string;
+  /** Restrict the property to one pset. Use `IFC` for direct IFC attributes. */
+  pset_name?: string;
+}
+
+export interface IndexedPropertyFilterRequest {
+  name?: string;
+  logic: 'and' | 'or';
+  conditions: IndexedPropertyFilterCondition[];
+  /** Empty arrays mean all IFC types/storeys. Values are matched case-insensitively. */
+  ifc_types?: string[];
+  storeys?: string[];
+  max_result_ids?: number;
+  detail_limit?: number;
+}
+
+export interface IndexedPropertyFilterMatch {
+  pset: string;
+  property: string;
+  value: string | null;
+}
+
+export interface IndexedPropertyFilterElement extends PropertyFilterElement {
+  matches: IndexedPropertyFilterMatch[];
+}
+
+export interface IndexedPropertyFilterResult {
+  name: string | null;
+  logic: 'and' | 'or';
+  /** Exact number of matches, even when the returned action set is capped. */
+  count: number;
+  truncated: boolean;
+  element_ids: number[];
+  elements: IndexedPropertyFilterElement[];
+  index_version: number;
+  indexed_elements: number;
+  elapsed_ms: number;
+  model_fingerprint: string | null;
+}
+
+/**
+ * Evaluate a reusable multi-condition filter against the revision-aware BIM
+ * property index. The endpoint returns an exact count and a bounded set of ids
+ * suitable for viewer actions without rescanning IFC property sets per click.
+ */
+export async function filterElementsIndexed(
+  req: IndexedPropertyFilterRequest,
+  init?: Pick<RequestInit, 'signal'>,
+): Promise<IndexedPropertyFilterResult> {
+  return fetchJson<IndexedPropertyFilterResult>('/ifc/elements/filter', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+    ...init,
   });
 }
 
@@ -1081,6 +1153,31 @@ export type AabbCacheState = 'idle' | 'computing' | 'ready' | 'failed';
  *  from the cache, fall back to placement-origin points, or a mix? */
 export type AabbSource = 'real' | 'placement' | 'mixed';
 
+/** One stable spatial partition produced from the backend's geometry AABBs. */
+export interface SpatialTileDto {
+  tile_id: string;
+  storey_idx: number;
+  cell_x: number;
+  cell_y: number;
+  aabb_min: AabbVec3;
+  aabb_max: AabbVec3;
+  /** IFC Express IDs. Convert these to Fragments local IDs before rendering. */
+  element_ids: number[];
+  element_count: number;
+}
+
+/** Backend spatial index contract. Geometry remains mounted on the client. */
+export interface SpatialTileManifestDto {
+  source_sha256: string;
+  grid_resolution: number;
+  world_aabb_min: AabbVec3;
+  world_aabb_max: AabbVec3;
+  total_elements: number;
+  total_tiles: number;
+  aabb_source: AabbSource;
+  tiles: SpatialTileDto[];
+}
+
 export interface AabbCacheStatusDto {
   sha: string;
   state: AabbCacheState;
@@ -1125,6 +1222,89 @@ export async function getAabbBulk(expressIds: number[]): Promise<AabbBulkRespons
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ express_ids: expressIds }),
   });
+}
+
+/**
+ * Fetch the current model's preprocessed spatial partition.
+ *
+ * Consumers must verify `source_sha256` against their mounted model and should
+ * only drive render visibility from `aabb_source === 'real'`. Placement-origin
+ * manifests are useful as a progress/fallback signal, but are not conservative
+ * geometry bounds and could otherwise hide visible elements.
+ */
+export async function getSpatialTileManifest(
+  gridResolution = 4,
+  init?: Pick<RequestInit, 'signal'>,
+): Promise<SpatialTileManifestDto> {
+  const grid = Math.max(1, Math.min(16, Math.floor(gridResolution)));
+  return fetchJson<SpatialTileManifestDto>(`/ifc/tile-manifest?grid=${grid}`, init);
+}
+
+export type SpatialTileFragmentProfile = 'quality' | 'balanced' | 'performance' | 'ultra_fast';
+
+export interface SpatialTileFragmentResult {
+  readonly bytes: Uint8Array;
+  readonly source: 'tile-cache' | 'tile-sidecar';
+  readonly profile: SpatialTileFragmentProfile;
+  readonly tileId: string;
+  readonly gridResolution: number;
+  readonly aabbSource: AabbSource;
+  readonly cacheKey: string | null;
+  readonly artifactSchema: string | null;
+  readonly fragmentsFormatVersion: string | null;
+}
+
+/** Fetch one independently loadable exact tile artifact. */
+export async function fetchSpatialTileFragment(
+  request: {
+    readonly fingerprint: string;
+    readonly gridResolution: number;
+    readonly tileId: string;
+    readonly profile: SpatialTileFragmentProfile;
+  },
+  init?: Pick<RequestInit, 'signal'>,
+): Promise<SpatialTileFragmentResult> {
+  const grid = Math.max(1, Math.min(16, Math.floor(request.gridResolution)));
+  const params = new URLSearchParams({
+    sha: request.fingerprint,
+    grid: String(grid),
+    tile_id: request.tileId,
+    profile: request.profile,
+  });
+  const response = await fetch(apiUrl(`${BASE}/ifc/fragments/tile?${params.toString()}`), init);
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Tile artifact error ${response.status}: ${body}`);
+  }
+  const tileId = response.headers.get('X-Fragment-Tile-Id');
+  const responseGrid = Number(response.headers.get('X-Fragment-Grid'));
+  const profile = response.headers.get('X-Fragment-Profile');
+  const source = response.headers.get('X-Fragment-Source');
+  const aabbSource = response.headers.get('X-Fragment-AABB-Source');
+  // Backends that send source provenance must agree with the requested
+  // model; older backends omit the header and skip this check.
+  const sourceSha = response.headers.get('X-Fragment-Source-Sha');
+  if (
+    tileId !== request.tileId
+    || responseGrid !== grid
+    || profile !== request.profile
+    || (source !== 'tile-cache' && source !== 'tile-sidecar')
+    || (aabbSource !== 'real' && aabbSource !== 'mixed' && aabbSource !== 'placement')
+    || (sourceSha !== null && sourceSha !== request.fingerprint)
+  ) {
+    throw new Error('Tile artifact response identity does not match the request');
+  }
+  return {
+    bytes: new Uint8Array(await response.arrayBuffer()),
+    source,
+    profile: profile as SpatialTileFragmentProfile,
+    tileId,
+    gridResolution: responseGrid,
+    aabbSource,
+    cacheKey: response.headers.get('X-Fragment-Cache-Key'),
+    artifactSchema: response.headers.get('X-Fragment-Artifact-Schema'),
+    fragmentsFormatVersion: response.headers.get('X-Fragments-Format-Version'),
+  };
 }
 
 export async function clearAabbCache(opts?: { sha?: string; disk?: boolean }):

@@ -5,6 +5,7 @@ import {
   selectEvictionCandidates,
   readFragmentCacheIDB,
   writeRawFragmentCacheIDB,
+  deleteFragmentCacheIDBEntry,
   clearFragmentCacheIDB,
   getFragmentCacheIDBStats,
   _resetIDBPromiseForTests,
@@ -191,6 +192,7 @@ describe('writeRawFragmentCacheIDB', () => {
     await writeRawFragmentCacheIDB('overwrite', v2, 'aggressive');
     const read = await readFragmentCacheIDB('overwrite', 'aggressive');
     expect(Array.from(read!)).toEqual([2, 3]);
+    expect(await getFragmentCacheIDBStats()).toEqual({ count: 1, totalBytes: 2 });
   });
 
   it('updates totalBytes stats after writing', async () => {
@@ -199,6 +201,21 @@ describe('writeRawFragmentCacheIDB', () => {
     const stats = await getFragmentCacheIDBStats();
     expect(stats.count).toBe(1);
     expect(stats.totalBytes).toBe(1024);
+  });
+});
+
+describe('deleteFragmentCacheIDBEntry', () => {
+  beforeEach(installFreshIDB);
+
+  it('removes only the rejected entry and corrects byte accounting', async () => {
+    await writeRawFragmentCacheIDB('bad', new Uint8Array(100), 'aggressive');
+    await writeRawFragmentCacheIDB('good', new Uint8Array(200), 'aggressive');
+
+    await deleteFragmentCacheIDBEntry('bad');
+
+    expect(await readFragmentCacheIDB('bad', 'aggressive')).toBeNull();
+    expect(await readFragmentCacheIDB('good', 'aggressive')).not.toBeNull();
+    expect(await getFragmentCacheIDBStats()).toEqual({ count: 1, totalBytes: 200 });
   });
 });
 

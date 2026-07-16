@@ -40,6 +40,7 @@ import {
   resetHistory,
   type SelectionHistoryState,
 } from '../services/viewer/selectionHistoryHelpers';
+import type { SectionWorkspaceDefinition } from '../services/viewer/sectionWorkspace';
 
 /**
  * Snapshot of AI backend warm-up state held in the store.
@@ -172,7 +173,15 @@ export type ClipAxis = 'x' | 'y' | 'z';
 /** Measurement tool mode - see services/viewer/measurementController.ts.
  *  `off` is the default and leaves pointer events to selection.
  *  `box` is a 2-click axis-aligned rectangle on the face plane of corner A. */
-export type MeasurementMode = 'off' | 'linear' | 'area' | 'box' | 'angle';
+export type MeasurementMode =
+  | 'off'
+  | 'linear'
+  | 'area'
+  | 'box'
+  | 'angle'
+  | 'height'
+  | 'clearance'
+  | 'position';
 /** Display unit for measurement readouts. Length units square for area. */
 export type MeasurementUnit = 'm' | 'mm' | 'ft';
 
@@ -391,6 +400,9 @@ interface AppState {
   measurementLabelsVisible: boolean;
   /** Section box (AABB crop). Toggled via Alt+B. Planes managed by SectionBoxController in ViewerPanel. */
   sectionBoxEnabled: boolean;
+  /** Durable absolute section state. Kept while temporarily disabled so a
+   *  selection/storey crop can be toggled without reverting to model bounds. */
+  sectionWorkspace: SectionWorkspaceDefinition | null;
   /** Floating chat dock: true = collapsed pill, false = expanded panel. */
   floatingChatMinimized: boolean;
   /** True once the WASM service worker has control of the page (WASM served from cache). */
@@ -519,12 +531,10 @@ interface AppState {
   resetPrebuildWaitPrefs: () => void;
   selectionFocusMode: SelectionFocusMode;
   selectionGhostOpacity: number;
-  /** Whether the AABB frustum cullers (storey + element) are allowed to run.
-   *  OFF by default: when off, no geometry is ever `setVisible(false)` for
-   *  being out-of-frustum, so objects always stay in the scene and never
-   *  "pop in late" when zooming back out. Mixed/large-model users can opt in
-   *  via Settings > Performance; even when on, `decideCullerPolicy` keeps the
-   *  cullers off for small models. Persists across sessions. */
+  /** Whether stable spatial visibility culling is allowed to run. Geometry is
+   *  never destroyed: a backend-preprocessed tile mask is preferred and the
+   *  client storey/element AABB cullers remain the warm-up fallback. OFF by
+   *  default until hardware-qualified renderer baselines pass. */
   frustumCullingEnabled: boolean;
   /** Whether the ground grid is visible in the 3D viewport. Persists across
    *  sessions. On by default (most users prefer a ground reference). */
@@ -584,6 +594,8 @@ interface AppState {
   frameElementsFn: ((expressIds: number[]) => void) | null;
   /** Registered by ViewerPanel; enables the section box fitted to a single element's AABB. */
   clipToElementFn: ((expressId: number) => void) | null;
+  /** Registered by ViewerPanel; fits one stable section box around N elements. */
+  clipToElementsFn: ((expressIds: number[], label?: string) => void) | null;
   /** Soft amber preview highlight driven by sidebar tree-row hover.
    *  `null` clears the current preview.  Registered by ViewerPanel. */
   treeHoverPreviewFn: ((expressId: number | null) => void) | null;
@@ -628,6 +640,7 @@ interface AppState {
    */
   setSelectedIds: (ids: number[]) => void;
   setIsolatedIds: (ids: number[]) => void;
+  /** Replace the hidden set and leave isolate mode (visibility modes are exclusive). */
   setHiddenIds: (ids: number[]) => void;
   addHiddenIds: (ids: number[]) => void;
   clearVisibility: () => void;
@@ -703,6 +716,8 @@ interface AppState {
   setMeasurementLabelsVisible: (v: boolean) => void;
   setSectionBoxEnabled: (enabled: boolean) => void;
   toggleSectionBox: () => void;
+  /** Install an absolute section workspace and synchronise its box enabled state. */
+  setSectionWorkspace: (workspace: SectionWorkspaceDefinition | null) => void;
   setFloatingChatMinimized: (v: boolean) => void;
   /** Whether the viewer tools tray (floating, left of viewport) is expanded into the full panel. */
   viewerToolsOpen: boolean;
@@ -796,6 +811,10 @@ interface AppState {
   setClipToElementFn: (fn: ((expressId: number) => void) | null) => void;
   /** Thin wrapper: calls the registered fn if present. */
   clipToElement: (expressId: number) => void;
+  /** Registered multi-element section bridge; used by multi-selection/storeys. */
+  setClipToElementsFn: (fn: ((expressIds: number[], label?: string) => void) | null) => void;
+  /** Thin wrapper: no-op for an empty set or when the viewer is unavailable. */
+  clipToElements: (expressIds: number[], label?: string) => void;
   /** Registered by ViewerPanel; paints / clears the soft amber preview. */
   setTreeHoverPreviewFn: (fn: ((expressId: number | null) => void) | null) => void;
   /** Thin wrapper for tree-row hover handlers; pass `null` to clear. */
@@ -1031,6 +1050,7 @@ const initialState = {
   toasts: [] as Toast[],
   measurementLabelsVisible: true,
   sectionBoxEnabled: false,
+  sectionWorkspace: null as SectionWorkspaceDefinition | null,
   floatingChatMinimized: readPref<boolean>('pref.floatingChatMinimized', true),
   viewerToolsOpen: false,
   viewerToolsHidden: false,
@@ -1071,10 +1091,10 @@ const initialState = {
   consistencyMode: readPref<ConsistencyMode>('pref.consistencyMode', 'hybrid'),
   editFallback: readPref<EditFallbackMode>('pref.editFallback', 'background_rebuild'),
   rendererMode: readPref<RendererMode>('pref.rendererMode', 'auto'),
-  // Cache OFF by default - the IDB fragment cache caused real-world load
-  // failures (stale bytes, schema mismatch, hard-to-clear poisoned entries).
-  // Users can opt in via Settings > Performance once their setup is stable.
-  cachePolicy: readPref<CachePolicy>('pref.cachePolicy', 'off'),
+  // The Phase 1 cache contract includes the exact fragments/web-ifc/runtime
+  // identity and deletes rejected entries, so new installations can safely
+  // reuse a bounded parsed artifact. Existing persisted choices are retained.
+  cachePolicy: readPref<CachePolicy>('pref.cachePolicy', 'balanced'),
   // Server-side fragment cache ON by default. This matches the intended
   // backend convert-once architecture and makes repeat loads hit cached
   // `.frag` bytes instead of forcing `no_cache=1` conversions.
@@ -1082,7 +1102,11 @@ const initialState = {
   highlightStrategy: readPref<HighlightStrategy>('pref.highlightStrategy', 'wireframe'),
   graphicsProfile: readPref<GraphicsProfile>('pref.graphicsProfile', 'balanced'),
   viewerPerformanceMode: readPref<ViewerPerformanceMode>('pref.viewerPerformanceMode', 'auto'),
-  largeModelLod: readPref<boolean>('pref.largeModelLod', true),
+  // Whole-model proxy LOD is OFF by default. It swaps the complete fragment
+  // root while navigating and cannot carry selection/filter/opacity state, so
+  // stability wins until spatial, appearance-aware tile LOD replaces it.
+  // Existing users who explicitly enabled the persisted preference keep it.
+  largeModelLod: readPref<boolean>('pref.largeModelLod', false),
   prebuildWaitPrefs: sanitisePrebuildWaitPrefs(
     readPref<Partial<PrebuildWaitPrefs> | null>('pref.prebuildWait.v1', null),
   ),
@@ -1118,6 +1142,7 @@ const initialState = {
   zoomToElementFn: null as ((expressId: number) => void) | null,
   frameElementsFn: null as ((expressIds: number[]) => void) | null,
   clipToElementFn: null as ((expressId: number) => void) | null,
+  clipToElementsFn: null as ((expressIds: number[], label?: string) => void) | null,
   treeHoverPreviewFn: null as ((expressId: number | null) => void) | null,
   getCameraStateFn: null as (() => { pos: [number, number, number]; target: [number, number, number] } | null) | null,
   setLookAtFn: null as ((pos: [number,number,number], tgt: [number,number,number], animate: boolean) => void) | null,
@@ -1138,6 +1163,7 @@ export const useStore = create<AppState>()(
       healthCheckResult: v ? s.healthCheckResult : null,
       // Disable the section box on unload - stale clip planes confuse the next model.
       sectionBoxEnabled: v ? s.sectionBoxEnabled : false,
+      sectionWorkspace: v ? s.sectionWorkspace : null,
       // Clear stale checkpoints on unload.
       checkpoints: v ? s.checkpoints : [],
       // Clear native index status on unload so the next model starts fresh.
@@ -1230,7 +1256,7 @@ export const useStore = create<AppState>()(
       forceExpandSerial: s.forceExpandSerial + 1,
     })),
     setIsolatedIds: (ids) => set({ isolatedIds: ids, hiddenIds: [] }),
-    setHiddenIds: (ids) => set({ hiddenIds: ids }),
+    setHiddenIds: (ids) => set({ hiddenIds: ids, isolatedIds: [] }),
     addHiddenIds: (ids) => set((s) => {
       const merged = new Set([...s.hiddenIds, ...ids]);
       return { hiddenIds: Array.from(merged), isolatedIds: [] };
@@ -1556,6 +1582,10 @@ export const useStore = create<AppState>()(
     removeToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
     setSectionBoxEnabled: (enabled) => set({ sectionBoxEnabled: enabled }),
     toggleSectionBox: () => set((s) => ({ sectionBoxEnabled: !s.sectionBoxEnabled })),
+    setSectionWorkspace: (workspace) => set({
+      sectionWorkspace: workspace,
+      sectionBoxEnabled: workspace?.box?.enabled === true,
+    }),
     setFloatingChatMinimized: (v) => { writePref('pref.floatingChatMinimized', v); set({ floatingChatMinimized: v }); },
     setViewerToolsOpen: (v) => set({ viewerToolsOpen: v }),
     setViewerToolsHidden: (v) => set({ viewerToolsHidden: v }),
@@ -1849,6 +1879,12 @@ export const useStore = create<AppState>()(
     clipToElement: (expressId) => {
       const fn = useStore.getState().clipToElementFn;
       if (fn) fn(expressId);
+    },
+    setClipToElementsFn: (fn) => set({ clipToElementsFn: fn }),
+    clipToElements: (expressIds, label) => {
+      if (!Array.isArray(expressIds) || expressIds.length === 0) return;
+      const fn = useStore.getState().clipToElementsFn;
+      if (fn) fn(expressIds, label);
     },
     setTreeHoverPreviewFn: (fn) => set({ treeHoverPreviewFn: fn }),
     treeHoverPreview: (expressId) => {

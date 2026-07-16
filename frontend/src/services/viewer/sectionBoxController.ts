@@ -38,7 +38,9 @@ export class SectionBoxController {
    * activating clipping yet.
    */
   setBounds(box: THREE.Box3): void {
-    this._bounds = box.clone();
+    const next = box.clone();
+    if (this._bounds?.equals(next)) return;
+    this._bounds = next;
     if (this._enabled) this._applyPlanes();
   }
 
@@ -47,8 +49,11 @@ export class SectionBoxController {
    * No-op if no bounds have been set and none are provided.
    */
   enable(box?: THREE.Box3): void {
-    if (box) this._bounds = box.clone();
+    const next = box?.clone();
+    const boundsChanged = !!next && !this._bounds?.equals(next);
+    if (next) this._bounds = next;
     if (!this._bounds) return;
+    if (this._enabled && !boundsChanged) return;
     this._enabled = true;
     this._applyPlanes();
     this.clipper.enabled = true;
@@ -56,6 +61,7 @@ export class SectionBoxController {
 
   /** Remove all section-box planes and disable. */
   disable(): void {
+    if (!this._enabled && this._planeUUIDs.length === 0) return;
     this._enabled = false;
     this._removePlanes();
   }
@@ -78,7 +84,6 @@ export class SectionBoxController {
   // ---------------------------------------------------------------------------
 
   private _applyPlanes(): void {
-    this._removePlanes();
     if (!this._bounds) return;
     const { min, max } = this._bounds;
 
@@ -93,12 +98,35 @@ export class SectionBoxController {
       [new THREE.Vector3(0, 0, 1),  new THREE.Vector3(0, 0, min.z)], // keep z > min.z
     ];
 
-    for (const [normal, origin] of defs) {
+    const previousUUIDs = this._planeUUIDs;
+    const nextUUIDs: string[] = [];
+    for (let index = 0; index < defs.length; index += 1) {
+      const [normal, origin] = defs[index]!;
+      const existingUUID = previousUUIDs[index];
+      const existingPlane = existingUUID ? this.clipper.list.get(existingUUID) : undefined;
+      const updatable = existingPlane as unknown as {
+        visible?: boolean;
+        setFromNormalAndCoplanarPoint?: (normal: THREE.Vector3, origin: THREE.Vector3) => void;
+      } | undefined;
+
+      // Bounds sliders can publish every frame. Keep the same six plane
+      // objects and update their equations in place so no rendered frame sees
+      // an empty/recreated section box.
+      if (existingUUID && typeof updatable?.setFromNormalAndCoplanarPoint === 'function') {
+        updatable.setFromNormalAndCoplanarPoint(normal, origin);
+        if ('visible' in updatable) updatable.visible = false;
+        nextUUIDs.push(existingUUID);
+        continue;
+      }
+
+      if (existingUUID) {
+        try { void this.clipper.delete(this.world as unknown as OBC.World, existingUUID); } catch { /* noop */ }
+      }
       try {
         const uuid = this.clipper.createFromNormalAndCoplanarPoint(
           this.world, normal, origin,
         );
-        this._planeUUIDs.push(uuid);
+        nextUUIDs.push(uuid);
         // Hide drag handles - section-box planes are controlled programmatically.
         const plane = this.clipper.list.get(uuid);
         if (plane) {
@@ -108,6 +136,10 @@ export class SectionBoxController {
         }
       } catch { /* noop - OBC guards against duplicates / invalid args */ }
     }
+    for (let index = defs.length; index < previousUUIDs.length; index += 1) {
+      try { void this.clipper.delete(this.world as unknown as OBC.World, previousUUIDs[index]!); } catch { /* noop */ }
+    }
+    this._planeUUIDs = nextUUIDs;
   }
 
   private _removePlanes(): void {

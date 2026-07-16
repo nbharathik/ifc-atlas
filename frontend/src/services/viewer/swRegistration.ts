@@ -1,6 +1,6 @@
 // Service worker registration for WASM pre-cache.
-// Registers /sw.js (from public/) which caches web-ifc.wasm, web-ifc-mt.wasm,
-// and worker.mjs so IFC loading doesn't block on network for these files.
+// Registers /sw.js (from public/) which caches the active single-thread
+// web-ifc.wasm binary and worker.mjs so IFC loading does not block on network.
 
 export type SwStatus =
   | 'unsupported'

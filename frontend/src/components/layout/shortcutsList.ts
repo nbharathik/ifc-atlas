@@ -33,7 +33,7 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { key: 'a', label: 'A', description: 'Show all elements', category: 'Visibility' },
   { key: 'x', label: 'X', description: 'Toggle section / clip plane', category: 'Visibility' },
   { key: 'Shift+X', label: 'Shift+X', description: 'Pick surface to place section plane', category: 'Visibility' },
-  { key: 'Alt+X', label: 'Alt+X', description: 'Clip section box to selected element', category: 'Visibility' },
+  { key: 'Alt+X', label: 'Alt+X', description: 'Fit section box to current selection', category: 'Visibility' },
   { key: 'Shift+1-9', label: 'Shift+1…9', description: 'Isolate / navigate to storey 1-9', category: 'Visibility' },
   // Panels
   { key: 't', label: 'T', description: 'Focus model tree', category: 'Panels' },

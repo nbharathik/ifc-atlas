@@ -10,6 +10,11 @@
  *
  * These two files could later be generated from a shared JSON schema
  * so they can never drift apart.
+ *
+ * The category drop sets below are additionally mirrored in
+ * backend/app/services/spatial_fragment_service.py, which filters spatial
+ * subset requests down to the categories a profile actually converts.
+ * Changing a drop set here requires updating that table too.
  */
 
 import * as FRAGS from '@thatopen/fragments';

@@ -7,11 +7,15 @@ import {
   polygonArea,
   formatLength,
   formatArea,
+  formatCoordinate,
+  formatMeasurementValue,
   snapToNearest,
   planeBasisFromNormal,
   buildBoxCorners,
   projectPointToPlane,
+  MeasurementController,
 } from '../measurementController';
+import type { CommittedMeasurement } from '../measurementController';
 
 // Helpers
 const v = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
@@ -241,6 +245,31 @@ describe('formatArea', () => {
   });
 });
 
+describe('construction measurement formatting', () => {
+  const measurement = (
+    kind: CommittedMeasurement['kind'],
+    value: number,
+  ): CommittedMeasurement => ({
+    id: kind,
+    kind,
+    value,
+    points: [v(0, 0, 0), v(0, value, 0)],
+  });
+
+  it('formats angle labels as degrees rather than square units', () => {
+    expect(formatMeasurementValue(measurement('angle', 45.25), 'm')).toBe('45.3°');
+  });
+
+  it('formats height and clearance as lengths', () => {
+    expect(formatMeasurementValue(measurement('height', 2.5), 'm')).toBe('2.500 m');
+    expect(formatMeasurementValue(measurement('clearance', 0.125), 'mm')).toBe('125.0 mm');
+  });
+
+  it('formats all project coordinate axes in the selected unit', () => {
+    expect(formatCoordinate(v(1, 2, 3), 'mm')).toBe('X 1000.0 · Y 2000.0 · Z 3000.0 mm');
+  });
+});
+
 // ────────────────────────────────────────────────────────────────────────────
 // snapToNearest
 // ────────────────────────────────────────────────────────────────────────────
@@ -345,6 +374,76 @@ describe('buildBoxCorners', () => {
   it('negative diagonal still yields a positive area', () => {
     const corners = buildBoxCorners(v(2, 0, 2), v(0, 0, 0), v(0, 1, 0));
     expect(polygonArea(corners)).toBeCloseTo(4, 5);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// MeasurementController interaction: snap priority + provenance voting
+// ────────────────────────────────────────────────────────────────────────────
+function makeController(): MeasurementController {
+  // The model is only used for raycasting by consumers, never by the click /
+  // move / commit paths under test, so an empty stub is safe here.
+  const model = {} as ConstructorParameters<typeof MeasurementController>[1];
+  return new MeasurementController(new THREE.Scene(), model, { onChange: () => {} });
+}
+
+describe('MeasurementController endpoint snap priority', () => {
+  it('first click commits the committed-endpoint snap the preview showed, not the external candidate', () => {
+    const controller = makeController();
+    controller.setMode('linear');
+
+    // Commit a first measurement so its endpoints become snap candidates.
+    controller.handleClick(v(0, 0, 0));
+    controller.handleClick(v(1, 0, 0));
+    expect(controller.snapshot().committed).toHaveLength(1);
+
+    // Hover near the committed endpoint with an external triangle-vertex
+    // candidate also in range: the preview must show the endpoint snap.
+    const candidate = {
+      point: v(0.05, 0, 0.05),
+      kind: 'vertex' as const,
+      exact: true,
+      source: 'triangle-vertex',
+    };
+    controller.handleMove(v(0.02, 0, 0), candidate);
+    expect(controller.snapshot().snapFeedback?.kind).toBe('endpoint');
+
+    // The click at the same location must commit the previewed endpoint,
+    // not the supplied external candidate.
+    controller.handleClick(v(0.02, 0, 0), null, candidate);
+    const pending = controller.snapshot().pending;
+    expect(pending).toHaveLength(1);
+    expect(pending[0].equals(v(0, 0, 0))).toBe(true);
+  });
+});
+
+describe('MeasurementController provenance exactness vote', () => {
+  it('one exact snap + one raw unsnapped pick is NOT recorded as exact', () => {
+    const controller = makeController();
+    controller.setMode('linear');
+    const exactSnap = {
+      point: v(0, 0, 0),
+      kind: 'vertex' as const,
+      exact: true,
+      source: 'triangle-vertex',
+    };
+    controller.handleClick(v(0, 0, 0), null, exactSnap);
+    controller.handleClick(v(5, 0, 0)); // raw pick, far from any snap candidate
+    const committed = controller.snapshot().committed;
+    expect(committed).toHaveLength(1);
+    expect(committed[0].exact).toBe(false);
+  });
+
+  it('keeps exact provenance when every pick is an exact snap', () => {
+    const controller = makeController();
+    controller.setMode('linear');
+    const snapA = { point: v(0, 0, 0), kind: 'vertex' as const, exact: true, source: 'triangle-vertex' };
+    const snapB = { point: v(5, 0, 0), kind: 'vertex' as const, exact: true, source: 'triangle-vertex' };
+    controller.handleClick(v(0, 0, 0), null, snapA);
+    controller.handleClick(v(5, 0, 0), null, snapB);
+    const committed = controller.snapshot().committed;
+    expect(committed).toHaveLength(1);
+    expect(committed[0].exact).toBe(true);
   });
 });
 

@@ -10,6 +10,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  EXPECTED_FRAGMENTS_FORMAT_VERSION,
+  assertCompatibleFragmentsFormatVersion,
   convertIfcOnServer,
   getConvertProgress,
   getFragmentPrebuildStatus,
@@ -454,6 +456,7 @@ describe('pollConvertProgress', () => {
           'X-Fragment-Profile': 'performance',
           'X-Fragment-Elapsed-Ms': '9',
           'X-Fragment-Source-Sha256': SHA,
+          'X-Fragments-Format-Version': EXPECTED_FRAGMENTS_FORMAT_VERSION,
         },
       });
     });
@@ -469,6 +472,7 @@ describe('pollConvertProgress', () => {
 
     expect(result.bytes).toEqual(fragmentBytes);
     expect(result.source).toBe('sidecar');
+    expect(result.fragmentsFormatVersion).toBe(EXPECTED_FRAGMENTS_FORMAT_VERSION);
     expect(onProgress).toHaveBeenCalled();
     expect(onProgress.mock.calls[0][0]).toMatchObject({
       model_id: 'model-4',
@@ -476,5 +480,14 @@ describe('pollConvertProgress', () => {
       stage: 'geometry',
       progress: 64,
     });
+  });
+
+  it('rejects server artifacts produced by a different fragments runtime', () => {
+    expect(() => assertCompatibleFragmentsFormatVersion('3.3.0')).toThrow(
+      /incompatible server fragment format/i,
+    );
+    expect(() => assertCompatibleFragmentsFormatVersion(null)).toThrow(
+      /no format version/i,
+    );
   });
 });

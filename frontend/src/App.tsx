@@ -17,6 +17,10 @@ import ToastStack from './components/ui/ToastStack';
 import ErrorBoundary from './components/ui/ErrorBoundary';
 import { readinessFromSyncEvent } from './components/chat/AIReadinessChip';
 import { getServerCapabilities } from './services/ifc/serverConvert';
+import {
+  BROWSER_WEB_IFC_RUNTIME,
+  webIfcRuntimeActivitySummary,
+} from './services/ifc/webIfcRuntime';
 import { isRecoverableServerConvertFailure } from './services/viewer/loadStrategy';
 import { useStore } from './store/useStore';
 import { wsUrl as backendWsUrl } from './lib/platform';
@@ -301,19 +305,18 @@ export default function App() {
     return () => cleanup?.();
   }, [setSwReady]);
 
-  // Warm wasm early so first load does less blocking work. When the page
-  // is cross-origin isolated (COOP + COEP set, see vite.config), pick the
-  // multi-threaded variant so web-ifc's parse can engage workers. Reports
-  // the selection to the activity log once so users can confirm MT is
-  // actually in effect.
+  // Warm the binary used by the browser conversion workers. web-ifc is forced
+  // to single-thread mode because its nested classic workers are incompatible
+  // with the module-worker URLs emitted by the browser build. Cross-origin
+  // isolation is still recorded separately for diagnostics, but it must not
+  // select or advertise the unused MT binary.
   useEffect(() => {
     const isolated =
       typeof self !== 'undefined'
       && self.crossOriginIsolated === true
       && typeof SharedArrayBuffer !== 'undefined';
-    const variant = isolated ? 'mt' : 'st';
     const base = import.meta.env.BASE_URL || '/';
-    const wasmUrl = `${base}${isolated ? 'web-ifc-mt.wasm' : 'web-ifc.wasm'}`;
+    const wasmUrl = `${base}${BROWSER_WEB_IFC_RUNTIME.wasmFile}`;
     const kick = () => {
       fetch(wasmUrl, { cache: 'default' }).catch(() => {
         // noop
@@ -326,21 +329,14 @@ export default function App() {
     else window.setTimeout(kick, 50);
 
     const logActivity = useStore.getState().logActivity;
-    if (isolated) {
-      logActivity({
-        kind: 'info',
-        summary: 'Cross-origin isolated - multi-threaded web-ifc enabled (web-ifc-mt.wasm).',
-      });
-    } else {
-      logActivity({
-        kind: 'info',
-        summary:
-          'Single-threaded web-ifc in use (crossOriginIsolated=false). Enable COOP/COEP on the host to unlock MT parse.',
-      });
-    }
+    logActivity({
+      kind: 'info',
+      summary: webIfcRuntimeActivitySummary(isolated),
+    });
     // Test harness metadata. Only exposed in development builds.
     if (import.meta.env.DEV) {
-      (window as unknown as { __ifcWasmVariant?: string }).__ifcWasmVariant = variant;
+      (window as unknown as { __ifcWasmVariant?: string }).__ifcWasmVariant =
+        BROWSER_WEB_IFC_RUNTIME.wasmVariant;
       (window as unknown as { __crossOriginIsolated?: boolean }).__crossOriginIsolated = isolated;
     }
   }, []);
@@ -762,7 +758,17 @@ export default function App() {
           <DesktopOpenFileBridge />
           {!modelLoaded && <UploadOverlay />}
           {modelLoaded && (
-            <ErrorBoundary label="ViewerPanel">
+            <ErrorBoundary
+              label="ViewerPanel"
+              onOpenAnother={() => {
+                const state = useStore.getState();
+                if (
+                  state.modelDirty
+                  && !window.confirm('Open another model and discard unsaved IFC edits?')
+                ) return;
+                state.reset();
+              }}
+            >
               <Suspense fallback={null}>
                 <ViewerPanel
                   key={viewerKey}

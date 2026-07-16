@@ -38,6 +38,8 @@ build/
 frontend/dist/
 frontend/dist-demo/
 frontend/.vite/
+frontend/test-results/
+frontend/playwright-report/
 *.tsbuildinfo
 site/
 

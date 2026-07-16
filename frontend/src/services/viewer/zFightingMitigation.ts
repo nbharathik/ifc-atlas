@@ -70,6 +70,8 @@ type ProcessedMeshRecord = {
   material: THREE.Material | THREE.Material[];
   geometry: THREE.BufferGeometry;
   hadIdAttribute: boolean;
+  /** Positive proof that more than one IFC item shares this draw call. */
+  hadMultipleItemIds: boolean;
 };
 
 let processedMeshes = new WeakMap<THREE.Mesh, ProcessedMeshRecord>();
@@ -95,9 +97,11 @@ function isMeshProcessed(mesh: THREE.Mesh): boolean {
   const record = processedMeshes.get(mesh);
   if (!record) return false;
   // A geometry swap changes the bucket hash; a late-added id attribute needs
-  // the element depth shader patch. Either forces a re-process.
+  // the element depth shader patch only when multi-item metadata proves the
+  // draw call is batched. Either eligibility change forces a re-process.
   if (record.geometry !== mesh.geometry) return false;
   if (hasUsableElementIdAttribute(mesh.geometry) !== record.hadIdAttribute) return false;
+  if (hasMultipleItemIds(mesh) !== record.hadMultipleItemIds) return false;
   const processed = record.material;
   const current = mesh.material;
   if (Array.isArray(processed)) {
@@ -115,6 +119,7 @@ function rememberProcessedMesh(mesh: THREE.Mesh): void {
     material: Array.isArray(mesh.material) ? mesh.material.slice() : mesh.material,
     geometry: mesh.geometry,
     hadIdAttribute: hasUsableElementIdAttribute(mesh.geometry),
+    hadMultipleItemIds: hasMultipleItemIds(mesh),
   });
 }
 
@@ -126,8 +131,10 @@ function rememberProcessedMesh(mesh: THREE.Mesh): void {
  * the viewer has to make the GPU depth tie deterministic. A single model-wide
  * polygonOffset does not help because both colliding surfaces move together, so
  * this assigns bounded per-mesh offset buckets. Fragments can also batch
- * several IFC elements into one mesh; when a per-vertex element id is present,
- * the shader gets a tiny per-element fragment-depth offset inside the draw call.
+ * several IFC elements into one mesh; only when both a per-vertex element id
+ * and positive multi-item metadata are present does the shader get a tiny
+ * per-element fragment-depth offset inside the draw call. Single-item and
+ * unknown meshes retain standard depth writes so early-Z remains available.
  *
  * Safe to call repeatedly (it runs on every `onViewUpdated`): meshes already
  * processed with unchanged refs are skipped via module-level tracking, and the
@@ -188,8 +195,9 @@ export function applyFragmentZFightingMitigation(
   for (const entry of entries) {
     const { mesh, units } = entry;
     const hasElementIdAttribute = hasUsableElementIdAttribute(mesh.geometry);
+    const isMultiElementMesh = hasMultipleItemIds(mesh);
     if (hasElementIdAttribute) idAttributeMeshes += 1;
-    if (hasMultipleItemIds(mesh)) multiElementMeshes += 1;
+    if (isMultiElementMesh) multiElementMeshes += 1;
     maxUnits = Math.max(maxUnits, units);
     mesh.renderOrder = opts.renderOrderBase + units;
 
@@ -248,7 +256,7 @@ export function applyFragmentZFightingMitigation(
     // per-vertex `id` attribute via setItemIds(). Polygon offset can only
     // differentiate between meshes; this gives elements within one draw call
     // distinct depth values.
-    if (hasElementIdAttribute) {
+    if (hasElementIdAttribute && isMultiElementMesh) {
       for (const mat of materialList(mesh.material)) {
         if (!shouldProcessMaterial(mat, opts.includeTransparent)) continue;
         if (installElementDepthBias(mat)) elementDepthBiasMaterialSlots += 1;
@@ -289,7 +297,8 @@ export function hasPendingFragmentZFightingMitigation(
     if (pending || !isRenderableMesh(obj)) return;
     if (trackingValid && isMeshProcessed(obj)) return;
     const units = opts.baseUnits + hashMeshToBucket(obj, bucketCount) * opts.bucketStep;
-    const hasElementIdAttribute = hasUsableElementIdAttribute(obj.geometry);
+    const needsElementDepthBias = hasUsableElementIdAttribute(obj.geometry)
+      && hasMultipleItemIds(obj);
 
     for (const material of materialList(obj.material)) {
       if (!shouldProcessMaterial(material, opts.includeTransparent)) continue;
@@ -297,7 +306,7 @@ export function hasPendingFragmentZFightingMitigation(
         pending = true;
         return;
       }
-      if (hasElementIdAttribute && !hasElementDepthBias(material)) {
+      if (needsElementDepthBias && !hasElementDepthBias(material)) {
         pending = true;
         return;
       }

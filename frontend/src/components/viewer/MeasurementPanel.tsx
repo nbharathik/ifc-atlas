@@ -1,8 +1,7 @@
 import { useStore } from '../../store/useStore';
 import {
-  formatLength,
-  formatArea,
-  formatAngle,
+  formatMeasurementValue,
+  measurementKindLabel,
   type CommittedMeasurement,
 } from '../../services/viewer/measurementController';
 import type { MeasurementUnit } from '../../store/useStore';
@@ -16,15 +15,25 @@ interface Props {
 }
 
 function formatValue(m: CommittedMeasurement, unit: MeasurementUnit): string {
-  if (m.kind === 'linear') return formatLength(m.value, unit);
-  if (m.kind === 'area') return formatArea(m.value, unit);
-  return formatAngle(m.value);
+  return formatMeasurementValue(m, unit);
 }
 
 const KIND_COLOURS: Record<CommittedMeasurement['kind'], string> = {
   linear: 'var(--atlas-accent)',
   area: 'var(--atlas-fg-muted)',
   angle: '#ffa040',
+  height: '#ffa040',
+  clearance: '#c58cff',
+  position: '#63d391',
+};
+
+const KIND_CODES: Record<CommittedMeasurement['kind'], string> = {
+  linear: 'DIST',
+  area: 'AREA',
+  angle: 'ANG',
+  height: 'HGT',
+  clearance: 'CLR',
+  position: 'POS',
 };
 
 function KindBadge({ kind }: { kind: CommittedMeasurement['kind'] }) {
@@ -42,7 +51,7 @@ function KindBadge({ kind }: { kind: CommittedMeasurement['kind'] }) {
         flexShrink: 0,
       }}
     >
-      {kind === 'linear' ? 'Lin' : kind === 'area' ? 'Area' : '∠'}
+      {KIND_CODES[kind]}
     </span>
   );
 }
@@ -167,7 +176,7 @@ export default function MeasurementPanel({ measurements, unit, onRemove, onClear
           >
             No measurements yet.
             <br />
-            Line, Area, or Angle (R to toggle).
+            Choose a measurement tool, then pick geometry in the viewer.
           </p>
         ) : (
           [...measurements].reverse().map((m) => (
@@ -182,16 +191,47 @@ export default function MeasurementPanel({ measurements, unit, onRemove, onClear
               }}
             >
               <KindBadge kind={m.kind} />
-              <span
+              <div
                 style={{
                   flex: 1,
-                  fontSize: '12px',
-                  fontVariantNumeric: 'tabular-nums',
-                  color: 'var(--atlas-fg)',
+                  minWidth: 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 2,
                 }}
               >
-                {formatValue(m, unit)}
-              </span>
+                <span
+                  title={formatValue(m, unit)}
+                  style={{
+                    fontSize: '12px',
+                    fontVariantNumeric: 'tabular-nums',
+                    color: 'var(--atlas-fg)',
+                    overflow: 'hidden',
+                    whiteSpace: 'nowrap',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {formatValue(m, unit)}
+                </span>
+                {(m.source || m.exact !== undefined || m.coordinates) && (
+                  <span
+                    title={m.source}
+                    style={{
+                      fontSize: '9px',
+                      color: 'var(--atlas-fg-muted)',
+                      overflow: 'hidden',
+                      whiteSpace: 'nowrap',
+                      textOverflow: 'ellipsis',
+                      fontFamily: 'var(--font-mono)',
+                    }}
+                  >
+                    {measurementKindLabel(m.kind)}
+                    {m.exact !== undefined ? ` · ${m.exact ? 'EXACT' : 'GUIDE'}` : ''}
+                    {m.coordinates?.reference ? ` · ${m.coordinates.reference}` : ''}
+                    {m.source ? ` · ${m.source}` : ''}
+                  </span>
+                )}
+              </div>
               <button
                 onClick={() => onRemove(m.id)}
                 title="Remove measurement"

@@ -13,6 +13,12 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services.fragment_cache import (
+    FragmentCacheEntry,
+    atomic_write_fragment_cache,
+    fragments_format_version,
+    full_fragment_cache_entry,
+)
 from app.services.fragment_prebuild_service import FragmentPrebuildService
 
 _SHA = "abcd" * 16  # 64-char hex string
@@ -20,6 +26,12 @@ _SHA = "abcd" * 16  # 64-char hex string
 
 def _client() -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
+
+
+def _write_cached_fragment(tmp_path: Path, payload: bytes) -> FragmentCacheEntry:
+    entry = full_fragment_cache_entry(tmp_path, _SHA, "balanced")
+    atomic_write_fragment_cache(entry, payload)
+    return entry
 
 
 def test_idle_for_unknown_fingerprint(tmp_path: Path) -> None:
@@ -54,8 +66,7 @@ def test_inflight_after_register(tmp_path: Path) -> None:
 
 
 def test_complete_returns_serve_url(tmp_path: Path) -> None:
-    cache_file = tmp_path / f"{_SHA}-balanced.frag"
-    cache_file.write_bytes(b"x" * 1024)
+    _write_cached_fragment(tmp_path, b"x" * 1024)
     fresh = FragmentPrebuildService()
     with (
         patch("app.api.ifc_routes.fragment_prebuild_service", fresh),
@@ -69,6 +80,8 @@ def test_complete_returns_serve_url(tmp_path: Path) -> None:
     assert body["serve_url"] == (
         f"/api/ifc/fragments/serve?fingerprint={_SHA}&profile=balanced"
     )
+    entry = full_fragment_cache_entry(tmp_path, _SHA, "balanced")
+    assert body["fragments_format_version"] == fragments_format_version(entry)
 
 
 def test_failed_state_surfaces_error(tmp_path: Path) -> None:
@@ -90,8 +103,7 @@ def test_failed_state_surfaces_error(tmp_path: Path) -> None:
 def test_disk_cache_wins_over_registry(tmp_path: Path) -> None:
     """If the cache file exists, the response must read ``complete`` even
     when the registry has the entry stuck as ``inflight``."""
-    cache_file = tmp_path / f"{_SHA}-balanced.frag"
-    cache_file.write_bytes(b"y" * 7)
+    _write_cached_fragment(tmp_path, b"y" * 7)
     fresh = FragmentPrebuildService()
     asyncio.run(fresh.register_inflight(_SHA, "balanced"))
     with (
@@ -104,6 +116,23 @@ def test_disk_cache_wins_over_registry(tmp_path: Path) -> None:
     assert body["status"] == "complete"
     assert body["size_bytes"] == 7
     assert body["serve_url"] is not None
+
+
+def test_manifest_and_serve_expose_fragments_format_version(tmp_path: Path) -> None:
+    entry = _write_cached_fragment(tmp_path, b"fragment")
+    with patch("app.api.ifc_routes.FRAGMENT_CACHE_DIR", tmp_path):
+        manifest = _client().get(
+            f"/api/ifc/fragment-manifest?fingerprint={_SHA}&profile=balanced"
+        )
+        served = _client().get(
+            f"/api/ifc/fragments/serve?fingerprint={_SHA}&profile=balanced"
+        )
+
+    expected = fragments_format_version(entry)
+    assert manifest.status_code == 200
+    assert manifest.json()["fragments_format_version"] == expected
+    assert served.status_code == 200
+    assert served.headers["X-Fragments-Format-Version"] == expected
 
 
 def test_path_traversal_in_fingerprint_is_sanitised(tmp_path: Path) -> None:

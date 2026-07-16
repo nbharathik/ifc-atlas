@@ -3,20 +3,30 @@ import Icon from '../ui/Icon';
 import {
   formatArea,
   formatAngle,
+  formatCoordinate,
   formatLength,
+  formatMeasurementValue,
+  type MeasurementMode,
   type MeasurementSnapshot,
 } from '../../services/viewer/measurementController';
-import type { MeasurementMode, MeasurementUnit } from '../../store/useStore';
+import type { MeasurementUnit } from '../../store/useStore';
 
-const MODE_BUTTONS: Array<{ mode: Exclude<MeasurementMode, 'off'>; label: string; hint: string }> = [
-  { mode: 'linear', label: 'Line',  hint: 'Two-click linear distance (Esc to cancel)' },
-  { mode: 'box',    label: 'Box',   hint: 'Two-click rectangle on the face plane - instant area' },
-  { mode: 'area',   label: 'Poly',  hint: 'Polygon area: click vertices, Finish to close' },
-  { mode: 'angle',  label: 'Angle', hint: 'Three-click angle: vertex → arm1 → arm2 (N to toggle)' },
+const MODE_BUTTONS: Array<{
+  mode: Exclude<MeasurementMode, 'off'>;
+  label: string;
+  hint: string;
+}> = [
+  { mode: 'linear', label: 'Distance', hint: 'Two-click point-to-point distance' },
+  { mode: 'height', label: 'Height', hint: 'Two points, constrained to project up' },
+  { mode: 'clearance', label: 'Clearance', hint: 'Shortest or perpendicular witness between targets' },
+  { mode: 'position', label: 'Position', hint: 'Place a project-coordinate marker' },
+  { mode: 'box', label: 'Rectangle', hint: 'Two-click rectangular area on a face plane' },
+  { mode: 'area', label: 'Polygon area', hint: 'Click polygon vertices, then Finish' },
+  { mode: 'angle', label: 'Angle', hint: 'Click vertex, first arm, then second arm' },
 ];
 
 const UNIT_BUTTONS: Array<{ unit: MeasurementUnit; label: string; hint: string }> = [
-  { unit: 'm',  label: 'm',  hint: 'Metres' },
+  { unit: 'm', label: 'm', hint: 'Metres' },
   { unit: 'mm', label: 'mm', hint: 'Millimetres' },
   { unit: 'ft', label: 'ft', hint: 'Feet' },
 ];
@@ -29,25 +39,14 @@ interface Props {
   onRemove: (id: string) => void;
 }
 
-/** Floating measurement toolbar + live readout. Visible only when a model
- *  is loaded. Hidden while the viewer is initialising so it never flashes
- *  before the scene is ready.
- *
- *  Design notes:
- *  - Bottom-centre of the viewport so it doesn't collide with the top-centre
- *    section/clip-plane bar or the top-right performance HUD.
- *  - Mode buttons are a single-select pill group (off / linear / area) so
- *    the state is always unambiguous and the active tool is at a glance.
- *  - The live readout shows the in-flight measurement value while the user
- *    is dropping vertices, flipping to the final committed value on commit.
- *  - Unit toggle sits on the right, persisted in Zustand (see `setMeasurement`).
- */
+/** Compact construction-instrument readout. Tool choice lives in one selector
+ * so advanced measurement modes do not consume the central viewport. */
 export default function MeasurementControls({ snapshot, onFinish, onCancel, onClear, onRemove }: Props) {
-  const modelLoaded = useStore((s) => s.modelLoaded);
-  const mode = useStore((s) => s.measurement.mode);
-  const unit = useStore((s) => s.measurement.unit);
-  const setMeasurement = useStore((s) => s.setMeasurement);
-  const setMeasurementMode = useStore((s) => s.setMeasurementMode);
+  const modelLoaded = useStore((state) => state.modelLoaded);
+  const mode = useStore((state) => state.measurement.mode);
+  const unit = useStore((state) => state.measurement.unit);
+  const setMeasurement = useStore((state) => state.setMeasurement);
+  const setMeasurementMode = useStore((state) => state.setMeasurementMode);
 
   if (!modelLoaded || mode === 'off') return null;
 
@@ -56,72 +55,74 @@ export default function MeasurementControls({ snapshot, onFinish, onCancel, onCl
   const pendingValue = snapshot?.pendingValue ?? null;
   const pendingPerimeter = snapshot?.pendingPerimeter ?? null;
   const pendingAngleDeg = snapshot?.pendingAngleDeg ?? null;
+  const snapFeedback = snapshot?.snapFeedback ?? null;
   const canFinish = mode === 'area' && pendingCount >= 3;
 
-  // Live label: what the user sees while placing vertices.
   let live: string | null = null;
   if (mode === 'angle') {
-    if (pendingAngleDeg !== null) {
-      live = formatAngle(pendingAngleDeg);
-    } else if (pendingCount === 0) {
-      live = 'Click vertex…';
-    } else if (pendingCount === 1) {
-      live = 'Click arm 1…';
-    } else {
-      live = 'Click arm 2…';
-    }
+    if (pendingAngleDeg !== null) live = formatAngle(pendingAngleDeg);
+    else if (pendingCount === 0) live = 'Click vertex…';
+    else if (pendingCount === 1) live = 'Click arm 1…';
+    else live = 'Click arm 2…';
+  } else if (mode === 'position') {
+    live = snapshot?.cursor ? formatCoordinate(snapshot.cursor, unit) : 'Click position…';
   } else if (pendingValue !== null) {
-    if (mode === 'linear') {
-      live = formatLength(pendingValue, unit);
-    } else {
-      live = formatArea(pendingValue, unit);
-    }
-  } else if (mode === 'linear' && pendingCount === 1) {
-    live = 'Click second point…';
+    live = mode === 'area' || mode === 'box'
+      ? formatArea(pendingValue, unit)
+      : formatLength(pendingValue, unit);
+  } else if (mode === 'linear') {
+    live = pendingCount === 0 ? 'Click start point…' : 'Click second point…';
+  } else if (mode === 'height') {
+    live = pendingCount === 0 ? 'Click base point…' : 'Click height point…';
+  } else if (mode === 'clearance') {
+    live = pendingCount === 0 ? 'Pick first target…' : 'Pick second target…';
   } else if (mode === 'box') {
     live = pendingCount === 0 ? 'Click first corner…' : 'Click opposite corner…';
-  } else if (mode === 'area' && pendingCount < 3) {
+  } else if (mode === 'area') {
     live = pendingCount === 0 ? 'Click first vertex…' : `${pendingCount} / 3+ vertices`;
-  } else if (mode === 'linear' && pendingCount === 0) {
-    live = 'Click start point…';
   }
 
   return (
-    <div
-      className="measurement-toolbar active"
-      role="toolbar"
-      aria-label="Measurement tools"
-    >
+    <div className="measurement-toolbar active" role="toolbar" aria-label="Measurement tools">
       <Icon name="ruler" size={12} />
 
-      <div className="measurement-modes">
-        {MODE_BUTTONS.map(({ mode: m, label, hint }) => (
-          <button
-            key={m}
-            className={`measurement-mode-btn ${mode === m ? 'active' : ''}`}
-            onClick={() => setMeasurementMode(m)}
-            title={hint}
-            aria-pressed={mode === m}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <label className="measurement-tool-select" title="Choose measurement tool">
+        <span>TOOL</span>
+        <select
+          value={mode}
+          onChange={(event) => setMeasurementMode(event.target.value as MeasurementMode)}
+          aria-label="Measurement tool"
+        >
+          {MODE_BUTTONS.map(({ mode: optionMode, label, hint }) => (
+            <option key={optionMode} value={optionMode} title={hint}>{label}</option>
+          ))}
+        </select>
+      </label>
 
       <div className="measurement-live" aria-live="polite">
         {live ?? 'Pick a tool'}
         {(mode === 'area' || mode === 'box') && pendingPerimeter !== null && pendingCount >= 2 && (
-          <span className="measurement-live-sub">
-            · {formatLength(pendingPerimeter, unit)}
-          </span>
+          <span className="measurement-live-sub">· {formatLength(pendingPerimeter, unit)}</span>
         )}
       </div>
 
-      {mode === 'area' && canFinish && (
+      {snapFeedback && (
+        <span
+          className={`measurement-snap-feedback${snapFeedback.exact ? ' exact' : ''}`}
+          title={snapFeedback.source ?? `${snapFeedback.kind} snap`}
+        >
+          <span className="measurement-snap-glyph" aria-hidden="true" />
+          {snapFeedback.kind.toUpperCase()}
+          <small>{snapFeedback.exact ? 'EXACT' : 'GUIDE'}</small>
+        </span>
+      )}
+
+      {canFinish && (
         <button
           className="measurement-btn measurement-btn-primary"
           onClick={onFinish}
           title="Close polygon and commit (Enter)"
+          aria-label="Finish polygon measurement"
         >
           ✓
         </button>
@@ -132,19 +133,20 @@ export default function MeasurementControls({ snapshot, onFinish, onCancel, onCl
           className="measurement-btn"
           onClick={onCancel}
           title="Discard in-flight measurement (Esc)"
+          aria-label="Cancel pending measurement"
         >
           ✕
         </button>
       )}
 
-      <div className="measurement-units">
-        {UNIT_BUTTONS.map(({ unit: u, label, hint }) => (
+      <div className="measurement-units" aria-label="Measurement units">
+        {UNIT_BUTTONS.map(({ unit: optionUnit, label, hint }) => (
           <button
-            key={u}
-            className={`measurement-unit-btn ${unit === u ? 'active' : ''}`}
-            onClick={() => setMeasurement({ unit: u })}
+            key={optionUnit}
+            className={`measurement-unit-btn ${unit === optionUnit ? 'active' : ''}`}
+            onClick={() => setMeasurement({ unit: optionUnit })}
             title={hint}
-            aria-pressed={unit === u}
+            aria-pressed={unit === optionUnit}
           >
             {label}
           </button>
@@ -153,19 +155,15 @@ export default function MeasurementControls({ snapshot, onFinish, onCancel, onCl
 
       {committedCount > 0 && (
         <div className="measurement-history" aria-label="Committed measurements">
-          {snapshot!.committed.slice(0, 2).map((m) => (
+          {snapshot!.committed.slice(0, 2).map((measurement) => (
             <button
-              key={m.id}
+              key={measurement.id}
               className="measurement-history-chip"
-              onClick={() => onRemove(m.id)}
-              title="Click to remove"
+              onClick={() => onRemove(measurement.id)}
+              title={`Remove ${measurement.kind} measurement`}
             >
               <span className="measurement-history-val">
-                {m.kind === 'linear'
-                  ? formatLength(m.value, unit)
-                  : m.kind === 'area'
-                  ? formatArea(m.value, unit)
-                  : formatAngle(m.value)}
+                {formatMeasurementValue(measurement, unit)}
               </span>
             </button>
           ))}
@@ -173,7 +171,7 @@ export default function MeasurementControls({ snapshot, onFinish, onCancel, onCl
             <button
               className="measurement-btn"
               onClick={onClear}
-              title={`Clear all ${committedCount}`}
+              title={`Clear all ${committedCount} measurements`}
             >
               ×{committedCount}
             </button>

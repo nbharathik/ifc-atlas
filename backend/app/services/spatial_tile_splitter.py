@@ -21,12 +21,43 @@ Windows / Python 3.13 IfcOpenShell SIGSEGV.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import math
+import os
+import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Iterable, Optional
 
+from app.core.config import DATA_DIR
+
 logger = logging.getLogger(__name__)
+
+
+SPATIAL_TILE_ARTIFACT_SCHEMA_VERSION = 1
+# v2: feature elements (openings, projections, surface features) are excluded
+# from tile membership. They carry void/feature semantics rather than rendered
+# content, and every conversion profile except "quality" drops them from the
+# fragment - a tile that lists one can therefore never pass the fail-closed
+# subset identity proof.
+SPATIAL_TILE_ALGORITHM_VERSION = "storey-centroid-grid-v2"
+SPATIAL_TILE_CACHE_DIR = DATA_DIR / "spatial-tile-cache"
+
+
+def _canonical_json(value: object) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _sha256_json(value: object) -> str:
+    return hashlib.sha256(_canonical_json(value)).hexdigest()
 
 
 # ── Pure data types ─────────────────────────────────────────────────────────
@@ -85,6 +116,192 @@ class TileManifest:
     @property
     def total_tiles(self) -> int:
         return len(self.tiles)
+
+
+def _storey_assignment_digest(storey_manifest: object) -> str:
+    assignments: list[list[int]] = []
+    for storey in getattr(storey_manifest, "storeys", None) or []:
+        storey_idx = int(getattr(storey, "idx", 0))
+        for element_id in getattr(storey, "element_ids", None) or []:
+            assignments.append([int(element_id), storey_idx])
+    assignments.sort()
+    return _sha256_json(assignments)
+
+
+def _aabb_lookup_digest(
+    aabb_lookup: Optional[
+        dict[int, tuple[tuple[float, float, float], tuple[float, float, float]]]
+    ],
+) -> Optional[str]:
+    if not aabb_lookup:
+        return None
+    rows = [
+        [int(element_id), list(bounds[0]), list(bounds[1])]
+        for element_id, bounds in aabb_lookup.items()
+    ]
+    rows.sort(key=lambda row: row[0])
+    return _sha256_json(rows)
+
+
+def _spatial_artifact_identity(
+    sha: str,
+    grid_resolution: int,
+    storey_manifest: object,
+    aabb_lookup: Optional[
+        dict[int, tuple[tuple[float, float, float], tuple[float, float, float]]]
+    ],
+) -> dict[str, object]:
+    return {
+        "schema_version": SPATIAL_TILE_ARTIFACT_SCHEMA_VERSION,
+        "algorithm": SPATIAL_TILE_ALGORITHM_VERSION,
+        "source_sha256": sha,
+        "grid_resolution": grid_resolution,
+        "storey_assignment_sha256": _storey_assignment_digest(storey_manifest),
+        "aabb_mode": "geometry" if aabb_lookup else "placement",
+        "aabb_lookup_sha256": _aabb_lookup_digest(aabb_lookup),
+    }
+
+
+def _spatial_cache_path(cache_dir: Path, identity: dict[str, object]) -> Path:
+    digest = _sha256_json(identity)
+    return cache_dir / f"tiles-v{SPATIAL_TILE_ARTIFACT_SCHEMA_VERSION}-{digest}.json"
+
+
+def _manifest_payload(manifest: TileManifest, aabb_source: str) -> dict[str, object]:
+    return {
+        "source_sha256": manifest.source_sha256,
+        "grid_resolution": manifest.grid_resolution,
+        "world_aabb_min": list(manifest.world_aabb_min),
+        "world_aabb_max": list(manifest.world_aabb_max),
+        "total_elements": manifest.total_elements,
+        "total_tiles": manifest.total_tiles,
+        "aabb_source": aabb_source,
+        "tiles": [
+            {
+                "tile_id": tile.tile_id,
+                "storey_idx": tile.storey_idx,
+                "cell_x": tile.cell_x,
+                "cell_y": tile.cell_y,
+                "aabb_min": list(tile.aabb_min),
+                "aabb_max": list(tile.aabb_max),
+                "element_ids": tile.element_ids,
+                "element_count": tile.element_count,
+            }
+            for tile in manifest.tiles
+        ],
+    }
+
+
+def _atomic_write_spatial_artifact(
+    path: Path,
+    identity: dict[str, object],
+    manifest: TileManifest,
+    aabb_source: str,
+) -> None:
+    payload = _manifest_payload(manifest, aabb_source)
+    document = {
+        "schema_version": SPATIAL_TILE_ARTIFACT_SCHEMA_VERSION,
+        "identity": identity,
+        "identity_sha256": _sha256_json(identity),
+        "payload": payload,
+        "payload_sha256": _sha256_json(payload),
+    }
+    encoded = _canonical_json(document) + b"\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, raw_temp = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    temp_path = Path(raw_temp)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+def _triple(value: object) -> tuple[float, float, float]:
+    if not isinstance(value, list) or len(value) != 3:
+        raise ValueError("expected a three-coordinate array")
+    result = tuple(float(coordinate) for coordinate in value)
+    if not all(math.isfinite(coordinate) for coordinate in result):
+        raise ValueError("spatial artifact contains a non-finite coordinate")
+    return result  # type: ignore[return-value]
+
+
+def _load_spatial_artifact(
+    path: Path,
+    identity: dict[str, object],
+) -> Optional[tuple[TileManifest, str]]:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(document, dict):
+            return None
+        if document.get("schema_version") != SPATIAL_TILE_ARTIFACT_SCHEMA_VERSION:
+            return None
+        if document.get("identity") != identity:
+            return None
+        if document.get("identity_sha256") != _sha256_json(identity):
+            return None
+        payload = document.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        if document.get("payload_sha256") != _sha256_json(payload):
+            return None
+        if payload.get("source_sha256") != identity["source_sha256"]:
+            return None
+        if payload.get("grid_resolution") != identity["grid_resolution"]:
+            return None
+        source = payload.get("aabb_source")
+        if source not in {"real", "mixed", "placement"}:
+            return None
+
+        raw_tiles = payload.get("tiles")
+        if not isinstance(raw_tiles, list):
+            return None
+        tiles: list[TileInfo] = []
+        seen_element_ids: set[int] = set()
+        for raw_tile in raw_tiles:
+            if not isinstance(raw_tile, dict):
+                return None
+            element_ids = [int(value) for value in raw_tile.get("element_ids", [])]
+            if element_ids != sorted(set(element_ids)):
+                return None
+            if seen_element_ids.intersection(element_ids):
+                return None
+            seen_element_ids.update(element_ids)
+            tile = TileInfo(
+                tile_id=str(raw_tile["tile_id"]),
+                storey_idx=int(raw_tile["storey_idx"]),
+                cell_x=int(raw_tile["cell_x"]),
+                cell_y=int(raw_tile["cell_y"]),
+                aabb_min=_triple(raw_tile["aabb_min"]),
+                aabb_max=_triple(raw_tile["aabb_max"]),
+                element_ids=element_ids,
+                element_count=int(raw_tile["element_count"]),
+            )
+            if tile.element_count != len(tile.element_ids):
+                return None
+            if tile.tile_id != f"{tile.storey_idx}-{tile.cell_x}-{tile.cell_y}":
+                return None
+            tiles.append(tile)
+
+        manifest = TileManifest(
+            source_sha256=str(payload["source_sha256"]),
+            grid_resolution=int(payload["grid_resolution"]),
+            world_aabb_min=_triple(payload["world_aabb_min"]),
+            world_aabb_max=_triple(payload["world_aabb_max"]),
+            tiles=tiles,
+        )
+        if payload.get("total_elements") != manifest.total_elements:
+            return None
+        if payload.get("total_tiles") != manifest.total_tiles:
+            return None
+        return manifest, str(source)
+    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
 
 
 # ── Pure partition function (load-bearing - fully testable) ──────────────────
@@ -231,6 +448,19 @@ def _build_storey_lookup(storey_manifest: object) -> dict[int, int]:
     return storey_lookup
 
 
+def _is_feature_element(el: object) -> bool:
+    """True only for confirmed IfcFeatureElement subtypes (openings etc.).
+
+    Uses a strict ``is True`` check so mocked or malformed entities are kept:
+    keeping an extra element degrades to the fail-closed subset proof, while
+    wrongly excluding one would silently drop real geometry from every tile.
+    """
+    try:
+        return el.is_a("IfcFeatureElement") is True  # type: ignore[union-attr]
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return False
+
+
 def extract_element_aabbs(model: object, storey_manifest: object) -> list[ElementAABB]:
     """Pull placement-origin point-AABBs for every element in the storey manifest.
 
@@ -256,6 +486,8 @@ def extract_element_aabbs(model: object, storey_manifest: object) -> list[Elemen
         return []
 
     for el in elements:
+        if _is_feature_element(el):
+            continue
         try:
             eid = int(el.id())
         except (AttributeError, TypeError, ValueError):
@@ -314,6 +546,8 @@ def extract_element_aabbs_from_cache(
     n_placement = 0
     n_skipped = 0
     for el in elements:
+        if _is_feature_element(el):
+            continue
         try:
             eid = int(el.id())
         except (AttributeError, TypeError, ValueError):
@@ -369,9 +603,13 @@ class SpatialTileSplitter:
     placement-origin point AABBs for any element missing from the cache.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, cache_dir: Optional[Path] = None) -> None:
         self._cache: dict[tuple[str, int], TileManifest] = {}
         self._aabb_source: dict[tuple[str, int], str] = {}
+        self._artifact_identity: dict[tuple[str, int], str] = {}
+        # Tests and one-off callers stay purely in-memory by default.  The
+        # application singleton below opts into the durable artifact cache.
+        self._cache_dir = cache_dir
 
     def get_manifest(
         self,
@@ -399,27 +637,57 @@ class SpatialTileSplitter:
             `aabb_service`. When non-empty, the splitter uses real AABBs and
             only falls back to placement-origin for missing IDs.
         """
+        if grid_resolution < 1:
+            raise ValueError(
+                f"grid_resolution must be >= 1, got {grid_resolution}"
+            )
+
         key = (sha, grid_resolution)
-        # Invalidate a stale "placement" cache when a warm AABB lookup is now
-        # available - otherwise the first /tile-manifest request issued during
-        # the AABB warm-up window pins a placement-origin manifest forever and
-        # later requests never pick up the real geometry AABBs.
+        identity = _spatial_artifact_identity(
+            sha, grid_resolution, storey_manifest, aabb_lookup
+        )
+        identity_sha256 = _sha256_json(identity)
+
         if (
             sha
-            and aabb_lookup
             and key in self._cache
-            and self._aabb_source.get(key) == "placement"
+            and self._artifact_identity.get(key) == identity_sha256
         ):
-            logger.debug(
-                "tile manifest cache evicted (AABB cache warmed): sha=%s grid=%d",
-                sha[:16], grid_resolution,
-            )
-            del self._cache[key]
-            self._aabb_source.pop(key, None)
-
-        if sha and key in self._cache:
             logger.debug("tile manifest cache hit: sha=%s grid=%d", sha[:16], grid_resolution)
             return self._cache[key]
+
+        # The AABB lookup can transition placement -> mixed -> real while the
+        # background geometry pass is warming.  Identity includes its complete
+        # digest, so every transition invalidates both memory and disk safely.
+        if sha and key in self._cache:
+            self._cache.pop(key, None)
+            self._aabb_source.pop(key, None)
+            self._artifact_identity.pop(key, None)
+
+        # Single-model sessions never revisit another fingerprint. Entries for
+        # other models hold full element-ID manifests, so a long-running
+        # backend would otherwise accumulate one per model ever loaded.
+        if sha:
+            for stale_key in [k for k in self._cache if k[0] != sha]:
+                self._cache.pop(stale_key, None)
+                self._aabb_source.pop(stale_key, None)
+                self._artifact_identity.pop(stale_key, None)
+
+        if sha and self._cache_dir is not None:
+            artifact_path = _spatial_cache_path(self._cache_dir, identity)
+            cached = _load_spatial_artifact(artifact_path, identity)
+            if cached is not None:
+                manifest, source = cached
+                self._cache[key] = manifest
+                self._aabb_source[key] = source
+                self._artifact_identity[key] = identity_sha256
+                logger.debug(
+                    "tile manifest disk cache hit: sha=%s grid=%d source=%s",
+                    sha[:16],
+                    grid_resolution,
+                    source,
+                )
+                return manifest
 
         if aabb_lookup:
             elements, source = extract_element_aabbs_from_cache(
@@ -432,6 +700,22 @@ class SpatialTileSplitter:
         if sha:
             self._cache[key] = manifest
             self._aabb_source[key] = source
+            self._artifact_identity[key] = identity_sha256
+            if self._cache_dir is not None:
+                try:
+                    _atomic_write_spatial_artifact(
+                        _spatial_cache_path(self._cache_dir, identity),
+                        identity,
+                        manifest,
+                        source,
+                    )
+                except (OSError, TypeError, ValueError) as exc:
+                    logger.warning(
+                        "tile manifest disk persist failed for sha=%s grid=%d: %s",
+                        sha[:16],
+                        grid_resolution,
+                        exc,
+                    )
         return manifest
 
     def aabb_source(self, sha: str, grid_resolution: int) -> str:
@@ -443,15 +727,17 @@ class SpatialTileSplitter:
         if sha is None:
             self._cache.clear()
             self._aabb_source.clear()
+            self._artifact_identity.clear()
         else:
             for key in list(self._cache):
                 if key[0] == sha:
                     del self._cache[key]
                     self._aabb_source.pop(key, None)
+                    self._artifact_identity.pop(key, None)
 
     def cache_size(self) -> int:
         return len(self._cache)
 
 
 # Module-level singleton - imported by ifc_routes.
-spatial_tile_splitter = SpatialTileSplitter()
+spatial_tile_splitter = SpatialTileSplitter(cache_dir=SPATIAL_TILE_CACHE_DIR)

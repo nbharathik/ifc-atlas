@@ -1,13 +1,13 @@
 import { useEffect, useCallback } from 'react';
 import { useStore, activeToolOf } from '../../store/useStore';
-import { findNodeById } from '../../services/viewer/spatialTreeHelpers';
+import { collectLeavesUnder, findNodeById } from '../../services/viewer/spatialTreeHelpers';
 import {
   copyNodeToClipboard,
   spatialNodeToClipboardNode,
   type ClipboardNodeLike,
 } from '../../services/viewer/selectionClipboardHelpers';
 import { SHORTCUTS } from './shortcutsList';
-import { chooseFrameTargets } from '../../services/viewer/selectionFrameHelpers';
+import { resolveViewerActionTargets } from '../../services/viewer/viewerActionTargetHelpers';
 import { BROWSER_ONLY } from '../../config/featureFlags';
 
 const VIEW_MAP: Record<string, string> = {
@@ -371,10 +371,8 @@ export default function KeyboardShortcuts({
           if (e.shiftKey) {
             useStore.getState().setCheckpointPanelOpen(!useStore.getState().checkpointPanelOpen);
           } else {
-            const selH = useStore.getState().selectedElementId;
-            const hlH = useStore.getState().highlightedIds;
-            const tgtH = selH != null ? [selH] : hlH;
-            if (tgtH.length > 0) addHiddenIds(tgtH);
+            const targets = resolveViewerActionTargets(useStore.getState());
+            if (targets.length > 0) addHiddenIds(targets);
           }
           break;
         case 'f':
@@ -389,11 +387,10 @@ export default function KeyboardShortcuts({
             // Frame the active selection if there is one (matches
             // H / I priority). Empty target list falls through to fit-model so
             // a fresh model with no selection still frames the whole scene.
-            const sFrame = useStore.getState().selectedElementId;
-            const hFrame = useStore.getState().highlightedIds;
-            const frameFn = useStore.getState().frameElementsFn;
-            const targets = chooseFrameTargets(sFrame, hFrame);
-            if (targets && frameFn) {
+            const state = useStore.getState();
+            const targets = resolveViewerActionTargets(state);
+            const frameFn = state.frameElementsFn;
+            if (targets.length > 0 && frameFn) {
               frameFn(targets);
             } else {
               onFitModel?.();
@@ -412,10 +409,8 @@ export default function KeyboardShortcuts({
         case 'i':
         case 'I': {
           e.preventDefault();
-          const sel = useStore.getState().selectedElementId;
-          const hl = useStore.getState().highlightedIds;
-          const target = sel != null ? [sel] : hl;
-          if (target.length > 0) setIsolatedIds(target);
+          const targets = resolveViewerActionTargets(useStore.getState());
+          if (targets.length > 0) setIsolatedIds(targets);
           break;
         }
         case 'a':
@@ -469,12 +464,10 @@ export default function KeyboardShortcuts({
             };
             storeyNode = find(tree);
             if (!storeyNode) break;
-            const collectIds = (n: typeof tree): number[] => {
-              const ids = [n.id];
-              for (const c of n.children) ids.push(...collectIds(c));
-              return ids;
-            };
-            const subtreeIds = collectIds(storeyNode);
+            // Isolate the same leaf-element set as the Viewer Tools storey
+            // chips - including container nodes made the isolation set differ
+            // from the chip's leaf set, so the chip never lit up for Shift+N.
+            const subtreeIds = collectLeavesUnder(storeyNode);
             // Toggle: if this storey is already isolated, clear; else isolate.
             const cur = state.isolatedIds;
             const sameSet = cur.length === subtreeIds.length && new Set(cur).size === new Set(subtreeIds).size &&

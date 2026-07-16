@@ -35,6 +35,7 @@
  */
 
 import * as WEBIFC from 'web-ifc';
+import { BROWSER_WEB_IFC_RUNTIME } from './webIfcRuntime';
 
 const FLAG = Symbol.for('aiv.webIfcSingleThreadPatched');
 
@@ -55,7 +56,11 @@ if (!globalAny[FLAG]) {
     handler?: unknown,
     _forceSingleThread?: boolean,
   ): Promise<void> {
-    return original.call(this, handler as never, true);
+    return original.call(
+      this,
+      handler as never,
+      BROWSER_WEB_IFC_RUNTIME.forceSingleThread,
+    );
   };
   globalAny[FLAG] = true;
 }

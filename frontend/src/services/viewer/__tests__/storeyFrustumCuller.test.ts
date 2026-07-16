@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { extractStoreyNodes, StoreyFrustumCuller } from '../storeyFrustumCuller';
 import type { SpatialNode } from '../../../types/ifc';
 import type * as FRAGS from '@thatopen/fragments';
+import type { VisibilityMutationTarget } from '../renderStateCoordinator';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -205,6 +206,161 @@ describe('StoreyFrustumCuller.getCulledMemberIds', () => {
       { storeyId: 1, name: 'A', localIds: [0, 1], box: {}, autoCulled: true },
     ]);
     expect(culler.getCulledMemberIds()).toEqual([0, 1]);
+  });
+});
+
+describe('StoreyFrustumCuller visibility ownership', () => {
+  it('ignores a stale hide acknowledgement after ownership is released', async () => {
+    const culler = new StoreyFrustumCuller();
+    seedRecords(culler, [{
+      storeyId: 1,
+      name: 'Far storey',
+      localIds: [10, 11],
+      box: new THREE.Box3(
+        new THREE.Vector3(100, 100, 100),
+        new THREE.Vector3(101, 101, 101),
+      ),
+      autoCulled: false,
+    }]);
+    let acknowledge!: () => void;
+    const gate = new Promise<void>((resolve) => { acknowledge = resolve; });
+    const target: VisibilityMutationTarget = {
+      setVisible: vi.fn(async () => {}),
+      applyVisibilityDelta: vi.fn(async () => gate),
+      clearVisibility: vi.fn(async () => {}),
+    };
+    const camera = new THREE.PerspectiveCamera(5, 1, 0.1, 2);
+    camera.position.set(0, 0, 1);
+    camera.lookAt(0, 0, 0);
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld();
+
+    const staleTick = culler.tick(camera, makeModelMock(), target);
+    await vi.waitFor(() => expect(target.applyVisibilityDelta).toHaveBeenCalledTimes(1));
+    culler.releaseOwnership();
+    acknowledge();
+    await staleTick;
+
+    expect(culler.getCulledMemberIds()).toEqual([]);
+  });
+
+  it('reveals an authoritative storey hide while its acknowledgement is pending', async () => {
+    const culler = new StoreyFrustumCuller();
+    seedRecords(culler, [{
+      storeyId: 1,
+      name: 'Far storey',
+      localIds: [10, 11],
+      box: new THREE.Box3(
+        new THREE.Vector3(100, 100, 100),
+        new THREE.Vector3(101, 101, 101),
+      ),
+      autoCulled: false,
+    }]);
+    const hidden = new Set<number>();
+    let acknowledge!: () => void;
+    const gate = new Promise<void>((resolve) => { acknowledge = resolve; });
+    const target: VisibilityMutationTarget = {
+      setVisible: vi.fn(async (ids, visible) => {
+        for (const id of ids ?? []) {
+          if (visible) hidden.delete(id);
+          else hidden.add(id);
+        }
+      }),
+      applyVisibilityDelta: vi.fn(async (toHide, toShow) => {
+        for (const id of toShow) hidden.delete(id);
+        for (const id of toHide) hidden.add(id);
+        await gate;
+      }),
+      clearVisibility: vi.fn(async () => { hidden.clear(); }),
+    };
+    const hiddenCamera = new THREE.PerspectiveCamera(5, 1, 0.1, 2);
+    hiddenCamera.position.set(0, 0, 1);
+    hiddenCamera.lookAt(0, 0, 0);
+    hiddenCamera.updateProjectionMatrix();
+    hiddenCamera.updateMatrixWorld();
+    const visibleCamera = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
+    visibleCamera.position.set(100.5, 100.5, 105);
+    visibleCamera.lookAt(100.5, 100.5, 100.5);
+    visibleCamera.updateProjectionMatrix();
+    visibleCamera.updateMatrixWorld();
+
+    const pendingHide = culler.tick(hiddenCamera, makeModelMock(), target);
+    await vi.waitFor(() => expect(target.applyVisibilityDelta).toHaveBeenCalledTimes(1));
+    expect([...hidden]).toEqual([10, 11]);
+    expect(culler.getCulledMemberIds()).toEqual([10, 11]);
+
+    await culler.showPass(visibleCamera, makeModelMock(), target);
+    expect(target.setVisible).toHaveBeenCalledWith([10, 11], true);
+    expect([...hidden]).toEqual([]);
+
+    acknowledge();
+    await pendingHide;
+    expect(culler.getCulledMemberIds()).toEqual([]);
+  });
+
+  it('rolls back only the newest failed desired hide and show', async () => {
+    const culler = new StoreyFrustumCuller();
+    seedRecords(culler, [{
+      storeyId: 1,
+      name: 'Far storey',
+      localIds: [10, 11],
+      box: new THREE.Box3(
+        new THREE.Vector3(100, 100, 100),
+        new THREE.Vector3(101, 101, 101),
+      ),
+      autoCulled: false,
+    }]);
+    const hiddenCamera = new THREE.PerspectiveCamera(5, 1, 0.1, 2);
+    hiddenCamera.position.set(0, 0, 1);
+    hiddenCamera.lookAt(0, 0, 0);
+    hiddenCamera.updateProjectionMatrix();
+    hiddenCamera.updateMatrixWorld();
+    const visibleCamera = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
+    visibleCamera.position.set(100.5, 100.5, 105);
+    visibleCamera.lookAt(100.5, 100.5, 100.5);
+    visibleCamera.updateProjectionMatrix();
+    visibleCamera.updateMatrixWorld();
+    const target: VisibilityMutationTarget = {
+      setVisible: vi
+        .fn<VisibilityMutationTarget['setVisible']>()
+        .mockRejectedValueOnce(new Error('show failed'))
+        .mockResolvedValue(undefined),
+      applyVisibilityDelta: vi
+        .fn<NonNullable<VisibilityMutationTarget['applyVisibilityDelta']>>()
+        .mockRejectedValueOnce(new Error('hide failed'))
+        .mockResolvedValue(undefined),
+    };
+
+    expect(await culler.tick(hiddenCamera, makeModelMock(), target)).toBe(0);
+    expect(culler.getCulledMemberIds()).toEqual([]);
+    expect(await culler.tick(hiddenCamera, makeModelMock(), target)).toBe(1);
+    expect(culler.getCulledMemberIds()).toEqual([10, 11]);
+
+    expect(await culler.showPass(visibleCamera, makeModelMock(), target)).toBe(0);
+    expect(culler.getCulledMemberIds()).toEqual([10, 11]);
+    expect(await culler.showPass(visibleCamera, makeModelMock(), target)).toBe(1);
+    expect(culler.getCulledMemberIds()).toEqual([]);
+  });
+
+  it('authoritatively clears the target layer with no locally-culled records', async () => {
+    const culler = new StoreyFrustumCuller();
+    seedRecords(culler, [{
+      storeyId: 1,
+      name: 'Visible',
+      localIds: [10],
+      box: new THREE.Box3(),
+      autoCulled: false,
+    }]);
+    const clearVisibility = vi.fn(async () => {});
+    const target: VisibilityMutationTarget = {
+      setVisible: vi.fn(async () => {}),
+      clearVisibility,
+    };
+
+    await culler.clearCull(makeModelMock(), target);
+
+    expect(clearVisibility).toHaveBeenCalledTimes(1);
+    expect(target.setVisible).not.toHaveBeenCalled();
   });
 });
 

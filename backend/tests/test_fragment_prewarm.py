@@ -6,11 +6,16 @@ and never run for metadata-only edits.
 """
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.api import ifc_routes
+from app.services.fragment_cache import (
+    atomic_write_fragment_cache,
+    full_fragment_cache_entry,
+    read_fragment_cache,
+)
 
 
 def _fake_svc(fingerprint="abc123def", data=b"ISO-10303-21;" + b"x" * 100):
@@ -36,7 +41,8 @@ def test_prewarm_noop_without_bytes(monkeypatch, tmp_path):
 
 def test_prewarm_skips_when_cache_already_warm(monkeypatch, tmp_path):
     fp = "warmfp"
-    (tmp_path / f"{fp}-{ifc_routes._PREWARM_PROFILE}.frag").write_bytes(b"cached")
+    cache_entry = full_fragment_cache_entry(tmp_path, fp, ifc_routes._PREWARM_PROFILE)
+    atomic_write_fragment_cache(cache_entry, b"cached")
     monkeypatch.setattr(ifc_routes, "ifc_service", _fake_svc(fingerprint=fp))
     monkeypatch.setattr(ifc_routes, "FRAGMENT_CACHE_DIR", tmp_path)
     sidecar = MagicMock()
@@ -82,6 +88,6 @@ async def test_prewarm_converts_and_caches_when_scheduled(monkeypatch, tmp_path)
     await asyncio.sleep(0)
 
     sidecar.convert.assert_awaited_once()
-    cache_file = tmp_path / f"{fp}-{ifc_routes._PREWARM_PROFILE}.frag"
-    assert cache_file.exists()
+    cache_entry = full_fragment_cache_entry(tmp_path, fp, ifc_routes._PREWARM_PROFILE)
+    assert read_fragment_cache(cache_entry) == b"F" * 8192
     pbs.mark_complete.assert_awaited()

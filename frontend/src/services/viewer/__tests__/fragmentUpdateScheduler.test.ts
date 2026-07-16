@@ -330,4 +330,178 @@ describe('createFragmentUpdateScheduler', () => {
       idlePending: false,
     });
   });
+
+  it('acknowledges a request only after its coalesced worker update completes', async () => {
+    const fake = makeFakeRaf();
+    const gate = deferred();
+    const update = vi.fn(() => gate.promise);
+    const scheduler = createFragmentUpdateScheduler({
+      raf: fake.raf,
+      cancelRaf: fake.cancelRaf,
+      update,
+    });
+
+    let acknowledged = false;
+    const acknowledgement = scheduler.requestAndWait({
+      priority: 'visual',
+      force: true,
+      reason: 'ghost-visibility',
+    }).then((run) => {
+      acknowledged = true;
+      return run;
+    });
+
+    await Promise.resolve();
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(acknowledged).toBe(false);
+
+    gate.resolve();
+    const run = await acknowledgement;
+    expect(run.reasons).toEqual(['ghost-visibility']);
+    expect(acknowledged).toBe(true);
+  });
+
+  it('rejects queued acknowledgements when the scheduler is cancelled', async () => {
+    const fake = makeFakeRaf();
+    const scheduler = createFragmentUpdateScheduler({
+      raf: fake.raf,
+      cancelRaf: fake.cancelRaf,
+      update: vi.fn(),
+    });
+
+    scheduler.setNavigating(true);
+    const acknowledgement = scheduler.requestAndWait({
+      priority: 'idle',
+      force: true,
+      reason: 'culler-hide',
+    });
+    scheduler.cancel();
+
+    await expect(acknowledgement).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('arms a waiter hook only when its own queued batch starts', async () => {
+    const fake = makeFakeRaf();
+    const microtasks: Array<() => void> = [];
+    const first = deferred();
+    const update = vi
+      .fn<() => Promise<void>>()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce(undefined);
+    const scheduler = createFragmentUpdateScheduler({
+      raf: fake.raf,
+      cancelRaf: fake.cancelRaf,
+      microtask: (cb) => microtasks.push(cb),
+      update,
+    });
+
+    scheduler.request({ priority: 'camera', force: false, reason: 'camera' });
+    fake.flush();
+    expect(update).toHaveBeenCalledTimes(1);
+
+    const onBatchStart = vi.fn();
+    const acknowledgement = scheduler.requestAndWait(
+      { priority: 'visual', force: true, reason: 'click-highlight' },
+      { onBatchStart },
+    );
+
+    // An event emitted by the preceding in-flight update cannot be observed
+    // by a listener installed from this hook because the hook is not armed yet.
+    expect(onBatchStart).not.toHaveBeenCalled();
+    first.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(onBatchStart).not.toHaveBeenCalled();
+
+    microtasks.shift()!();
+    await acknowledgement;
+    expect(onBatchStart).toHaveBeenCalledTimes(1);
+    expect(onBatchStart.mock.calls[0][0].reasons).toEqual(['click-highlight']);
+  });
+
+  it('shutdown cancels queued work and waits for the consumed update', async () => {
+    const fake = makeFakeRaf();
+    const first = deferred();
+    const update = vi.fn(() => first.promise);
+    const scheduler = createFragmentUpdateScheduler({
+      raf: fake.raf,
+      cancelRaf: fake.cancelRaf,
+      update,
+    });
+
+    scheduler.request({ priority: 'camera', force: false, reason: 'camera' });
+    fake.flush();
+    expect(update).toHaveBeenCalledTimes(1);
+
+    const queued = scheduler.requestAndWait({
+      priority: 'visual',
+      force: true,
+      reason: 'click-highlight',
+    });
+    const queuedAssertion = expect(queued).rejects.toMatchObject({ name: 'AbortError' });
+    let settled = false;
+    const shutdown = scheduler.shutdown().then(() => { settled = true; });
+
+    await queuedAssertion;
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(scheduler.snapshot().immediatePending).toBe(false);
+
+    first.resolve();
+    await shutdown;
+    expect(settled).toBe(true);
+    await expect(scheduler.requestAndWait({
+      priority: 'visual',
+      force: true,
+      reason: 'manual',
+    })).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('notifies onEnqueue for every accepted request, including mid-flight ones', async () => {
+    const fake = makeFakeRaf();
+    const first = deferred();
+    const enqueued: Array<{ priority: string; reason: string }> = [];
+    const update = vi.fn(() => first.promise);
+    const scheduler = createFragmentUpdateScheduler({
+      raf: fake.raf,
+      cancelRaf: fake.cancelRaf,
+      update,
+      onEnqueue: (request) => enqueued.push({ priority: request.priority, reason: request.reason }),
+    });
+
+    scheduler.request({ priority: 'camera', force: false, reason: 'camera' });
+    fake.flush();
+    expect(update).toHaveBeenCalledTimes(1);
+
+    // A click arriving while the camera update is still in flight must still
+    // surface through onEnqueue - that notification is what lets the update
+    // callback stop waiting on a best-effort acknowledgement.
+    scheduler.request({ priority: 'visual', force: true, reason: 'click-highlight' });
+    scheduler.request({ priority: 'idle', force: false, reason: 'culler-hide' });
+
+    expect(enqueued).toEqual([
+      { priority: 'camera', reason: 'camera' },
+      { priority: 'visual', reason: 'click-highlight' },
+      { priority: 'idle', reason: 'culler-hide' },
+    ]);
+
+    first.resolve();
+    await scheduler.shutdown();
+  });
+
+  it('keeps scheduling intact when onEnqueue throws', async () => {
+    const fake = makeFakeRaf();
+    const update = vi.fn(() => Promise.resolve());
+    const scheduler = createFragmentUpdateScheduler({
+      raf: fake.raf,
+      cancelRaf: fake.cancelRaf,
+      update,
+      onEnqueue: () => { throw new Error('instrumentation exploded'); },
+    });
+
+    const run = scheduler.requestAndWait({ priority: 'camera', force: false, reason: 'camera' });
+    fake.flush();
+    await expect(run).resolves.toMatchObject({ priority: 'camera' });
+    expect(update).toHaveBeenCalledTimes(1);
+  });
 });

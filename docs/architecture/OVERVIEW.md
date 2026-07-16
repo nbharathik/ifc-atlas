@@ -138,3 +138,5 @@ Frontend DiffPreviewPanel renders before/after
 - [`EDIT_PROTOCOL.md`](EDIT_PROTOCOL.md), sandbox / diff / Apply / Discard contract in detail.
 - [`DEPLOY.md`](DEPLOY.md), web / Tauri / GH-Pages matrices.
 - [`TAURI.md`](TAURI.md), desktop architecture specifics.
+- [`BIM_VIEWER_DALUX_REVIEW.md`](BIM_VIEWER_DALUX_REVIEW.md), viewer stability,
+  performance, Dalux benchmark, and prioritized implementation plan.

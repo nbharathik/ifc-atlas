@@ -29,7 +29,7 @@ For the dated history of changes, see the [GitHub Releases page](https://github.
 | `H` | Hide selection. |
 | `A` | Show all (clear isolation and hidden sets). |
 | `Shift+G` | Toggle ghost mode: non-isolated elements render semi-transparent rather than hidden. |
-| `Shift+1` … `Shift+9` | Isolate the storey from the bottom-left Storey Navigator Bar. |
+| `Shift+1` … `Shift+9` | Isolate the corresponding storey; the Viewer Tools → Storeys section shows the active storey. |
 | `F` | Frame the current selection, or the whole model when nothing is selected. |
 | `Esc` | Clear selection. |
 
@@ -42,21 +42,31 @@ A compact chip at the top-left of the viewport summarises the current selection:
 | **Model Tree** (`T`, left sidebar) | Spatial-tree outliner. Auto-scrolls to the selected element. Type-frequency chips filter the tree to a single IFC type. Hover any row to preview-highlight the geometry (requires hover highlight, off by default). |
 | **Search panel** (`/` or `Ctrl/Cmd+F`, left sidebar) | Multi-field query syntax: bare words fuzzy-match name, IFC class, type, and GlobalId (every word must match), plus `type:IfcWall`, `storey:"Ground Floor"`, `pset:Pset_WallCommon.IsExternal=true` (or `pset:FireRating` for a presence check), and `class:Uniclass` for classification codes. Results are grouped by IFC class; rows offer zoom and isolate actions plus a one-click **Isolate all**. Property and classification filters use an index built on demand, with progress shown while it builds. |
 | **IDS validation panel** (Panels → IDS validation) | Drag buildingSMART `.ids` specification files into a saved library and validate the loaded model against them. Per-spec pass / fail cards list the failing elements: click one to select it, or highlight / isolate every failure at once. Failures export as CSV, and the last run is restored when you reopen the panel with the same model. |
-| **Property Filter panel** (`Shift+F`) | Pick a property, operator (`eq`, `neq`, `contains`, `startswith`, `gt`, `lt`, `gte`, `lte`), and value. Scope by IFC type, storey, or property set. Matches highlight in 3D with a count badge. |
+| **BIM Filter panel** (`Shift+F`, Inspector → Tools → Element filter) | Combine up to 20 property conditions with AND/OR and operators for equality, text, numeric comparison, exists, or missing. Limit the full expression by IFC types, storeys, or property sets; save named definitions in this browser. Results show an exact count and preview, own an independent colour layer, and offer Paint, Isolate, Hide, Frame, Show all, and Clear result. Saved definitions are local—not shared—and must be applied again after a model revision. |
 | **Classification browser** (`G`, left sidebar) | Lists every `IfcClassification` system. Filter by class code or name; click to highlight all members. |
 | **Model Statistics** (`Shift+S`) | Overlay panel showing element counts by IFC type and by storey. Click any row to isolate those elements. |
-| **Storey Navigator Bar** | Floating bar at the bottom-left listing each storey as a clickable pill. |
+| **Storey controls** (Viewer Tools → Storeys) | Click a storey pill to isolate it; Show all clears storey isolation and Ghost xray keeps the surrounding model as transparent context. |
 
 ### Measurement
 
 | Shortcut | Action |
 |---|---|
 | Toolbar ruler / `R` | Toggle the measurement history panel. |
-| Click two points | Linear measurement. |
+| Distance, then two picks | Point-to-point distance. |
+| Height, then two picks | Vertical difference constrained to project Y, with persistent witness geometry. |
+| Clearance, then two face picks | Exact shortest witness between the two picked mesh triangles. This is not yet whole-object/BVH clearance. |
+| Position, then one pick | Persistent World-frame X/Y/Z marker. Project georeferencing is not yet applied. |
+| Rectangle, then two picks | Rectangular area constrained to the first picked face plane. |
 | Click N points + Enter | Polygon area (Newell-normal projected shoelace). |
 | `N`, then three clicks | Angle measurement (vertex → arm 1 → arm 2). |
 
-While drawing, the cursor snaps to the nearest mesh vertex within 20 pixels (blue dot) or to a committed measurement endpoint within 10 cm (white dot). Committed measurements pin a value label at the midpoint or centroid in the 3D view. Export every measurement as CSV from the panel.
+While drawing, hover and click share one 20-pixel construction resolver for
+exact vertices, edges, edge midpoints, and triangle face centers (blue marker).
+Committed measurement endpoints remain exact snap targets within 10 cm (white
+marker). The compact readout identifies the snap and marks it `EXACT` or
+`GUIDE`; history, persistent 3D labels, and CSV export retain source and snap
+provenance. Semantic grid/MEP axes and round-object centers are not live snap
+sources yet.
 
 ### Quantity takeoff
 
@@ -68,15 +78,22 @@ While drawing, the cursor snaps to the nearest mesh vertex within 20 pixels (blu
 |---|---|
 | `X` | Toggle a clip plane. |
 | `Shift+X` | Click a surface to place a plane aligned to that face's normal. |
-| `Alt+X` | Crop the section box to the currently selected element. |
+| `Alt+B` | Toggle the current section box without losing its fitted bounds. |
+| `Alt+X` | Fit one section box to the exact merged bounds of the current multi-selection (or the primary selection). |
+| Viewer Tools → Storeys → **Section storey** | After isolating a storey, fit the section box to all elements under that storey. |
 
-Up to three independent clip planes can stack. The cut surface renders as a solid grey cap rather than a transparent void, so the interior structure stays readable.
+Up to three independent clip planes can stack. Section-box bounds are stored as
+an absolute workspace, so toggling or navigating does not silently replace a
+selection/storey crop with the full-model box. The cut surface renders as a
+solid grey cap rather than a transparent void. Editable box-face handles,
+category/model cut exclusions, and saved-view restoration of the workspace are
+not available yet.
 
 ### Appearance
 
 | Surface | Description |
 |---|---|
-| **Colour by** (bottom-left dropdown) | Recolour every element by IFC type, storey, or material. A legend shows up to ten groups with swatch and count. Selection amber and AI-highlight cyan always render on top. |
+| **Colour by** (Viewer Tools → Appearance) | Recolour every element by IFC type, storey, or material. A legend shows up to ten groups with swatch and count. Selection amber and AI-highlight cyan render on top. |
 | **Native mesh highlighting** | Selected and highlighted elements render their exact geometry in colour through `FragmentsModel.highlight()`, with no bounding-box overlays. |
 | **Hover highlight** | Preview-highlights the element under the cursor and shows a compact tooltip with its name, IFC type, and storey. Off by default; toggle it on the toolbar or in Settings → Viewer. |
 | **Camera presets** | `1`-`6` jump to front, back, left, right, top, isometric. |
@@ -238,11 +255,13 @@ The backend doubles as a headless CLI: `python -m app.cli` (or the `ifc-atlas` c
 |---|---|
 | **Server fragment convert** | When the backend is running, the viewer treats `/api/ifc/convert` as the first attempt on cold load. Optimised fragment binaries are produced server-side and streamed to the browser, bypassing in-browser WASM parsing. |
 | **Fragment manifest fast-path** | On a remount, the viewer queries `/api/ifc/fragment-manifest` with the stored fingerprint. If the server has the fragments cached, they download directly with no re-upload. |
-| **IndexedDB fragment cache** | Cached fragments live in IndexedDB as raw `Uint8Array`, LRU-evicted at 500 MB, and survive hard refreshes. Settings → Storage shows live cache size and entry count. |
+| **IndexedDB fragment cache** | Cached fragments live in IndexedDB as raw `Uint8Array`, LRU-evicted at 500 MB, and survive hard refreshes. Balanced caching is the new-install default; exact runtime/profile/parse compatibility prevents stale reuse. Settings → Storage shows live cache size and entry count. |
 | **Persistent storage opt-in** | On first load, the viewer asks the browser to mark the fragment cache as persistent so it cannot be silently evicted. A badge in Settings shows the grant state (Persistent / Best-effort / Unavailable). |
-| **WASM service-worker cache** | On HTTPS and localhost, the web-ifc WASM binaries are pre-cached by a service worker. |
-| **Per-storey BVH frustum cull** | Each storey gets a bounding box; storeys outside the camera frustum are hidden before the render tick. |
-| **Element-level AABB frustum cull** | Capped at 1500 elements, hides individual elements outside the frustum after the camera settles. Per-element AABBs come from a backend warm-up that runs `ifcopenshell.geom.create_shape` and caches results to disk. |
+| **WASM service-worker cache** | On HTTPS and localhost, the actually used single-thread web-ifc WASM binary and fragment worker are pre-cached. Browser conversion itself runs in a dedicated application worker. |
+| **Stable spatial visibility** | Optional in Settings → Performance. A matching real-AABB tile manifest is preferred; geometry stays mounted while one named mask reveals during movement and hides after settle. Selected exact geometry is pinned. |
+| **Client AABB fallback** | While backend tile preprocessing warms, storey and element cullers provide the fallback for large models. They stand down for user hide/isolate and are replaced atomically once the real spatial index is ready. |
+| **Tile/LOD preprocessing foundation** | The backend can produce independently loadable exact fragment tiles with verified ID/GUID/geometry/material parity. The SSE planner supports hysteresis, request backpressure, cancellation, and LOD0-only picking; progressive initial tile mounting is still under development. |
+| **Exact hover-to-click reuse** | A quick click can reuse a successful exact worker hover hit only when it is at most 150 ms old, within 2 pixels, and camera, clipping, visibility, and fragment state are unchanged. Misses are never reused; all other clicks run the authoritative fragment raycast. GPU ID-buffer and tile-scoped coarse picking are not implemented yet. |
 | **Tool result memoisation** | Read-only tool calls are cached within a single LLM turn. Write tools invalidate the cache. |
 | **Performance HUD** (`M`) | FPS, draw calls, TTFR, total load time, click-to-highlight latency (current and rolling median of last 10), culled element count. Each row colour-coded against its budget. |
 | **Performance Dashboard** (`Shift+M`) | Per-load history. A sparkline shows TTFR for the last 50 loads coloured by load source (live parse, local cache, server convert, server cache). Hover for exact source and TTFR; avg, best, worst, sample count summarise the trend. |

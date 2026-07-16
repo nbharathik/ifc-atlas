@@ -1,5 +1,16 @@
 import * as THREE from 'three';
 import * as FRAGS from '@thatopen/fragments';
+import {
+  WORLD_Y_UP_FRAME,
+  coordinateInFrame,
+  verticalHeightBetween,
+  type CoordinateMeasurement,
+  type VerticalHeightMeasurement,
+} from './constructionMeasurement';
+import type {
+  ConstructionSnapCandidate,
+  ConstructionSnapKind,
+} from './constructionSnapCandidates';
 
 /** Measurement interaction mode.
  *
@@ -14,25 +25,90 @@ import * as FRAGS from '@thatopen/fragments';
  *  - `angle`: three-click angle; click vertex first, then two arm endpoints.
  *     The angle at the vertex between the two arms is reported in degrees.
  */
-export type MeasurementMode = 'off' | 'linear' | 'area' | 'box' | 'angle';
+export type MeasurementMode =
+  | 'off'
+  | 'linear'
+  | 'area'
+  | 'box'
+  | 'angle'
+  | 'height'
+  | 'clearance'
+  | 'position';
+
+export type MeasurementKind = Exclude<MeasurementMode, 'off' | 'box'>;
+
+export type MeasurementSnapKind =
+  | 'endpoint'
+  | 'vertex'
+  | 'edge'
+  | 'midpoint'
+  | 'face'
+  | 'axis'
+  | 'centre';
+
+/** Exact snap state supplied by the viewer's screen-space candidate resolver. */
+export interface MeasurementSnapFeedback {
+  point: THREE.Vector3;
+  kind: MeasurementSnapKind;
+  exact: boolean;
+  source?: string;
+}
+
+export interface CoordinateMeasurementData {
+  world: THREE.Vector3;
+  local: THREE.Vector3;
+  reference: string;
+}
 
 /** Display units. `m` is metres (IFC native); `mm` and `ft` are derived
  *  conversions. Area readouts square the linear unit (m² / mm² / ft²).
  *  All internal math stays in world units (metres for Y-up models). */
 export type MeasurementUnit = 'm' | 'mm' | 'ft';
 
+export type LinearMeasurementSubtype =
+  | 'direct'
+  | 'perpendicular'
+  | 'shortest'
+  | 'vertical';
+
+export interface LinearMeasurementOptions {
+  subtype?: LinearMeasurementSubtype;
+  /** Whether witness points came from exact geometry/semantics rather than inference. */
+  exact?: boolean;
+  /** Optional provenance label such as `triangle-pair` or `project-up-axis`. */
+  source?: string;
+  snapKind?: MeasurementSnapKind;
+}
+
+export interface ConstructionMeasurementOptions {
+  exact?: boolean;
+  source?: string;
+  snapKind?: MeasurementSnapKind;
+}
+
 /** A single committed measurement kept on the scene until the user clears
  *  or switches off measurement mode. Stored world-space so we can re-label
  *  it from any camera angle without re-raycasting. */
 export interface CommittedMeasurement {
   id: string;
-  kind: 'linear' | 'area' | 'angle';
+  kind: MeasurementKind;
   /** World-space points. Linear has 2, area has 3+, angle has 3: [vertex, arm1, arm2]. */
   points: THREE.Vector3[];
   /** Computed scalar - metres for linear, m² for area, degrees for angle. */
   value: number;
   /** ISO-8601 timestamp set when the measurement was committed. */
   timestamp?: string;
+  /** Additive construction-measurement provenance; absent on legacy measurements. */
+  subtype?: LinearMeasurementSubtype;
+  exact?: boolean;
+  source?: string;
+  snapKind?: MeasurementSnapKind;
+  /** Signed project-up delta for height dimensions; `value` remains absolute. */
+  signedValue?: number;
+  /** Original picked/witness points when the rendered dimension is constrained. */
+  sourcePoints?: THREE.Vector3[];
+  /** World and project-local values carried by position markers. */
+  coordinates?: CoordinateMeasurementData;
 }
 
 /** Payload fed back to the React HUD after every pointer interaction so
@@ -56,6 +132,8 @@ export interface MeasurementSnapshot {
    *  endpoint (polygon first-vertex or committed endpoint). The HUD can use
    *  this to show a "snap active" indicator. */
   snapTarget: THREE.Vector3 | null;
+  /** Snap type and provenance shown by the compact construction readout. */
+  snapFeedback: MeasurementSnapFeedback | null;
   /** Recently-committed measurements, newest first. */
   committed: CommittedMeasurement[];
 }
@@ -106,6 +184,45 @@ export function computeAngleDeg(
 /** Format an angle in degrees to a display string. */
 export function formatAngle(degrees: number): string {
   return `${degrees.toFixed(1)}°`;
+}
+
+function displayCoordinateValue(metres: number, unit: MeasurementUnit): string {
+  switch (unit) {
+    case 'mm': return (metres * 1000).toFixed(1);
+    case 'ft': return (metres * 3.28084).toFixed(3);
+    case 'm':
+    default: return metres.toFixed(3);
+  }
+}
+
+export function formatCoordinate(point: THREE.Vector3, unit: MeasurementUnit): string {
+  const suffix = unit;
+  return `X ${displayCoordinateValue(point.x, unit)} · Y ${displayCoordinateValue(point.y, unit)} · Z ${displayCoordinateValue(point.z, unit)} ${suffix}`;
+}
+
+/** One authoritative formatter shared by labels, readouts, and history. */
+export function formatMeasurementValue(
+  measurement: CommittedMeasurement,
+  unit: MeasurementUnit,
+): string {
+  if (measurement.kind === 'angle') return formatAngle(measurement.value);
+  if (measurement.kind === 'area') return formatArea(measurement.value, unit);
+  if (measurement.kind === 'position') {
+    const point = measurement.coordinates?.local ?? measurement.points[0];
+    return point ? formatCoordinate(point, unit) : 'Position unavailable';
+  }
+  return formatLength(measurement.value, unit);
+}
+
+export function measurementKindLabel(kind: MeasurementKind): string {
+  switch (kind) {
+    case 'linear': return 'Distance';
+    case 'area': return 'Area';
+    case 'angle': return 'Angle';
+    case 'height': return 'Height';
+    case 'clearance': return 'Clearance';
+    case 'position': return 'Position';
+  }
 }
 
 /** Linear distance in metres between two world-space points. */
@@ -326,6 +443,41 @@ function pointMaterial(colour = 0xffcc33): THREE.PointsMaterial {
   });
 }
 
+export type MeasurementSnapInput =
+  | THREE.Vector3
+  | MeasurementSnapFeedback
+  | ConstructionSnapCandidate
+  | null
+  | undefined;
+
+function measurementSnapKind(
+  kind: MeasurementSnapKind | ConstructionSnapKind,
+): MeasurementSnapKind {
+  if (kind === 'round-center') return 'centre';
+  if (kind === 'face-center') return 'face';
+  return kind;
+}
+
+function normaliseSnapInput(input: MeasurementSnapInput): MeasurementSnapFeedback | null {
+  if (!input) return null;
+  if (input instanceof THREE.Vector3 || ('isVector3' in input && input.isVector3)) {
+    return {
+      point: (input as THREE.Vector3).clone(),
+      kind: 'vertex',
+      exact: true,
+      source: 'mesh-vertex',
+    };
+  }
+  const feedback = input as MeasurementSnapFeedback;
+  if (!feedback.point || !feedback.point.isVector3) return null;
+  return {
+    point: feedback.point.clone(),
+    kind: measurementSnapKind(feedback.kind),
+    exact: feedback.exact,
+    ...(feedback.source ? { source: feedback.source } : {}),
+  };
+}
+
 /**
  * Frontend-only measurement controller.
  *
@@ -363,12 +515,15 @@ export class MeasurementController {
 
   private mode: MeasurementMode = 'off';
   private pending: THREE.Vector3[] = [];
+  private pendingSnaps: Array<MeasurementSnapFeedback | null> = [];
   private cursor: THREE.Vector3 | null = null;
   /** Currently-active snap target, or null when not snapping. */
   private snapTarget: THREE.Vector3 | null = null;
   /** Whether the active snap is a mesh vertex snap (blue dot) vs an endpoint
    *  snap (white dot). Only meaningful when snapTarget is non-null. */
-  private isVertexSnap = false;
+  private snapKind: MeasurementSnapKind | null = null;
+  private snapExact = false;
+  private snapSource: string | undefined;
   /** Face normal captured at click 1 in `box` mode - locks the rectangle's
    *  plane so click 2 (and the live preview) stays coplanar with corner A. */
   private boxNormal: THREE.Vector3 | null = null;
@@ -393,9 +548,12 @@ export class MeasurementController {
     if (mode === this.mode) return;
     this.mode = mode;
     this.pending = [];
+    this.pendingSnaps = [];
     this.cursor = null;
     this.snapTarget = null;
-    this.isVertexSnap = false;
+    this.snapKind = null;
+    this.snapExact = false;
+    this.snapSource = undefined;
     this.boxNormal = null;
     this.updateSnapDot();
     this.refreshPreview();
@@ -405,9 +563,12 @@ export class MeasurementController {
   /** Remove every committed + pending measurement and reset mode to `off`. */
   clear(): void {
     this.pending = [];
+    this.pendingSnaps = [];
     this.cursor = null;
     this.snapTarget = null;
-    this.isVertexSnap = false;
+    this.snapKind = null;
+    this.snapExact = false;
+    this.snapSource = undefined;
     this.boxNormal = null;
     this.updateSnapDot();
     for (const m of this.committed) this.disposeCommitted(m);
@@ -420,9 +581,12 @@ export class MeasurementController {
   cancel(): void {
     if (this.pending.length === 0 && !this.cursor) return;
     this.pending = [];
+    this.pendingSnaps = [];
     this.cursor = null;
     this.snapTarget = null;
-    this.isVertexSnap = false;
+    this.snapKind = null;
+    this.snapExact = false;
+    this.snapSource = undefined;
     this.boxNormal = null;
     this.updateSnapDot();
     this.refreshPreview();
@@ -434,19 +598,16 @@ export class MeasurementController {
    * world-space hit in (or null if the cursor is over empty space).
    *
    * @param world - Raw raycast hit position, or null on miss.
-   * @param vertexSnap - Optional screen-space nearest face-vertex (from
-   *   `snapToFaceVertex()`). When provided, it takes priority over the raw
-   *   world point as the cursor position, shown with a blue snap dot.
-   *   Endpoint snaps (polygon close / committed endpoint) override even
-   *   vertex snaps and are shown with a white dot.
+   * @param snapInput - Optional screen-space construction feature resolved by
+   *   the viewer (vertex, edge, midpoint, face centre, axis, or round centre).
+   *   It takes priority over the raw hit and carries exact/inferred provenance.
+   *   Existing measurement endpoints still win so polygons can close exactly.
    */
-  handleMove(world: THREE.Vector3 | null, vertexSnap?: THREE.Vector3 | null): void {
+  handleMove(world: THREE.Vector3 | null, snapInput?: MeasurementSnapInput): void {
     if (this.mode === 'off') return;
-    if (this.pending.length === 0) return;
     if (!world) {
       this.cursor = null;
-      this.snapTarget = null;
-      this.isVertexSnap = false;
+      this.setActiveSnap(null);
       this.updateSnapDot();
       this.refreshPreview();
       this.emit();
@@ -458,27 +619,31 @@ export class MeasurementController {
     // doesn't need to snap to other measurements' endpoints.
     if (this.mode === 'box' && this.boxNormal && this.pending.length === 1) {
       this.cursor = projectPointToPlane(world, this.pending[0], this.boxNormal);
-      this.snapTarget = null;
-      this.isVertexSnap = false;
+      this.setActiveSnap(null);
       this.updateSnapDot();
       this.refreshPreview();
       this.emit();
       return;
     }
-    // Endpoint snap takes priority over vertex snap.
+    // Endpoint snap takes priority over the external construction feature.
     const endpointSnap = this.computeSnap(world);
     if (endpointSnap) {
       this.cursor = endpointSnap.clone();
-      this.snapTarget = endpointSnap;
-      this.isVertexSnap = false;
-    } else if (vertexSnap) {
-      this.cursor = vertexSnap.clone();
-      this.snapTarget = vertexSnap;
-      this.isVertexSnap = true;
+      this.setActiveSnap({
+        point: endpointSnap,
+        kind: 'endpoint',
+        exact: true,
+        source: 'measurement-endpoint',
+      });
     } else {
-      this.cursor = world.clone();
-      this.snapTarget = null;
-      this.isVertexSnap = false;
+      const externalSnap = normaliseSnapInput(snapInput);
+      if (externalSnap) {
+        this.cursor = externalSnap.point.clone();
+        this.setActiveSnap(externalSnap);
+      } else {
+        this.cursor = world.clone();
+        this.setActiveSnap(null);
+      }
     }
     this.updateSnapDot();
     this.refreshPreview();
@@ -497,13 +662,26 @@ export class MeasurementController {
     return snapToNearest(world, candidates, SNAP_THRESHOLD_METRES);
   }
 
-  /** Show / hide the snap indicator dot.
-   *  Endpoint snaps render white (0xffffff); vertex snaps render blue (0x4499ff). */
+  private setActiveSnap(feedback: MeasurementSnapFeedback | null): void {
+    this.snapTarget = feedback?.point.clone() ?? null;
+    this.snapKind = feedback?.kind ?? null;
+    this.snapExact = feedback?.exact ?? false;
+    this.snapSource = feedback?.source;
+  }
+
+  /** Show or hide the colour-coded construction snap indicator. */
   private updateSnapDot(): void {
-    const VERTEX_SNAP_COLOUR = 0x4499ff;
-    const ENDPOINT_SNAP_COLOUR = 0xffffff;
+    const SNAP_COLOURS: Record<MeasurementSnapKind, number> = {
+      endpoint: 0xffffff,
+      vertex: 0x4499ff,
+      edge: 0x66ddff,
+      midpoint: 0xffcc33,
+      face: 0x63d391,
+      axis: 0xffa040,
+      centre: 0xc58cff,
+    };
     if (this.snapTarget) {
-      const colour = this.isVertexSnap ? VERTEX_SNAP_COLOUR : ENDPOINT_SNAP_COLOUR;
+      const colour = this.snapKind ? SNAP_COLOURS[this.snapKind] : 0xffffff;
       if (!this.snapDot) {
         const geom = new THREE.BufferGeometry();
         geom.setFromPoints([this.snapTarget]);
@@ -540,8 +718,24 @@ export class MeasurementController {
    * In `linear` mode the second click auto-commits the measurement and
    * leaves the controller ready for a new pair.
    */
-  handleClick(world: THREE.Vector3, worldNormal?: THREE.Vector3 | null): boolean {
+  handleClick(
+    world: THREE.Vector3,
+    worldNormal?: THREE.Vector3 | null,
+    snapInput?: MeasurementSnapInput,
+  ): boolean {
     if (this.mode === 'off') return false;
+
+    const suppliedSnap = normaliseSnapInput(snapInput);
+    const previewedSnap = this.snapTarget && this.snapKind
+      ? {
+          point: this.snapTarget.clone(),
+          kind: this.snapKind,
+          exact: this.snapExact,
+          ...(this.snapSource ? { source: this.snapSource } : {}),
+        }
+      : null;
+    const activeSnap = suppliedSnap ?? previewedSnap;
+    const interactionPoint = activeSnap?.point ?? world;
 
     // Box mode: click 1 stores the face normal so click 2 / preview lock to
     // its plane. Click 2 gets projected onto that plane before being
@@ -553,8 +747,9 @@ export class MeasurementController {
           ? worldNormal.clone().normalize()
           : new THREE.Vector3(0, 1, 0);
         this.boxNormal = n;
-        this.pending.push(world.clone());
-        this.cursor = world.clone();
+        this.pending.push(interactionPoint.clone());
+        this.pendingSnaps.push(activeSnap);
+        this.cursor = interactionPoint.clone();
         this.refreshPreview();
         this.emit();
         return true;
@@ -562,19 +757,29 @@ export class MeasurementController {
       // Click 2: project onto plane and auto-commit.
       const a = this.pending[0];
       const n = this.boxNormal ?? new THREE.Vector3(0, 1, 0);
-      const b = projectPointToPlane(world, a, n);
+      const b = projectPointToPlane(interactionPoint, a, n);
       if (b.distanceTo(a) < DUPLICATE_CLICK_EPSILON_METRES) return true;
       this.pending.push(b);
+      this.pendingSnaps.push(activeSnap);
       this.cursor = b.clone();
       this.commit();
       return true;
     }
 
-    // Apply snap: if the click lands within threshold of a candidate, use
-    // the candidate position so the user can close polygons precisely.
-    const snapped = this.pending.length > 0
-      ? (this.computeSnap(world) ?? world)
-      : world;
+    // Apply snap with handleMove's priority: an endpoint candidate within
+    // threshold of the raw click wins over the external construction snap,
+    // even on the first click, so the committed point always matches the
+    // previewed endpoint dot and polygons can close precisely.
+    const endpointSnap = this.computeSnap(world);
+    const snapped = endpointSnap ?? interactionPoint;
+    const committedSnap = endpointSnap
+      ? {
+          point: endpointSnap.clone(),
+          kind: 'endpoint' as const,
+          exact: true,
+          source: 'measurement-endpoint',
+        }
+      : activeSnap;
 
     // Reject duplicate consecutive clicks so an accidental double-click (or
     // a slow click where the raycaster returns the same world point twice)
@@ -587,9 +792,18 @@ export class MeasurementController {
     }
 
     this.pending.push(snapped.clone());
+    this.pendingSnaps.push(committedSnap);
     this.cursor = snapped.clone();
 
-    if (this.mode === 'linear' && this.pending.length >= 2) {
+    if (
+      (this.mode === 'linear' || this.mode === 'height' || this.mode === 'clearance')
+      && this.pending.length >= 2
+    ) {
+      this.commit();
+      return true;
+    }
+
+    if (this.mode === 'position') {
       this.commit();
       return true;
     }
@@ -605,6 +819,67 @@ export class MeasurementController {
   }
 
   /**
+   * Commit precomputed witness points from a construction-measurement service.
+   * This additive API lets perpendicular, shortest-clearance, and vertical
+   * tools reuse the existing persistent visuals/labels without simulating
+   * pointer clicks or changing the active interaction mode.
+   */
+  addLinearMeasurement(
+    a: THREE.Vector3,
+    b: THREE.Vector3,
+    options: LinearMeasurementOptions = {},
+  ): CommittedMeasurement | null {
+    const measurement = this.appendLinearMeasurement(a, b, options);
+    if (measurement) this.emit();
+    return measurement;
+  }
+
+  /** Commit exact perpendicular/shortest witness endpoints without changing the active tool. */
+  addWitnessMeasurement(
+    kind: 'clearance' | 'height',
+    a: THREE.Vector3,
+    b: THREE.Vector3,
+    options: ConstructionMeasurementOptions = {},
+  ): CommittedMeasurement | null {
+    const measurement = this.appendWitnessMeasurement(kind, a, b, options);
+    if (measurement) this.emit();
+    return measurement;
+  }
+
+  /** Commit a project-up dimension produced by `verticalHeightBetween`. */
+  addHeightMeasurement(
+    height: VerticalHeightMeasurement,
+    options: ConstructionMeasurementOptions = {},
+  ): CommittedMeasurement | null {
+    const measurement = this.appendWitnessMeasurement(
+      'height',
+      height.dimensionStart,
+      height.dimensionEnd,
+      {
+        exact: options.exact ?? true,
+        source: options.source ?? 'project-up-axis',
+        ...(options.snapKind ? { snapKind: options.snapKind } : {}),
+      },
+      {
+        signedValue: height.signedHeight,
+        sourcePoints: [height.sourceA, height.sourceB],
+      },
+    );
+    if (measurement) this.emit();
+    return measurement;
+  }
+
+  /** Commit a world/project coordinate marker without disturbing a pending ruler. */
+  addCoordinateMeasurement(
+    coordinate: CoordinateMeasurement,
+    options: ConstructionMeasurementOptions & { reference?: string } = {},
+  ): CommittedMeasurement | null {
+    const measurement = this.appendCoordinateMeasurement(coordinate, options);
+    if (measurement) this.emit();
+    return measurement;
+  }
+
+  /**
    * Commit the pending points - distance for linear, area for polygon.
    * Polygon requires ≥ 3 pending points; otherwise this is a no-op.
    */
@@ -613,19 +888,61 @@ export class MeasurementController {
 
     if (this.mode === 'linear' && this.pending.length >= 2) {
       const pts = this.pending.slice(0, 2);
-      const value = linearDistance(pts[0], pts[1]);
-      const m: CommittedMeasurement = {
-        id: `m-${this.nextId++}`,
-        kind: 'linear',
-        points: pts,
-        value,
-        timestamp: new Date().toISOString(),
-      };
-      this.buildVisual(m);
-      this.committed.unshift(m);
-      this.pending = [];
-      this.cursor = null;
-      this.refreshPreview();
+      const m = this.appendLinearMeasurement(pts[0], pts[1], this.pendingSnapOptions());
+      if (!m) return null;
+      this.finishPending();
+      this.emit();
+      return m;
+    }
+
+    if (this.mode === 'height' && this.pending.length >= 2) {
+      const height = verticalHeightBetween(this.pending[0], this.pending[1], 'y');
+      if (!height) return null;
+      const m = this.appendWitnessMeasurement(
+        'height',
+        height.dimensionStart,
+        height.dimensionEnd,
+        {
+          ...this.pendingSnapOptions(),
+          exact: this.pendingSnaps.every((snap) => snap?.exact ?? true),
+          source: 'project-y-axis',
+        },
+        {
+          signedValue: height.signedHeight,
+          sourcePoints: [height.sourceA, height.sourceB],
+        },
+      );
+      if (!m) return null;
+      this.finishPending();
+      this.emit();
+      return m;
+    }
+
+    if (this.mode === 'clearance' && this.pending.length >= 2) {
+      const options = this.pendingSnapOptions();
+      const m = this.appendWitnessMeasurement('clearance', this.pending[0], this.pending[1], {
+        ...options,
+        exact: this.pendingSnaps.every((snap) => snap?.exact ?? false),
+        source: options.source ?? 'picked-witnesses',
+      });
+      if (!m) return null;
+      this.finishPending();
+      this.emit();
+      return m;
+    }
+
+    if (this.mode === 'position' && this.pending.length >= 1) {
+      const coordinate = coordinateInFrame(this.pending[0], WORLD_Y_UP_FRAME);
+      if (!coordinate) return null;
+      const options = this.pendingSnapOptions();
+      const m = this.appendCoordinateMeasurement(coordinate, {
+        ...options,
+        exact: this.pendingSnaps[0]?.exact ?? true,
+        source: options.source ?? 'world-coordinate-frame',
+        reference: 'World',
+      });
+      if (!m) return null;
+      this.finishPending();
       this.emit();
       return m;
     }
@@ -642,9 +959,7 @@ export class MeasurementController {
       };
       this.buildVisual(m);
       this.committed.unshift(m);
-      this.pending = [];
-      this.cursor = null;
-      this.refreshPreview();
+      this.finishPending();
       this.emit();
       return m;
     }
@@ -662,10 +977,8 @@ export class MeasurementController {
       };
       this.buildVisual(m);
       this.committed.unshift(m);
-      this.pending = [];
-      this.cursor = null;
       this.boxNormal = null;
-      this.refreshPreview();
+      this.finishPending();
       this.emit();
       return m;
     }
@@ -682,9 +995,7 @@ export class MeasurementController {
       };
       this.buildVisual(m);
       this.committed.unshift(m);
-      this.pending = [];
-      this.cursor = null;
-      this.refreshPreview();
+      this.finishPending();
       this.emit();
       return m;
     }
@@ -711,8 +1022,17 @@ export class MeasurementController {
     let pendingPerimeter: number | null = null;
     let pendingAngleDeg: number | null = null;
 
-    if (this.mode === 'linear' && pendingWithCursor.length >= 2) {
+    if (
+      (this.mode === 'linear' || this.mode === 'clearance')
+      && pendingWithCursor.length >= 2
+    ) {
       pendingValue = linearDistance(pendingWithCursor[0], pendingWithCursor[1]);
+    } else if (this.mode === 'height' && pendingWithCursor.length >= 2) {
+      pendingValue = verticalHeightBetween(
+        pendingWithCursor[0],
+        pendingWithCursor[1],
+        'y',
+      )?.height ?? null;
     } else if (this.mode === 'area' && pendingWithCursor.length >= 3) {
       pendingValue = polygonArea(pendingWithCursor);
       pendingPerimeter = polygonPerimeter(pendingWithCursor);
@@ -739,6 +1059,14 @@ export class MeasurementController {
       pendingAngleDeg,
       cursor: this.cursor ? this.cursor.clone() : null,
       snapTarget: this.snapTarget ? this.snapTarget.clone() : null,
+      snapFeedback: this.snapTarget && this.snapKind
+        ? {
+            point: this.snapTarget.clone(),
+            kind: this.snapKind,
+            exact: this.snapExact,
+            ...(this.snapSource ? { source: this.snapSource } : {}),
+          }
+        : null,
       committed: this.committed.slice(),
     };
   }
@@ -762,6 +1090,7 @@ export class MeasurementController {
       }
     });
     this.pending = [];
+    this.pendingSnaps = [];
     this.cursor = null;
     this.committed = [];
   }
@@ -770,6 +1099,112 @@ export class MeasurementController {
 
   private emit(): void {
     this.hooks.onChange(this.snapshot());
+  }
+
+  private appendLinearMeasurement(
+    a: THREE.Vector3,
+    b: THREE.Vector3,
+    options: LinearMeasurementOptions = {},
+  ): CommittedMeasurement | null {
+    const coordinates = [a.x, a.y, a.z, b.x, b.y, b.z];
+    if (!coordinates.every(Number.isFinite)) return null;
+    const points = [a.clone(), b.clone()];
+    const measurement: CommittedMeasurement = {
+      id: `m-${this.nextId++}`,
+      kind: 'linear',
+      points,
+      value: linearDistance(points[0], points[1]),
+      timestamp: new Date().toISOString(),
+      ...(options.subtype ? { subtype: options.subtype } : {}),
+      ...(options.exact !== undefined ? { exact: options.exact } : {}),
+      ...(options.source ? { source: options.source } : {}),
+      ...(options.snapKind ? { snapKind: options.snapKind } : {}),
+    };
+    this.buildVisual(measurement);
+    this.committed.unshift(measurement);
+    return measurement;
+  }
+
+  private appendWitnessMeasurement(
+    kind: 'clearance' | 'height',
+    a: THREE.Vector3,
+    b: THREE.Vector3,
+    options: ConstructionMeasurementOptions = {},
+    extra: Pick<CommittedMeasurement, 'signedValue' | 'sourcePoints'> = {},
+  ): CommittedMeasurement | null {
+    const coordinates = [a.x, a.y, a.z, b.x, b.y, b.z];
+    if (!coordinates.every(Number.isFinite)) return null;
+    const points = [a.clone(), b.clone()];
+    const sourcePoints = extra.sourcePoints?.map((point) => point.clone());
+    if (sourcePoints && !sourcePoints.flatMap((point) => point.toArray()).every(Number.isFinite)) {
+      return null;
+    }
+    const measurement: CommittedMeasurement = {
+      id: `m-${this.nextId++}`,
+      kind,
+      points,
+      value: linearDistance(points[0], points[1]),
+      timestamp: new Date().toISOString(),
+      ...(options.exact !== undefined ? { exact: options.exact } : {}),
+      ...(options.source ? { source: options.source } : {}),
+      ...(options.snapKind ? { snapKind: options.snapKind } : {}),
+      ...(extra.signedValue !== undefined ? { signedValue: extra.signedValue } : {}),
+      ...(sourcePoints ? { sourcePoints } : {}),
+    };
+    this.buildVisual(measurement);
+    this.committed.unshift(measurement);
+    return measurement;
+  }
+
+  private appendCoordinateMeasurement(
+    coordinate: CoordinateMeasurement,
+    options: ConstructionMeasurementOptions & { reference?: string } = {},
+  ): CommittedMeasurement | null {
+    const values = [...coordinate.world.toArray(), ...coordinate.local.toArray()];
+    if (!values.every(Number.isFinite)) return null;
+    const measurement: CommittedMeasurement = {
+      id: `m-${this.nextId++}`,
+      kind: 'position',
+      points: [coordinate.world.clone()],
+      value: 0,
+      timestamp: new Date().toISOString(),
+      coordinates: {
+        world: coordinate.world.clone(),
+        local: coordinate.local.clone(),
+        reference: options.reference ?? 'Project',
+      },
+      ...(options.exact !== undefined ? { exact: options.exact } : {}),
+      ...(options.source ? { source: options.source } : {}),
+      ...(options.snapKind ? { snapKind: options.snapKind } : {}),
+    };
+    this.buildVisual(measurement);
+    this.committed.unshift(measurement);
+    return measurement;
+  }
+
+  private pendingSnapOptions(): ConstructionMeasurementOptions {
+    const snaps = this.pendingSnaps.filter(
+      (snap): snap is MeasurementSnapFeedback => snap !== null,
+    );
+    if (snaps.length === 0) return {};
+    const sources = [...new Set(snaps.map((snap) => snap.source).filter(Boolean))];
+    const last = snaps[snaps.length - 1];
+    return {
+      // A raw (unsnapped) pick votes non-exact: every pick must be both
+      // snapped and exact for the whole measurement to count as exact.
+      exact: this.pendingSnaps.every((snap) => snap !== null && snap.exact),
+      snapKind: last.kind,
+      ...(sources.length > 0 ? { source: sources.join(' + ') } : {}),
+    };
+  }
+
+  private finishPending(): void {
+    this.pending = [];
+    this.pendingSnaps = [];
+    this.cursor = null;
+    this.setActiveSnap(null);
+    this.updateSnapDot();
+    this.refreshPreview();
   }
 
   /** Rebuild the preview (rubber-band) line + optional close edge. Called
@@ -799,6 +1234,34 @@ export class MeasurementController {
       this.previewLine.computeLineDistances();
       this.previewLine.renderOrder = 999;
       this.group.add(this.previewLine);
+      return;
+    }
+
+    if (this.mode === 'height' && this.pending.length === 1) {
+      const height = verticalHeightBetween(this.pending[0], this.cursor, 'y');
+      if (!height) return;
+      const dimensionGeometry = new THREE.BufferGeometry().setFromPoints([
+        height.dimensionStart,
+        height.dimensionEnd,
+      ]);
+      this.previewLine = new THREE.Line(
+        dimensionGeometry,
+        lineMaterial({ colour: 0xffa040 }),
+      );
+      this.previewLine.renderOrder = 999;
+      this.group.add(this.previewLine);
+
+      const witnessGeometry = new THREE.BufferGeometry().setFromPoints([
+        height.sourceB,
+        height.dimensionEnd,
+      ]);
+      this.previewCloseLine = new THREE.Line(
+        witnessGeometry,
+        lineMaterial({ dashed: true, colour: 0xffa040 }),
+      );
+      this.previewCloseLine.computeLineDistances();
+      this.previewCloseLine.renderOrder = 999;
+      this.group.add(this.previewCloseLine);
       return;
     }
 
@@ -854,6 +1317,14 @@ export class MeasurementController {
       this.buildAngleVisual(m);
       return;
     }
+    if (m.kind === 'position') {
+      this.buildPositionVisual(m);
+      return;
+    }
+    if (m.kind === 'height' || m.kind === 'clearance') {
+      this.buildWitnessVisual(m);
+      return;
+    }
     const loop = m.kind === 'area';
     const pts = loop ? [...m.points, m.points[0]] : m.points;
     const lineGeom = new THREE.BufferGeometry().setFromPoints(pts);
@@ -867,6 +1338,67 @@ export class MeasurementController {
     points.renderOrder = 1000;
     points.userData.measurementId = m.id;
     this.group.add(points);
+  }
+
+  private buildWitnessVisual(m: CommittedMeasurement): void {
+    const colour = m.kind === 'height' ? 0xffa040 : 0xc58cff;
+    const lineGeometry = new THREE.BufferGeometry().setFromPoints(m.points);
+    const line = new THREE.Line(lineGeometry, lineMaterial({ colour }));
+    line.renderOrder = 999;
+    line.userData.measurementId = m.id;
+    this.group.add(line);
+
+    if (m.kind === 'height' && m.sourcePoints?.length === 2) {
+      const witnessGeometry = new THREE.BufferGeometry().setFromPoints([
+        m.sourcePoints[1],
+        m.points[1],
+      ]);
+      const witness = new THREE.Line(
+        witnessGeometry,
+        lineMaterial({ dashed: true, colour }),
+      );
+      witness.computeLineDistances();
+      witness.renderOrder = 999;
+      witness.userData.measurementId = m.id;
+      this.group.add(witness);
+    }
+
+    const pointGeometry = new THREE.BufferGeometry().setFromPoints(
+      m.sourcePoints ?? m.points,
+    );
+    const points = new THREE.Points(pointGeometry, pointMaterial(colour));
+    points.renderOrder = 1000;
+    points.userData.measurementId = m.id;
+    this.group.add(points);
+  }
+
+  private buildPositionVisual(m: CommittedMeasurement): void {
+    const point = m.points[0];
+    if (!point) return;
+    const colour = 0x63d391;
+    const axes = [
+      point.clone().add(new THREE.Vector3(-0.08, 0, 0)),
+      point.clone().add(new THREE.Vector3(0.08, 0, 0)),
+      point.clone().add(new THREE.Vector3(0, -0.08, 0)),
+      point.clone().add(new THREE.Vector3(0, 0.08, 0)),
+      point.clone().add(new THREE.Vector3(0, 0, -0.08)),
+      point.clone().add(new THREE.Vector3(0, 0, 0.08)),
+    ];
+    for (let index = 0; index < axes.length; index += 2) {
+      const geometry = new THREE.BufferGeometry().setFromPoints([
+        axes[index],
+        axes[index + 1],
+      ]);
+      const line = new THREE.Line(geometry, lineMaterial({ colour }));
+      line.renderOrder = 999;
+      line.userData.measurementId = m.id;
+      this.group.add(line);
+    }
+    const pointGeometry = new THREE.BufferGeometry().setFromPoints([point]);
+    const marker = new THREE.Points(pointGeometry, pointMaterial(colour));
+    marker.renderOrder = 1000;
+    marker.userData.measurementId = m.id;
+    this.group.add(marker);
   }
 
   /** Build the angle measurement visual: two arms from vertex + small arc. */

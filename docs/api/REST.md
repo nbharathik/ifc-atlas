@@ -1006,6 +1006,7 @@ Response headers:
   - `X-Fragment-Profile`: resolved profile
   - `X-Fragment-Elapsed-Ms`: sidecar conversion time (only when fresh)
   - `X-Fragment-Source-Sha256`: sha256 of the input IFC
+  - `X-Fragments-Format-Version`: producing @thatopen/fragments version
 
 **Query parameters:**
 
@@ -1186,6 +1187,22 @@ Get Elements
 |---|---|---|---|
 | `ifc_type` | string |  |  |
 | `storey_id` | string |  |  |
+**Response:** Successful Response
+
+---
+
+### `POST` `/api/ifc/elements/filter`
+
+Evaluate an indexed, reusable BIM property filter
+
+Evaluate a typed AND/OR filter against the current model revision.
+
+The first request builds a compact property index. Later requests reuse it
+until ``model_version`` changes. ``count`` is exact; ``elements`` is only a
+bounded preview while ``element_ids`` carries the viewer action set.
+
+**Request body:** `IndexedPropertyFilterRequest` (JSON)
+
 **Response:** Successful Response
 
 ---
@@ -1426,6 +1443,29 @@ Response headers:
 
 ---
 
+### `GET` `/api/ifc/fragments/tile`
+
+Get Spatial Tile Fragment
+
+Return an independently loadable, ID-preserving spatial tile fragment.
+
+Tiles are copied from the validated full fragment with the fragments
+library's dependency-aware subset authoring path.  The sidecar reloads the
+result and proves local-ID/GUID plus geometry/material parity before the
+backend publishes it to the versioned cache.
+
+**Query parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `sha` | string | ✓ | SHA-256 fingerprint of the loaded IFC model |
+| `tile_id` | string | ✓ |  |
+| `grid` | integer |  | NxN grid resolution per storey |
+| `profile` | string |  |  |
+**Response:** Successful Response
+
+---
+
 ### `POST` `/api/ifc/geometry`
 
 Extract Geometry
@@ -1580,11 +1620,10 @@ Get Lod Fragment
 
 Serve a decimated (LOD) fragment for a previously-converted model.
 
-Reuses the full ``.frag`` the convert path already cached
-(``{sha}-{profile}.frag``), decimates it via the Node sidecar's
-``/decimate`` endpoint, and caches the result as
-``{sha}-{profile}-lod.frag``. The first call builds + caches (a few
-seconds); subsequent calls serve from disk (<20 ms).
+Reuses the full, validated ``.frag`` artifact the convert path already
+cached, decimates it via the Node sidecar's ``/decimate`` endpoint, and
+atomically publishes a versioned LOD artifact. The first call builds and
+caches; subsequent calls serve from disk.
 
 The decimated frag preserves element identity (localIds + GUIDs + spatial
 structure), so the frontend can swap it in during camera motion and swap the
@@ -1610,7 +1649,7 @@ Response headers:
 | `fingerprint` | string | ✓ | SHA-256 of the IFC file (from the model contract) |
 | `profile` | string |  |  |
 | `ratio` | string |  | Target fraction of each shell's original triangle count. Lower = fewer triangles + faster navigation. Omit for the sidecar default (0.35). |
-| `error` | string |  | Relative error ceiling for the sloppy simplifier. Omit for the default (0.1). |
+| `error` | string |  | Relative error ceiling for the sloppy simplifier. Omit for the default (0.05). |
 **Response:** Successful Response
 
 ---
@@ -2352,4 +2391,4 @@ Upload Snapshot
 
 ---
 
-_Last regenerated: 2026-07-12. Run `python scripts/generate_api_doc.py` to refresh._
+_Last regenerated: 2026-07-16. Run `python scripts/generate_api_doc.py` to refresh._

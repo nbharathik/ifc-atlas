@@ -15,6 +15,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services.fragment_cache import (
+    atomic_write_fragment_cache,
+    read_fragment_cache,
+    storey_fragment_cache_entry,
+)
 from app.services.storey_splitter import StoreyFragmentSplitter, StoreyInfo, StoreyManifest
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -230,7 +235,6 @@ def test_serialize_storey_independent_cache_keys():
     model = _make_mock_model([("GF", 0.0, [1]), ("FF", 3.0, [2])])
 
     call_count = [0]
-    original_to_string = mock_dest.to_string
     def tracked_to_string():
         call_count[0] += 1
         return f"IFC-{call_count[0]}"
@@ -329,8 +333,8 @@ def test_storey_fragment_empty_storey_204(tmp_path):
 
 # 15. Cache hit → 200 with X-Fragment-Source: cache.
 def test_storey_fragment_cache_hit_200(tmp_path):
-    cache_file = tmp_path / f"{_SHA}-s0.frag"
-    cache_file.write_bytes(b"CACHED_FRAG_BYTES")
+    cache_entry = storey_fragment_cache_entry(tmp_path, _SHA, 0)
+    atomic_write_fragment_cache(cache_entry, b"CACHED_FRAG_BYTES")
 
     with (
         patch("app.api.ifc_routes.ifc_service", _loaded_svc()),
@@ -342,6 +346,7 @@ def test_storey_fragment_cache_hit_200(tmp_path):
 
     assert resp.status_code == 200
     assert resp.headers["X-Fragment-Source"] == "cache"
+    assert resp.headers["X-Fragments-Format-Version"]
     assert resp.content == b"CACHED_FRAG_BYTES"
 
 
@@ -527,9 +532,8 @@ def test_storey_fragment_sidecar_writes_cache(tmp_path):
 
         _client().get("/api/ifc/fragments/storey", params={"sha": _SHA, "idx": 0})
 
-    cache_file = tmp_path / f"{_SHA}-s0.frag"
-    assert cache_file.exists()
-    assert cache_file.read_bytes() == b"FRAG"
+    cache_entry = storey_fragment_cache_entry(tmp_path, _SHA, 0)
+    assert read_fragment_cache(cache_entry) == b"FRAG"
 
 
 # 28. Sidecar called with correct model_id and profile.

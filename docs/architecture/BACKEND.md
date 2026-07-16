@@ -74,9 +74,45 @@ UI-editable LLM model catalogue persisted to `~/.ifc-atlas/data/models.json`. Bu
 
 The Node/TS sidecar (`backend/sidecar/`) parses IFC natively (~30× faster than IfcOpenShell on large files) and produces a read-only `MetadataIndex` (spatial tree, element catalog, psets, GlobalId↔ExpressId map) that serves Ask-mode tools and `GET /api/ifc/native-index` while IfcOpenShell warms in the background. `readiness_service.py` tracks both backends' warm-up state.
 
+Fragment conversion reuses one WASM-warmed `IfcImporter`. The importer is
+mutable, so conversion jobs run through a process-local FIFO executor that
+makes the complete profile-configure/process/restore transaction exclusive.
+Callers may submit concurrently, but the shared importer never processes two
+profiles at once; a rejected job does not poison the queue. A future bounded
+worker pool must use one importer per worker rather than sharing this instance.
+
 ### `fragment_prebuild_service.py`
 
 Background server-side IFC→fragments conversion on upload; results are cached in `~/.ifc-atlas/fragments/{sha}-{profile}.frag` and served by `/api/ifc/fragments/serve`. `fragment_prebuild_gc.py` reaps abandoned jobs every 30 s.
+
+### Spatial preprocessing and exact tile artifacts
+
+`spatial_tile_splitter.py` persists versioned, checksummed manifests under
+`DATA_DIR/spatial-tile-cache`. The cache identity includes source SHA, grid and
+algorithm version, storey membership, AABB provenance, and the complete AABB
+lookup digest. Writes are atomic; restart can reuse a valid manifest without
+IFC extraction; a corrupt checksum or placement/mixed/real transition rebuilds.
+
+`spatial_fragment_service.py` maps each manifest's Express IDs through the full
+fragment artifact's GUID table and asks the sidecar for `getSubsetBuffer` output.
+The sidecar reloads that subset standalone and must affirm local-ID/GUID,
+geometry/sample, and material parity before the service publishes it. Subset
+jobs are serialized to bound cold-build memory, duplicate requests coalesce,
+and cache keys include source, profile, exact membership, full-artifact key,
+and sidecar provenance. Parity failures are fail-closed and never cached.
+
+`GET /api/ifc/fragments/tile` serves those independently loadable exact
+artifacts. SHA/tile mismatches return 404; missing prerequisite artifacts,
+sidecar errors, and identity/parity failures return 503. Response identity is
+carried in `X-Fragment-Source`, `X-Fragment-Profile`, `X-Fragment-Tile-Id`,
+`X-Fragment-Grid`, `X-Fragment-AABB-Source`, and the standard artifact/cache
+headers.
+
+LOD generation follows the same rule: publication requires a complete positive
+identity proof and records target/achieved error. On BasicHouse, the current
+smoke reduced 249,075 to 81,316 triangles (3.66 MB to 1.61 MB), retained all 331
+identities, and measured maximum error 0.00570 under the 0.05 target. This is a
+contract check, not a production navigation benchmark.
 
 ### `ids_service.py`
 
@@ -93,7 +129,14 @@ Git-backed snapshots of the model in `~/.ifc-atlas/ifc_history/`, one commit per
 
 ### Smaller singletons
 
-`aabb_service` (real-AABB warm-up for culling), `storey_splitter` / `spatial_tile_splitter` (progressive-reveal manifests), `element_index_service` / `document_index_service` (BM25 search), `budget_tracker` (per-agent monthly spend), `session_memory` (per-WS fact memory), `snippet_service` / `prompt_library` / `tool_sets` / `tool_settings_service` (Chat-Manager CRUD stores), `ifc_checkpoint_service`, `code_runner` (subprocess sandbox for `execute_ifc_code`), `frag_delta_service` / `patch_generator` (staged fragment-patch work).
+`aabb_service` (real-AABB warm-up for culling), `storey_splitter` /
+`spatial_tile_splitter` / `spatial_fragment_service` (durable spatial manifests
+and exact fragment subsets), `element_index_service` / `document_index_service`
+(BM25 search), `budget_tracker` (per-agent monthly spend), `session_memory`
+(per-WS fact memory), `snippet_service` / `prompt_library` / `tool_sets` /
+`tool_settings_service` (Chat-Manager CRUD stores), `ifc_checkpoint_service`,
+`code_runner` (subprocess sandbox for `execute_ifc_code`), `frag_delta_service`
+/ `patch_generator` (staged fragment-patch work).
 
 ---
 

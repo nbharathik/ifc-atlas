@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import type { CommittedMeasurement } from './measurementController';
-import { formatLength, formatArea, type MeasurementUnit } from './measurementController';
+import { formatMeasurementValue, type MeasurementUnit } from './measurementController';
 
 /**
  * Screen-space dimension labels for committed measurements.
@@ -80,9 +80,7 @@ export class MeasurementLabelRenderer {
 
     // Add / update
     for (const m of committed) {
-      const text = m.kind === 'linear'
-        ? formatLength(m.value, unit)
-        : formatArea(m.value, unit);
+      const text = formatMeasurementValue(m, unit);
 
       if (this.labels.has(m.id)) {
         // Update text if unit changed - O(1) via stored span ref
@@ -136,6 +134,16 @@ export class MeasurementLabelRenderer {
     valueSpan.textContent = text;
     div.appendChild(valueSpan);
 
+    // Exact results stay compact; only inferred values carry the GUIDE badge
+    // so a field user knows the number is not a snapped construction point.
+    // Exactness is fixed at commit time, so the badge never needs syncing.
+    if (m.exact === false) {
+      const badge = document.createElement('span');
+      badge.className = 'measure-label__provenance';
+      badge.textContent = 'GUIDE';
+      div.appendChild(badge);
+    }
+
     const obj = new CSS2DObject(div);
     obj.center.set(0.5, 0);
     obj.position.copy(anchor);
@@ -149,7 +157,10 @@ export class MeasurementLabelRenderer {
  *  - Area: centroid of all vertices + 0.1 m Y-lift
  */
 export function labelAnchorWorld(m: CommittedMeasurement): THREE.Vector3 {
-  if (m.kind === 'linear' && m.points.length >= 2) {
+  if (
+    (m.kind === 'linear' || m.kind === 'height' || m.kind === 'clearance')
+    && m.points.length >= 2
+  ) {
     return new THREE.Vector3()
       .addVectors(m.points[0], m.points[1])
       .multiplyScalar(0.5)

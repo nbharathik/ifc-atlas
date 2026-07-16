@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as THREE from 'three';
 import { ElementFrustumCuller } from '../elementFrustumCuller';
 import type * as FRAGS from '@thatopen/fragments';
+import type { VisibilityMutationTarget } from '../renderStateCoordinator';
 
 // ── Minimal FragmentsModel mock ───────────────────────────────────────────────
 
@@ -105,6 +106,102 @@ describe('ElementFrustumCuller', () => {
     const hideCalls = model.visibilityCalls.filter((c) => !c.visible);
     // All hidden elements should be in a single call (batched)
     expect(hideCalls.length).toBeLessThanOrEqual(1);
+  });
+
+  it('keeps culler flags retryable when a coordinated hide or show rejects', async () => {
+    await culler.build(model as unknown as FRAGS.FragmentsModel, [2]);
+    const applyVisibilityDelta = vi
+      .fn<VisibilityMutationTarget['applyVisibilityDelta']>()
+      .mockRejectedValueOnce(new Error('hide failed'))
+      .mockResolvedValue(undefined);
+    const target: VisibilityMutationTarget = {
+      setVisible: vi.fn(async () => {}),
+      applyVisibilityDelta,
+    };
+
+    expect(await culler.tick(makeCameraNear(), model, undefined, target)).toBe(0);
+    expect(culler.getCulledLocalIds()).toEqual([]);
+    expect(await culler.tick(makeCameraNear(), model, undefined, target)).toBe(1);
+    expect(culler.getCulledLocalIds()).toEqual([2]);
+
+    target.setVisible = vi
+      .fn<VisibilityMutationTarget['setVisible']>()
+      .mockRejectedValueOnce(new Error('show failed'))
+      .mockResolvedValue(undefined);
+    expect(await culler.showPass(makeCameraFar(), model, undefined, target)).toBe(0);
+    expect(culler.getCulledLocalIds()).toEqual([2]);
+    expect(await culler.showPass(makeCameraFar(), model, undefined, target)).toBe(1);
+    expect(culler.getCulledLocalIds()).toEqual([]);
+  });
+
+  it('does not reclaim ownership when an old hide acknowledges after release', async () => {
+    await culler.build(model as unknown as FRAGS.FragmentsModel, [2]);
+    let acknowledge!: () => void;
+    const gate = new Promise<void>((resolve) => { acknowledge = resolve; });
+    const target: VisibilityMutationTarget = {
+      setVisible: vi.fn(async () => {}),
+      applyVisibilityDelta: vi.fn(async () => gate),
+      clearVisibility: vi.fn(async () => {}),
+    };
+
+    const staleTick = culler.tick(makeCameraNear(), model, undefined, target);
+    await vi.waitFor(() => expect(target.applyVisibilityDelta).toHaveBeenCalledTimes(1));
+    culler.releaseOwnership();
+    acknowledge();
+    await staleTick;
+
+    expect(culler.getCulledLocalIds()).toEqual([]);
+  });
+
+  it('reveals an authoritative hide whose acknowledgement is still in flight', async () => {
+    await culler.build(model as unknown as FRAGS.FragmentsModel, [2]);
+    let acknowledge!: () => void;
+    const gate = new Promise<void>((resolve) => { acknowledge = resolve; });
+    const hidden = new Set<number>();
+    const target: VisibilityMutationTarget = {
+      setVisible: vi.fn(async (ids, visible) => {
+        for (const id of ids ?? []) {
+          if (visible) hidden.delete(id);
+          else hidden.add(id);
+        }
+      }),
+      applyVisibilityDelta: vi.fn(async (toHide, toShow) => {
+        for (const id of toShow) hidden.delete(id);
+        for (const id of toHide) hidden.add(id);
+        await gate;
+      }),
+      clearVisibility: vi.fn(async () => { hidden.clear(); }),
+    };
+
+    const pendingHide = culler.tick(makeCameraNear(), model, undefined, target);
+    await vi.waitFor(() => expect(target.applyVisibilityDelta).toHaveBeenCalledTimes(1));
+    expect([...hidden]).toEqual([2]);
+    expect(culler.getCulledLocalIds()).toEqual([2]);
+
+    // Navigation begins before the settle hide acknowledges. The local flag
+    // already represents desired ownership, so only this pending hidden ID is
+    // sent through the reveal path.
+    await culler.showPass(makeCameraFar(), model, undefined, target);
+    expect(target.setVisible).toHaveBeenCalledWith([2], true);
+    expect([...hidden]).toEqual([]);
+
+    acknowledge();
+    await pendingHide;
+    expect(culler.getCulledLocalIds()).toEqual([]);
+  });
+
+  it('authoritatively clears a coordinated layer even when local flags are empty', async () => {
+    await culler.build(model as unknown as FRAGS.FragmentsModel, [0]);
+    const clearVisibility = vi.fn(async () => {});
+    const target: VisibilityMutationTarget = {
+      setVisible: vi.fn(async () => {}),
+      clearVisibility,
+    };
+
+    await culler.clearCull(model, target);
+
+    expect(clearVisibility).toHaveBeenCalledTimes(1);
+    expect(target.setVisible).not.toHaveBeenCalled();
   });
 
   it('clearCull() restores culled elements and resets autoCulled flags', async () => {

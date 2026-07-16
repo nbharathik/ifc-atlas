@@ -6,9 +6,16 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../useStore';
+import { createSelectionSectionPreset } from '../../services/viewer/sectionWorkspace';
 
 function reset() {
-  useStore.setState({ sectionBoxEnabled: false, clipToElementFn: null, modelLoaded: false });
+  useStore.setState({
+    sectionBoxEnabled: false,
+    sectionWorkspace: null,
+    clipToElementFn: null,
+    clipToElementsFn: null,
+    modelLoaded: false,
+  });
 }
 
 describe('section box store slice', () => {
@@ -73,6 +80,32 @@ describe('section box store slice', () => {
     });
   });
 
+  describe('durable section workspace', () => {
+    it('activates absolute selection bounds and retains them while toggled off', () => {
+      const workspace = createSelectionSectionPreset({
+        id: 'selection:1',
+        bounds: [0, 0, 0, 10, 20, 30],
+      });
+      useStore.getState().setSectionWorkspace(workspace);
+
+      expect(useStore.getState().sectionBoxEnabled).toBe(true);
+      expect(useStore.getState().sectionWorkspace).toBe(workspace);
+
+      useStore.getState().setSectionBoxEnabled(false);
+      expect(useStore.getState().sectionWorkspace?.box?.bounds).toEqual(workspace.box?.bounds);
+    });
+
+    it('clears both the workspace and enabled state when explicitly cleared', () => {
+      useStore.getState().setSectionWorkspace(createSelectionSectionPreset({
+        id: 'selection:2',
+        bounds: [0, 0, 0, 1, 1, 1],
+      }));
+      useStore.getState().setSectionWorkspace(null);
+      expect(useStore.getState().sectionWorkspace).toBeNull();
+      expect(useStore.getState().sectionBoxEnabled).toBe(false);
+    });
+  });
+
   describe('clipToElementFn / setClipToElementFn / clipToElement', () => {
     it('starts with clipToElementFn null', () => {
       expect(useStore.getState().clipToElementFn).toBeNull();
@@ -114,11 +147,32 @@ describe('section box store slice', () => {
     });
   });
 
+  describe('clipToElementsFn / setClipToElementsFn / clipToElements', () => {
+    it('passes a multi-selection and label to the registered viewer bridge', () => {
+      const fn = vi.fn();
+      useStore.getState().setClipToElementsFn(fn);
+      useStore.getState().clipToElements([4, 8, 15], 'Level 2');
+      expect(fn).toHaveBeenCalledWith([4, 8, 15], 'Level 2');
+    });
+
+    it('does not call the bridge for an empty set', () => {
+      const fn = vi.fn();
+      useStore.getState().setClipToElementsFn(fn);
+      useStore.getState().clipToElements([]);
+      expect(fn).not.toHaveBeenCalled();
+    });
+  });
+
   describe('model-unload clears section box state', () => {
     it('setModelLoaded(false) resets sectionBoxEnabled to false', () => {
-      useStore.setState({ sectionBoxEnabled: true, modelLoaded: true });
+      useStore.setState({
+        sectionBoxEnabled: true,
+        sectionWorkspace: createSelectionSectionPreset({ id: 'active', bounds: [0, 0, 0, 1, 1, 1] }),
+        modelLoaded: true,
+      });
       useStore.getState().setModelLoaded(false);
       expect(useStore.getState().sectionBoxEnabled).toBe(false);
+      expect(useStore.getState().sectionWorkspace).toBeNull();
     });
 
     it('setModelLoaded(true) preserves existing sectionBoxEnabled value', () => {

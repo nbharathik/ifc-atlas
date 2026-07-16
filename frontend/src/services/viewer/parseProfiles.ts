@@ -59,6 +59,14 @@ export function resolveParseProfile(
 export const OUTLIER_DISTANCE_THRESHOLD_M = 10_000;
 
 export function configureImporter(importer: FRAGS.IfcImporter, profile: ParseProfile): void {
+  // IfcImporter owns a separate web-ifc settings object. Configuring only the
+  // surrounding IfcLoader does not reach the dedicated conversion worker, so
+  // apply the selected profile here as the shared final source of truth. Keep
+  // importer/library defaults that the profile does not intentionally replace.
+  importer.webIfcSettings = {
+    ...importer.webIfcSettings,
+    ...getWebIfcSettingsForProfile(profile),
+  };
   importer.replaceStoreyElevation = false;
   importer.replaceSiteElevation = false;
   importer.includeUniqueAttributes = false;

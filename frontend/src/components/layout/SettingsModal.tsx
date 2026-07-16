@@ -673,14 +673,14 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                     checked={frustumCullingEnabled}
                     onChange={(e) => setFrustumCullingEnabled(e.target.checked)}
                   />
-                  Frustum culling
+                  Spatial visibility culling
                 </label>
                 <p className="setting-hint" style={{ marginTop: 4 }}>
-                  Off by default, so every object stays in the scene and nothing
-                  flickers or pops in late when you zoom in and out. Turn it on for
-                  very large models to skip drawing geometry outside the view - it
-                  only activates automatically once a model is big enough to benefit
-                  (1,500+ elements).
+                  Off by default. For large models, uses preprocessed geometry bounds
+                  when available and keeps geometry mounted while changing only a
+                  named visibility mask. Tiles are revealed during navigation and
+                  hidden only after the camera settles; the client AABB culler remains
+                  a fallback while preprocessing warms.
                 </p>
               </div>
 
@@ -694,10 +694,11 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                   Fast navigation for large models
                 </label>
                 <p className="setting-hint" style={{ marginTop: 4 }}>
-                  On by default. While you orbit or pan a large model, shows a
-                  lighter decimated copy for smooth motion, then snaps back to the
-                  full-detail model the instant the camera stops. Only kicks in on
-                  models big enough to need it.
+                  Experimental and off by default. While you orbit or pan a large
+                  model, it swaps in a lighter decimated copy, then returns to the
+                  full-detail model when the camera stops. This can visibly pop and
+                  is suspended while selection, filtering, colours, or transparency
+                  need the exact model.
                 </p>
               </div>
             </section>
@@ -755,9 +756,9 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                   <option value="off">Off</option>
                 </select>
                 <p className="setting-hint" style={{ marginTop: 4 }}>
-                  In-browser IndexedDB cache of parsed geometry. Off (the default)
-                  always re-parses; Balanced keeps recently opened models;
-                  Aggressive keeps everything it can. Applies on the next model load.
+                  In-browser IndexedDB cache of parsed geometry. Balanced (the default)
+                  keeps recently opened, version-compatible models; Aggressive keeps
+                  everything it can; Off always re-parses. Applies on the next model load.
                 </p>
               </div>
 

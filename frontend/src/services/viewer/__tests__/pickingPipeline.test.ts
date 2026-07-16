@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canReuseExactHoverPick,
+  canReusePrefetchedPick,
   createPickLeaseCoordinator,
   createPickRequestToken,
   decideVoidClick,
@@ -108,5 +110,68 @@ describe('pickingPipeline helpers', () => {
     expect(isConfirmedVoidPick({ exactHit: false, error: null })).toBe(true);
     expect(isConfirmedVoidPick({ exactHit: true, error: null })).toBe(false);
     expect(isConfirmedVoidPick({ exactHit: false, error: new Error('worker failed') })).toBe(false);
+  });
+
+  it('reuses only a fresh authoritative hover hit from unchanged viewer state', () => {
+    const reusable = {
+      exactHit: true,
+      distancePx: 1.5,
+      ageMs: 80,
+      cameraUnchanged: true,
+      visibilityUnchanged: true,
+      fragmentReplacementBlocked: false,
+    };
+    expect(canReuseExactHoverPick(reusable)).toBe(true);
+    expect(canReuseExactHoverPick({ ...reusable, exactHit: false })).toBe(false);
+    expect(canReuseExactHoverPick({ ...reusable, ageMs: 151 })).toBe(false);
+    expect(canReuseExactHoverPick({ ...reusable, cameraUnchanged: false })).toBe(false);
+    expect(canReuseExactHoverPick({ ...reusable, visibilityUnchanged: false })).toBe(false);
+    expect(canReuseExactHoverPick({ ...reusable, fragmentReplacementBlocked: true })).toBe(false);
+  });
+
+  it('honours explicit hover-reuse pixel and age budgets', () => {
+    expect(canReuseExactHoverPick({
+      exactHit: true,
+      distancePx: 4,
+      ageMs: 300,
+      cameraUnchanged: true,
+      visibilityUnchanged: true,
+      fragmentReplacementBlocked: false,
+      tolerancePx: 4,
+      maxAgeMs: 300,
+    })).toBe(true);
+  });
+
+  it('reuses a pointer-down prefetch only at the same release point and scene state', () => {
+    const reusable = {
+      requestGeneration: 7,
+      currentGeneration: 7,
+      distancePx: 1,
+      cameraUnchanged: true,
+      visibilityUnchanged: true,
+      fragmentReplacementBlocked: false,
+    };
+
+    expect(canReusePrefetchedPick(reusable)).toBe(true);
+    // A 4 px gesture is still a click, but its exact ray must be recomputed at
+    // pointer-up instead of reusing the pointer-down pixel.
+    expect(canReusePrefetchedPick({ ...reusable, distancePx: 4 })).toBe(false);
+    expect(canReusePrefetchedPick({ ...reusable, currentGeneration: 8 })).toBe(false);
+    expect(canReusePrefetchedPick({ ...reusable, cameraUnchanged: false })).toBe(false);
+    expect(canReusePrefetchedPick({ ...reusable, visibilityUnchanged: false })).toBe(false);
+    expect(canReusePrefetchedPick({ ...reusable, fragmentReplacementBlocked: true })).toBe(false);
+  });
+
+  it('fails prefetched-pick reuse closed for invalid distance and honours a custom radius', () => {
+    const base = {
+      requestGeneration: 3,
+      currentGeneration: 3,
+      cameraUnchanged: true,
+      visibilityUnchanged: true,
+      fragmentReplacementBlocked: false,
+    };
+    expect(canReusePrefetchedPick({ ...base, distancePx: Number.NaN })).toBe(false);
+    expect(canReusePrefetchedPick({ ...base, distancePx: -1 })).toBe(false);
+    expect(canReusePrefetchedPick({ ...base, distancePx: 2, tolerancePx: 2 })).toBe(true);
   });
 });

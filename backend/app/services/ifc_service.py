@@ -233,6 +233,17 @@ class IfcService:
         except ImportError:
             pass
 
+        # The reusable property-filter index can be substantially larger than
+        # the lightweight semantic index. Its revision guard prevents stale
+        # query results, but eagerly dropping the previous snapshot here also
+        # releases its interned property/value tables as soon as another IFC is
+        # opened instead of retaining both models until the next filter query.
+        try:
+            from app.services.property_filter_index import property_filter_index
+            property_filter_index.invalidate()
+        except ImportError:
+            pass
+
         # Rebuild the entity dependency graph for dirty-set computation.
         try:
             from app.services.entity_dependency_graph import rebuild_graph
@@ -1005,6 +1016,11 @@ class IfcService:
             "elements": matches,
             "element_ids": [m["id"] for m in matches],
         }
+
+    def resolve_storey_name(self, entity: Any) -> Optional[str]:
+        """Public read-only storey lookup for revision-scoped query indexes."""
+
+        return self._get_storey(entity)
 
     # ------------------------------------------------------------------
     # Structured write tools (rename, property edit, undo)

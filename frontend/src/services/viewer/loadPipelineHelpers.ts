@@ -1,5 +1,8 @@
 import type * as FRAGS from '@thatopen/fragments';
-import type { ServerConvertCapabilities } from '../ifc/serverConvert';
+import {
+  EXPECTED_FRAGMENTS_FORMAT_VERSION,
+  type ServerConvertCapabilities,
+} from '../ifc/serverConvert';
 import { buildFragmentCacheFingerprint } from './fragmentCacheFingerprint';
 import { isRecoverableServerConvertFailure } from './loadStrategy';
 import { FRAGMENT_LOAD_BASE_TIMEOUT_MS } from './loadTimeoutHelpers';
@@ -7,6 +10,13 @@ import type { ParseProfile } from './parseProfiles';
 
 // Cache keys use a stable prefix so they can be invalidated by version bumps.
 export const FRAGMENT_CACHE_PREFIX = '/__ifc_frag_cache__/';
+/**
+ * Binary artifact compatibility identity shared by browser parses and
+ * sidecar-produced fragments. Bump the final parse revision whenever importer
+ * settings or coordinate policy change, even if dependency versions do not.
+ */
+export const FRAGMENT_ARTIFACT_COMPATIBILITY =
+  `v2-fragments-${EXPECTED_FRAGMENTS_FORMAT_VERSION}-web-ifc-0.0.77-parse-r2`;
 
 export interface ViewerLoadProgress {
   title: string;
@@ -57,7 +67,10 @@ export const IMPORT_STAGE_LABELS: Record<FRAGS.ProgressData['process'], string> 
   geometries: 'Streaming geometry batches',
   attributes: 'Indexing element attributes',
   relations: 'Linking model relations',
-  conversion: 'Finalizing fragment model',
+  // Fragments emits `conversion:start` before WASM init/OpenModel and does not
+  // finish it until compression, so "finalizing" is misleading for most of
+  // this potentially long stage.
+  conversion: 'Processing model data',
 };
 
 export type FragmentManagerWithCore = {
@@ -104,7 +117,10 @@ export async function buildFragmentCacheKey(
   profile: ParseProfile,
 ): Promise<string> {
   const fingerprint = await buildFragmentCacheFingerprint(bytes);
-  return `${FRAGMENT_CACHE_PREFIX}${profile}-${fingerprint}.frag`;
+  const coordinatePolicy = profile === 'quality' || profile === 'balanced'
+    ? 'auto-coordinate'
+    : 'local-origin';
+  return `${FRAGMENT_CACHE_PREFIX}${FRAGMENT_ARTIFACT_COMPATIBILITY}-${profile}-${coordinatePolicy}-${fingerprint}.frag`;
 }
 
 export function makeViewerModelId(prefix = 'ifc'): string {
@@ -321,17 +337,35 @@ export async function loadFragmentsWithTimeout(
   }
 
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let timedOut = false;
+  let loadPromise: Promise<FRAGS.FragmentsModel> | null = null;
   try {
     const fragmentBytes = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    const loadPromise = fragmentsManager.core.load(fragmentBytes, { modelId });
+    loadPromise = fragmentsManager.core.load(fragmentBytes, { modelId });
     if (timeoutMs <= 0) return await loadPromise;
     const timeoutPromise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
+        timedOut = true;
         clearFragmentThreadPlaceholder(fragmentsManager, modelId);
         reject(new Error(`Fragment load timed out after ${timeoutMs} ms`));
       }, timeoutMs);
     });
     return await Promise.race([loadPromise, timeoutPromise]);
+  } catch (error) {
+    if (timedOut && loadPromise) {
+      // Fragments does not currently expose an AbortSignal for load(). A late
+      // success after our timeout would otherwise register an orphan model
+      // beside the fresh retry and leak its worker/GPU resources. Quarantine
+      // that unique model id and dispose the result as soon as it arrives.
+      void loadPromise.then(
+        async (lateModel) => {
+          try { await lateModel.dispose(); } catch { /* already detached */ }
+          clearFragmentThreadPlaceholder(fragmentsManager, modelId);
+        },
+        () => clearFragmentThreadPlaceholder(fragmentsManager, modelId),
+      );
+    }
+    throw error;
   } finally {
     if (timer) clearTimeout(timer);
     if (hasAutoCoordinateOverride) {

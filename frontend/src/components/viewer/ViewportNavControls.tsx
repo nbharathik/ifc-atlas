@@ -1,4 +1,5 @@
 import { useStore } from '../../store/useStore';
+import { resolveViewerActionTargets } from '../../services/viewer/viewerActionTargetHelpers';
 import Icon from '../ui/Icon';
 
 interface ViewportNavControlsProps {
@@ -15,26 +16,28 @@ interface ViewportNavControlsProps {
  */
 export default function ViewportNavControls({ onFitModel }: ViewportNavControlsProps) {
   const selectedElementId = useStore((s) => s.selectedElementId);
+  const selectedIds = useStore((s) => s.selectedIds);
   const highlightedIds = useStore((s) => s.highlightedIds);
   const hiddenIds = useStore((s) => s.hiddenIds);
   const isolatedIds = useStore((s) => s.isolatedIds);
-  const zoomToElement = useStore((s) => s.zoomToElement);
+  const frameElements = useStore((s) => s.frameElements);
   const addHiddenIds = useStore((s) => s.addHiddenIds);
   const clearVisibility = useStore((s) => s.clearVisibility);
   const logActivity = useStore((s) => s.logActivity);
 
-  const hasSelection = selectedElementId != null;
-  // Same target priority as the H shortcut: the selected element wins,
-  // otherwise the highlighted set (e.g. search results) is hidden.
-  const hideTargets = hasSelection ? [selectedElementId!] : highlightedIds;
+  const actionTargets = resolveViewerActionTargets({
+    selectedIds,
+    selectedElementId,
+    highlightedIds,
+  });
   const hasHidden = hiddenIds.length > 0 || isolatedIds.length > 0;
 
   const onHide = () => {
-    if (hideTargets.length === 0) return;
-    addHiddenIds(hideTargets);
+    if (actionTargets.length === 0) return;
+    addHiddenIds(actionTargets);
     logActivity({
       kind: 'hide',
-      summary: hideTargets.length === 1 ? `Hide #${hideTargets[0]}` : `Hide ${hideTargets.length} elements`,
+      summary: actionTargets.length === 1 ? `Hide #${actionTargets[0]}` : `Hide ${actionTargets.length} elements`,
     });
   };
 
@@ -57,20 +60,22 @@ export default function ViewportNavControls({ onFitModel }: ViewportNavControlsP
       <button
         className="vp-nav-btn"
         onClick={() => {
-          if (hasSelection) zoomToElement(selectedElementId!);
+          if (actionTargets.length > 0) frameElements(actionTargets);
         }}
-        disabled={!hasSelection}
-        title={hasSelection ? 'Zoom to selected element' : 'Select an element to zoom to it'}
-        aria-label="Zoom to selection"
+        disabled={actionTargets.length === 0}
+        title={actionTargets.length > 0
+          ? `Frame ${actionTargets.length === 1 ? 'target element' : `${actionTargets.length} selected/highlighted elements`}`
+          : 'Select or highlight elements to frame them'}
+        aria-label="Frame selection"
       >
         <Icon name="focus" size={14} />
       </button>
       <button
         className="vp-nav-btn"
         onClick={onHide}
-        disabled={hideTargets.length === 0}
-        title={hideTargets.length > 0 ? 'Hide selected (H)' : 'Select an element to hide it'}
-        aria-label="Hide selected"
+        disabled={actionTargets.length === 0}
+        title={actionTargets.length > 0 ? 'Hide selected/highlighted (H)' : 'Select or highlight elements to hide them'}
+        aria-label="Hide selected or highlighted elements"
       >
         <Icon name="eye-off" size={14} />
       </button>

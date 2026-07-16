@@ -41,7 +41,7 @@ Press **`?`** anywhere in the viewer to open the interactive shortcut overlay. S
 |---|---|
 | `X` | Toggle a clip plane |
 | `Shift+X` | Click a surface to place a clip plane aligned to that face |
-| `Alt+X` | Crop the section box to the currently selected element |
+| `Alt+X` | Fit one section box to the merged bounds of the current selection |
 
 ---
 
@@ -132,6 +132,10 @@ Start a measurement from the toolbar ruler icon, the command palette, or the sho
 
 ## Notes
 
-- `Alt+X` requires an element to be selected first.
-- `Shift+1` … `Shift+9` requires a model with at least two storeys; the Storey Navigator Bar at the bottom-left shows the storey list.
+- `Alt+X` requires at least one element to be selected first; with a
+  multi-selection it fits the box to the merged bounds of every selected
+  element.
+- `Shift+1` … `Shift+9` requires a model with at least two storeys; the
+  Viewer Tools → Storeys section lists the storey chips and highlights the
+  active one.
 - The command palette (`Ctrl+K`) provides fuzzy-search access to every viewer action, panel toggle, agent preset, and shortcut.

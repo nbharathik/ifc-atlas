@@ -279,7 +279,14 @@ export async function writeRawFragmentCacheIDB(
     const db = await openIDB();
     const total = await getTotalBytes(db);
     const indexEntries = await getIndexEntries(db);
-    const candidates = selectEvictionCandidates(indexEntries, bytes.byteLength, total);
+    const existing = indexEntries.find((entry) => entry.key === key);
+    const baseTotal = Math.max(0, total - (existing?.size ?? 0));
+    const evictionPool = indexEntries.filter((entry) => entry.key !== key);
+    const candidates = selectEvictionCandidates(
+      evictionPool,
+      bytes.byteLength,
+      baseTotal,
+    );
 
     if (candidates.length > 0) {
       const freed = indexEntries
@@ -288,8 +295,8 @@ export async function writeRawFragmentCacheIDB(
       await deleteEntriesAndUpdateMeta(db, candidates, freed, total);
     }
 
-    const newTotal = Math.max(0, total - candidates.reduce((s, k) => {
-      const e = indexEntries.find((x) => x.key === k);
+    const newTotal = Math.max(0, baseTotal - candidates.reduce((s, k) => {
+      const e = evictionPool.find((x) => x.key === k);
       return s + (e?.size ?? 0);
     }, 0)) + bytes.byteLength;
 
@@ -303,6 +310,32 @@ export async function writeRawFragmentCacheIDB(
     });
   } catch {
     // best-effort
+  }
+}
+
+/** Remove one rejected/corrupt artifact so the next load does not retry it. */
+export async function deleteFragmentCacheIDBEntry(key: string): Promise<void> {
+  try {
+    const db = await openIDB();
+    const total = await getTotalBytes(db);
+    const txRead = db.transaction(STORE_FRAGS, 'readonly');
+    const existing = await idbRequest<FragEntry | undefined>(
+      txRead.objectStore(STORE_FRAGS).get(key),
+    );
+    if (!existing) return;
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction([STORE_FRAGS, STORE_META, STORE_RECENCY], 'readwrite');
+      tx.objectStore(STORE_FRAGS).delete(key);
+      tx.objectStore(STORE_RECENCY).delete(key);
+      tx.objectStore(STORE_META).put({
+        id: META_TOTAL_KEY,
+        value: Math.max(0, total - existing.size),
+      } satisfies MetaEntry);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // Cache cleanup is best-effort; loading already fell back safely.
   }
 }
 

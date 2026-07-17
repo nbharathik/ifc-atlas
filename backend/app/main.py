@@ -131,7 +131,7 @@ async def _lifespan(_: FastAPI):
 app = FastAPI(
     title="IFC Atlas",
     description="IFC Atlas with Multi-LLM Agent Interface",
-    version="1.0.0",
+    version="0.1.1",
     lifespan=_lifespan,
 )
 
@@ -161,6 +161,9 @@ app.add_middleware(
         "X-Fragment-Profile",
         "X-Fragment-Elapsed-Ms",
         "X-Fragment-Source-Sha256",
+        "X-Fragment-Cache-Key",
+        "X-Fragment-Artifact-Schema",
+        "X-Fragments-Format-Version",
         "X-Fragment-Storey-Name",
         "X-Geometry-Batch-Size",
     ],
@@ -226,4 +229,4 @@ app.mount("/mcp", build_sse_app(token=_mcp_token))
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "1.0.0"}
+    return {"status": "ok", "version": "0.1.1"}

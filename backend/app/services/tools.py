@@ -5,6 +5,8 @@ Each tool maps to an IFC service operation. The LLM can call these tools
 to query the loaded model, and the results are fed back for synthesis.
 """
 
+import asyncio
+import concurrent.futures
 import json
 import logging
 from typing import Any, Optional
@@ -19,6 +21,7 @@ from app.services.entity_dependency_graph import get_graph
 from app.services.ids_service import extract_failing_ids, validate_ids_base64
 from app.services.ifc_service import ifc_service
 from app.services.metadata_index_service import metadata_index_service
+from app.services.operation_service import Actor, operation_service
 from app.services.qto_service import GROUP_FIELDS
 from app.services.sandbox_service import sandbox_service
 from app.services.spatial_proximity import find_nearby_via_aabbs
@@ -31,6 +34,7 @@ _WRITE_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "rename_element",
         "update_property_value",
+        "update_element_attribute",
         "rename_elements_batch",
         "update_properties_batch",
         "propose_edit",
@@ -413,7 +417,7 @@ TOOL_DEFINITIONS = [
         "name": "rename_element",
         "description": (
             "Rename an IFC element by changing its Name attribute. "
-            "This is a reversible edit - use undo_last_edit to roll back. "
+            "Chat-agent calls are staged in an IFC sandbox for approval before apply. "
             "Always confirm the element_id with get_element_details first."
         ),
         "parameters": {
@@ -436,7 +440,7 @@ TOOL_DEFINITIONS = [
         "name": "update_property_value",
         "description": (
             "Update a single property value on an IFC element's property set. "
-            "This is a reversible edit - use undo_last_edit to roll back. "
+            "Chat-agent calls are staged in an IFC sandbox for approval before apply. "
             "Use get_element_details first to confirm the property set and property name."
         ),
         "parameters": {
@@ -459,6 +463,32 @@ TOOL_DEFINITIONS = [
                 },
             },
             "required": ["element_id", "property_name", "new_value"],
+        },
+        "where": "server",
+    },
+    {
+        "name": "update_element_attribute",
+        "description": (
+            "Update one safe IFC text attribute without changing geometry. "
+            "Supported attributes: Description, ObjectType, Tag, LongName. "
+            "The edit is sandboxed for approval, validated, logged, and updates the viewer in place. "
+            "Use get_element_details first to confirm the element and current value."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "element_id": {"type": "integer", "description": "IFC Express ID of the element."},
+                "attribute": {
+                    "type": "string",
+                    "enum": ["Description", "ObjectType", "Tag", "LongName"],
+                    "description": "The controlled IFC text attribute to update.",
+                },
+                "new_value": {
+                    "type": "string",
+                    "description": "New text, or an empty string to clear the optional attribute.",
+                },
+            },
+            "required": ["element_id", "attribute", "new_value"],
         },
         "where": "server",
     },
@@ -810,6 +840,116 @@ TOOL_DEFINITIONS = [
         "where": "server",
     },
     {
+        "name": "bsdd_search",
+        "description": (
+            "Search the buildingSMART Data Dictionary (bSDD) for IFC "
+            "classifications and properties by free text. bSDD is the "
+            "authoritative online dictionary of building classification systems "
+            "(Uniclass, IFC, DIN, etc.). Use it to find the right classification "
+            "for an element, discover standard property definitions, or answer "
+            "'what classification/property should this have?'. Works WITHOUT a "
+            "loaded model. Returns matching classes/properties with their bSDD "
+            "URIs - pass a URI to bsdd_get_class / bsdd_get_properties."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Free-text search, e.g. 'exterior wall' or 'fire rating'.",
+                },
+                "dictionary_uri": {
+                    "type": "string",
+                    "description": "Optional bSDD dictionary URI to scope the search.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum results (default 20, max 50).",
+                },
+            },
+            "required": ["query"],
+        },
+        "where": "server",
+    },
+    {
+        "name": "bsdd_get_class",
+        "description": (
+            "Fetch the full bSDD definition of one classification by its URI - "
+            "definition, parent class, and associated properties. Get the URI "
+            "from bsdd_search first. Works WITHOUT a loaded model."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "uri": {
+                    "type": "string",
+                    "description": "The bSDD class URI (from bsdd_search results).",
+                },
+            },
+            "required": ["uri"],
+        },
+        "where": "server",
+    },
+    {
+        "name": "bsdd_get_properties",
+        "description": (
+            "List the standard properties a bSDD classification defines, by "
+            "class URI - the correct property set + property names and datatypes "
+            "the classification expects. Get the URI from bsdd_search. No model "
+            "needed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "uri": {
+                    "type": "string",
+                    "description": "The bSDD class URI whose properties to list.",
+                },
+            },
+            "required": ["uri"],
+        },
+        "where": "server",
+    },
+    {
+        "name": "get_docs",
+        "description": (
+            "Look up reference documentation. Sources: 'ifcopenshell' (the "
+            "IfcOpenShell Python API - consult BEFORE writing execute_ifc_code so "
+            "the calls are correct), 'bsdd' (buildingSMART classifications / "
+            "properties), 'user' (documents the user uploaded), 'ifc-schema' (IFC "
+            "entity / attribute reference). Returns the most relevant passages "
+            "with their source. Works WITHOUT a loaded model. If a source isn't "
+            "indexed yet the result says so and how to index it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "enum": ["ifcopenshell", "bsdd", "user", "ifc-schema"],
+                    "description": "Which knowledge source to query.",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Natural-language question or keywords.",
+                },
+                "symbol": {
+                    "type": "string",
+                    "description": (
+                        "Optional exact symbol to prioritise, e.g. "
+                        "'ifcopenshell.api.geometry.edit_object_placement' or a bSDD class URI."
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum passages to return (default 5, max 15).",
+                },
+            },
+            "required": ["source", "query"],
+        },
+        "where": "server",
+    },
+    {
         "name": "get_connected_elements",
         "description": (
             "Return the wall or slab neighbours that are path-connected to a given "
@@ -1152,7 +1292,7 @@ _TOOL_TIERS: dict[str, tuple[str, str]] = {
     "search_by_property":      ("read_model",  "Read - Model"),
     "get_all_property_names":  ("read_model",  "Read - Model"),
     "get_quantities_summary":  ("read_model",  "Read - Model"),
-    "run_model_health_check":  ("read_model",  "Read - Model"),
+    "run_model_health_check":  ("validate",    "Validate"),
     "highlight_elements":      ("read_viewer", "Read - Viewer"),
     "select_element":          ("read_viewer", "Read - Viewer"),
     "isolate_elements":        ("read_viewer", "Read - Viewer"),
@@ -1163,15 +1303,20 @@ _TOOL_TIERS: dict[str, tuple[str, str]] = {
     "rename_element":          ("write_edit",  "Write - Edit"),
     "rename_elements_batch":   ("write_edit",  "Write - Edit"),
     "update_property_value":   ("write_edit",  "Write - Edit"),
+    "update_element_attribute": ("write_edit", "Write - Edit"),
     "update_properties_batch": ("write_edit",  "Write - Edit"),
     "undo_last_edit":          ("write_edit",  "Write - Edit"),
-    "get_edit_history":        ("write_edit",  "Write - Edit"),
+    "get_edit_history":        ("read_model",  "Read - Model"),
     "propose_edit":            ("write_edit",  "Write - Edit"),
     "execute_ifc_query_code":  ("read_model",  "Read - Model"),
     "execute_ifc_code":        ("write_edit",  "Write - Edit"),
     "create_wall_from_ends":   ("write_edit",  "Write - Edit"),
     "delete_element":          ("write_edit",  "Write - Edit"),
     "search_document_index":       ("read_model",  "Read - Model"),
+    "bsdd_search":                 ("read_knowledge", "Read - Knowledge"),
+    "bsdd_get_class":              ("read_knowledge", "Read - Knowledge"),
+    "bsdd_get_properties":         ("read_knowledge", "Read - Knowledge"),
+    "get_docs":                    ("read_knowledge", "Read - Knowledge"),
     "search_elements_semantic":    ("read_model",  "Read - Model"),
     "get_connected_elements":      ("read_model",  "Read - Model"),
     "get_element_material":        ("read_model",  "Read - Model"),
@@ -1182,7 +1327,7 @@ _TOOL_TIERS: dict[str, tuple[str, str]] = {
     "get_cost_summary":            ("read_model",  "Read - Model"),
     "get_carbon_summary":          ("read_model",  "Read - Model"),
     "get_element_relationships":   ("read_model",  "Read - Model"),
-    "run_model_audit":             ("read_model",  "Read - Model"),
+    "run_model_audit":             ("validate",    "Validate"),
 }
 
 
@@ -1208,11 +1353,64 @@ def write_edit_tool_names() -> frozenset[str]:
     )
 
 
+# ── Edit scope: semantic (no viewer reload) vs structural (reloads) ──────────
+# Semantic write tools change only metadata (names, property/pset values) and
+# update the viewer IN PLACE - no 3D reload. Structural write tools change
+# geometry (create/delete elements) or run arbitrary code that can, so applying
+# them reloads the 3D viewer. The Edit surface's default "semantic" scope strips
+# the structural set, so property/classification editing never reloads and the
+# LLM stays constrained to safe, fast edits. See dev/docs/EDIT_SCOPES.md.
+STRUCTURAL_WRITE_TOOLS: frozenset[str] = frozenset({
+    "create_wall_from_ends",   # adds swept-solid geometry
+    "delete_element",          # removes geometry
+    "execute_ifc_code",        # arbitrary code - may create/delete geometry
+    "propose_edit",            # generic op runner - may include create/delete
+})
+
+
+def structural_write_tool_names() -> frozenset[str]:
+    """Write tools whose edits change geometry and therefore reload the viewer."""
+    return STRUCTURAL_WRITE_TOOLS & write_edit_tool_names()
+
+
+def semantic_write_tool_names() -> frozenset[str]:
+    """Write tools whose edits are metadata-only (no viewer reload)."""
+    return write_edit_tool_names() - STRUCTURAL_WRITE_TOOLS
+
+
+def tool_activity_kind(name: str) -> str:
+    """User-facing effect classification for chat progress/tool cards.
+
+    This is deliberately more specific than the permission tier: code
+    execution and geometry changes deserve distinct warnings even though both
+    may share the same write gate.
+    """
+    if name == "execute_ifc_query_code":
+        return "code_read"
+    if name == "execute_ifc_code":
+        return "code_edit"
+    if name == "undo_last_edit":
+        return "model_edit"
+    if name in STRUCTURAL_WRITE_TOOLS:
+        return "geometry_edit"
+    tier, _ = tool_tier(name)
+    if tier == "write_edit":
+        return "semantic_edit"
+    if tier == "validate":
+        return "validation"
+    if tier == "read_viewer":
+        return "viewer_action"
+    return "read_only"
+
+
 # Tools that DON'T need IfcOpenShell can run during warm-up.
 # Everything else gets a synthetic "warming up" envelope instead of failing.
 # Native-fast-path tools are also exempt - they read the
 # TypeScript metadata index, not ifcopenshell.
-_WARMING_EXEMPT_TIERS: frozenset[str] = frozenset({"read_viewer"})
+# read_viewer runs in the browser; read_knowledge (bSDD, get_docs) reads
+# external/reference knowledge, not the model - neither needs IfcOpenShell, so
+# both run during warm-up and without a model loaded.
+_WARMING_EXEMPT_TIERS: frozenset[str] = frozenset({"read_viewer", "read_knowledge"})
 
 # Read tools that have a metadata_index_service fast path. When the
 # native index is loaded AND IfcOpenShell is still warming, these tools
@@ -1425,12 +1623,148 @@ def _clamp_top_rows(value: Any, default: int = 25, maximum: int = 100) -> int:
     return max(1, min(top, maximum))
 
 
-def _execute_tool_raw(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def _run_coro_sync(coro: "Any") -> Any:
+    """Run an async coroutine to completion from sync code, whether or not an
+    event loop is already running on this thread.
+
+    ``execute_tool`` is sync but is called inside the chat WebSocket event loop
+    (``chat_routes.py``), where ``asyncio.run`` would raise "loop already
+    running". Async network tools (bSDD, docs) therefore run in a dedicated
+    worker thread with its own loop. The calling thread blocks until the
+    coroutine finishes - the same synchronous model every other tool already
+    uses - but these calls are cached and touch no shared IfcOpenShell state, so
+    the worker thread is safe.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)  # no loop here (tests / worker threads)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(asyncio.run, coro).result()
+
+
+def _get_docs(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Router for the ``get_docs`` tool - one entry point over every knowledge
+    source (IfcOpenShell API, bSDD, user uploads, IFC schema)."""
+    source = str(arguments.get("source") or "").strip().lower()
+    query = str(arguments.get("query") or "").strip()
+    symbol = arguments.get("symbol")
+    limit = min(int(arguments.get("limit") or 5), 15)
+    if not query and not symbol:
+        return {"error": "get_docs: provide a 'query' (or a 'symbol')."}
+    effective_query = f"{symbol} {query}".strip() if symbol else query
+
+    if source == "bsdd":
+        from app.services import bsdd_service
+        if symbol and "://" in str(symbol):
+            return {"source": source, "symbol": symbol,
+                    "result": _run_coro_sync(bsdd_service.get_class(str(symbol)))}
+        res = _run_coro_sync(bsdd_service.search(effective_query, limit=limit))
+        out = {"source": source, "query": effective_query,
+               "results": res.get("results", []), "count": res.get("count", 0)}
+        if res.get("error"):
+            out["error"] = res["error"]
+        return out
+
+    if source == "user":
+        from app.services.document_index_service import document_index_service
+        passages = document_index_service.search(effective_query, top_k=limit)
+        return {"source": source, "query": effective_query,
+                "result_count": len(passages), "passages": passages}
+
+    if source == "ifc-schema":
+        # Honesty over aliasing: no IFC entity/attribute schema source is
+        # indexed yet (plan E2 remainder). Returning ifcopenshell.api passages
+        # mislabelled as schema documentation misleads the model.
+        return {
+            "source": source, "query": effective_query, "passages": [], "result_count": 0,
+            "error": "source_unavailable",
+            "hint": (
+                "The IFC entity/attribute schema source is not indexed yet. "
+                "For IfcOpenShell API usage use source='ifcopenshell'; for "
+                "classification/property definitions use the bsdd_* tools."
+            ),
+        }
+
+    if source == "ifcopenshell":
+        from app.services.reference_docs_service import reference_docs_service
+        if not reference_docs_service.status().get("indexed"):
+            return {
+                "source": source, "query": effective_query, "passages": [], "result_count": 0,
+                "error": "not_indexed",
+                "hint": (
+                    "Reference docs aren't indexed yet. Run "
+                    "`python scripts/fetch_reference_docs.py`, or click 'Fetch "
+                    "IfcOpenShell API docs' in the Chat Manager Knowledge tab."
+                ),
+            }
+        passages = reference_docs_service.search(effective_query, top_k=limit)
+        return {"source": source, "query": effective_query,
+                "result_count": len(passages), "passages": passages}
+
+    return {"error": f"get_docs: unknown source '{source}'. "
+                     "Use one of: ifcopenshell, bsdd, user, ifc-schema."}
+
+
+def _pending_edit_result(envelope: Any) -> dict[str, Any]:
+    if envelope is None:
+        return {
+            "action": "pending_noop",
+            "message": "Sandbox ran cleanly but produced no model change - nothing to review.",
+        }
+    return {
+        "action": "pending_edit",
+        "edit_id": envelope.edit_id,
+        "summary": envelope.summary,
+        "counts": envelope.counts,
+        "change_preview": [c.model_dump() for c in envelope.changes[:10]],
+        "total_changes": len(envelope.changes),
+        "preview_truncated": len(envelope.changes) > 10,
+        "verifier_verdict": envelope.verifier_verdict,
+        "note": (
+            "Edit is PENDING - review it in chat before applying. Nothing mutates yet."
+            + _verdict_suffix(envelope.verifier_verdict)
+        ),
+    }
+
+
+def _stage_agent_edit(
+    actor: Actor,
+    operations: list[dict[str, Any]],
+    summary: str,
+) -> Optional[dict[str, Any]]:
+    """Stage chat-agent writes while preserving direct human/MCP operations."""
+    if actor is not Actor.AGENT:
+        return None
+    envelope = sandbox_service.propose_edit(
+        ifc_service=ifc_service,
+        operations=operations,
+        summary=summary,
+    )
+    return _pending_edit_result(envelope)
+
+
+def _verdict_suffix(verdict: Optional[dict[str, Any]]) -> str:
+    """LLM-facing one-liner for a pending edit's verifier verdict (D4): a
+    FAIL/WARN in the tool result lets the agent self-repair in the same turn
+    instead of presenting a broken edit for Apply."""
+    from app.services.sandbox_service import _verifier_note
+
+    return _verifier_note(verdict)
+
+
+def _execute_tool_raw(
+    name: str, arguments: dict[str, Any], *, actor: Actor = Actor.AGENT
+) -> dict[str, Any]:
     """
     Execute a tool by name with the given arguments.
     Returns a dict with the result or error.
     Internal implementation - callers should use execute_tool() which applies
     the per-turn memo cache.
+
+    *actor* is stamped onto operation-layer writes so the op log's "who
+    changed what" stays truthful across surfaces: the chat agent (default),
+    or an external MCP client passing Actor.MCP.
     """
     try:
         # Allow native-index fast-path tools to run even when
@@ -1440,7 +1774,11 @@ def _execute_tool_raw(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         # partial. Non-eligible tools still hard-require ifc_service.
         _native_ready = _native_index_ready()
         if not ifc_service.is_loaded:
-            if not (_native_ready and name in _NATIVE_INDEX_ELIGIBLE_TOOLS):
+            # Knowledge tools (bSDD, get_docs) answer without a model.
+            _tier_id, _ = tool_tier(name)
+            if _tier_id != "read_knowledge" and not (
+                _native_ready and name in _NATIVE_INDEX_ELIGIBLE_TOOLS
+            ):
                 return {"error": "No IFC model is currently loaded."}
 
         # Fast path - prefer the native metadata index for
@@ -1706,34 +2044,101 @@ def _execute_tool_raw(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
                 "spec": spec_name or "all",
             }
 
+        # Write tools route through the operation layer (Invariant 12): every
+        # AI-originated mutation is validated, tiered, and appended to the
+        # per-model operation log with actor=AGENT. to_public_dict() is a
+        # superset of the legacy IfcService return (same `action`/`changed_ids`
+        # /`edit_id`, plus op_id/actor/patch_tier), so downstream WS-sync and
+        # LLM-facing code is unchanged.
         elif name == "rename_element":
-            return ifc_service.rename_element(
-                element_id=int(arguments["element_id"]),
-                new_name=str(arguments["new_name"]),
+            element_id = int(arguments["element_id"])
+            new_name = str(arguments["new_name"])
+            pending = _stage_agent_edit(
+                actor,
+                [{"op": "set_name", "element_id": element_id, "new_name": new_name}],
+                f"Rename element #{element_id} to '{new_name}'",
             )
+            if pending is not None:
+                return pending
+            return operation_service.execute(
+                "set_name",
+                {"element_id": element_id, "new_name": new_name},
+                actor=actor, ifc_service=ifc_service,
+            ).to_public_dict()
 
         elif name == "update_property_value":
-            return ifc_service.update_property_value(
-                element_id=int(arguments["element_id"]),
-                property_name=str(arguments["property_name"]),
-                new_value=arguments["new_value"],
-                pset_name=arguments.get("pset_name"),
+            params = {
+                "element_id": int(arguments["element_id"]),
+                "property_name": str(arguments["property_name"]),
+                "new_value": arguments["new_value"],
+                "pset_name": arguments.get("pset_name"),
+            }
+            pending = _stage_agent_edit(
+                actor,
+                [{"op": "set_property", **params}],
+                f"Update {params.get('pset_name') or 'property set'}.{params['property_name']} on #{params['element_id']}",
             )
+            if pending is not None:
+                return pending
+            return operation_service.execute(
+                "set_property",
+                params,
+                actor=actor, ifc_service=ifc_service,
+            ).to_public_dict()
+
+        elif name == "update_element_attribute":
+            params = {
+                "element_id": int(arguments["element_id"]),
+                "attribute": str(arguments["attribute"]),
+                "new_value": str(arguments.get("new_value") or ""),
+            }
+            pending = _stage_agent_edit(
+                actor,
+                [{"op": "set_attribute", **params}],
+                f"Update {params['attribute']} on element #{params['element_id']}",
+            )
+            if pending is not None:
+                return pending
+            return operation_service.execute(
+                "set_attribute",
+                params,
+                actor=actor, ifc_service=ifc_service,
+            ).to_public_dict()
 
         elif name == "rename_elements_batch":
             renames = arguments.get("renames") or []
             if not isinstance(renames, list):
                 return {"error": "rename_elements_batch: 'renames' must be a list"}
-            return ifc_service.rename_elements_batch(renames)
+            pending = _stage_agent_edit(
+                actor,
+                [{"op": "set_name", **item} for item in renames],
+                f"Rename {len(renames)} elements",
+            )
+            if pending is not None:
+                return pending
+            return operation_service.execute(
+                "set_names_batch", {"renames": renames},
+                actor=actor, ifc_service=ifc_service,
+            ).to_public_dict()
 
         elif name == "update_properties_batch":
             updates = arguments.get("updates") or []
             if not isinstance(updates, list):
                 return {"error": "update_properties_batch: 'updates' must be a list"}
-            return ifc_service.update_properties_batch(updates)
+            pending = _stage_agent_edit(
+                actor,
+                [{"op": "set_property", **item} for item in updates],
+                f"Update properties on {len(updates)} elements",
+            )
+            if pending is not None:
+                return pending
+            return operation_service.execute(
+                "set_properties_batch", {"updates": updates},
+                actor=actor, ifc_service=ifc_service,
+            ).to_public_dict()
 
         elif name == "undo_last_edit":
-            return ifc_service.undo_last_edit()
+            return operation_service.undo(ifc_service, actor=actor).to_public_dict()
 
         elif name == "get_edit_history":
             history = ifc_service.get_edit_history()
@@ -1748,29 +2153,7 @@ def _execute_tool_raw(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
                 operations=ops,
                 summary=arguments.get("summary"),
             )
-            if envelope is None:
-                return {
-                    "action": "pending_noop",
-                    "message": (
-                        "Sandbox ran cleanly but produced no structural "
-                        "change - nothing to review."
-                    ),
-                }
-            return {
-                "action": "pending_edit",
-                "edit_id": envelope.edit_id,
-                "summary": envelope.summary,
-                "counts": envelope.counts,
-                "change_preview": [
-                    c.model_dump() for c in envelope.changes[:10]
-                ],
-                "total_changes": len(envelope.changes),
-                "preview_truncated": len(envelope.changes) > 10,
-                "note": (
-                    "Edit is PENDING - the user must click Apply in the "
-                    "Diff Preview panel. Nothing mutates yet."
-                ),
-            }
+            return _pending_edit_result(envelope)
 
         elif name in {"execute_ifc_query_code", "execute_ifc_code"}:
             code = arguments.get("code")
@@ -1832,9 +2215,11 @@ def _execute_tool_raw(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
                 "change_preview": [c.model_dump() for c in envelope.changes[:10]],
                 "total_changes": len(envelope.changes),
                 "preview_truncated": len(envelope.changes) > 10,
+                "verifier_verdict": envelope.verifier_verdict,
                 "note": (
                     "New wall is PENDING - the user must click Apply in the "
                     "Diff Preview panel. Nothing changes until then."
+                    + _verdict_suffix(envelope.verifier_verdict)
                 ),
             }
 
@@ -1868,9 +2253,11 @@ def _execute_tool_raw(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
                 "change_preview": [c.model_dump() for c in envelope.changes[:10]],
                 "total_changes": len(envelope.changes),
                 "preview_truncated": len(envelope.changes) > 10,
+                "verifier_verdict": envelope.verifier_verdict,
                 "note": (
                     "Deletion is PENDING - the user must click Apply in the "
                     "Diff Preview panel. This cannot be undone after Apply."
+                    + _verdict_suffix(envelope.verifier_verdict)
                 ),
             }
 
@@ -1886,6 +2273,35 @@ def _execute_tool_raw(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
                 "result_count": len(passages),
                 "passages": passages,
             }
+
+        # Knowledge tools (read_knowledge tier): no model needed, warm-up exempt.
+        # bSDD calls are async; _run_coro_sync bridges them into this sync path.
+        elif name == "bsdd_search":
+            from app.services import bsdd_service
+            query = str(arguments.get("query") or "").strip()
+            if not query:
+                return {"error": "bsdd_search: 'query' must be non-empty"}
+            limit = min(int(arguments.get("limit") or 20), 50)
+            return _run_coro_sync(bsdd_service.search(
+                query, dictionary_uri=arguments.get("dictionary_uri"), limit=limit,
+            ))
+
+        elif name == "bsdd_get_class":
+            from app.services import bsdd_service
+            uri = str(arguments.get("uri") or "").strip()
+            if not uri:
+                return {"error": "bsdd_get_class: 'uri' must be non-empty"}
+            return _run_coro_sync(bsdd_service.get_class(uri))
+
+        elif name == "bsdd_get_properties":
+            from app.services import bsdd_service
+            uri = str(arguments.get("uri") or "").strip()
+            if not uri:
+                return {"error": "bsdd_get_properties: 'uri' must be non-empty"}
+            return _run_coro_sync(bsdd_service.get_class_properties(uri))
+
+        elif name == "get_docs":
+            return _get_docs(arguments)
 
         elif name == "get_connected_elements":
             element_id = arguments.get("element_id")
@@ -2111,7 +2527,9 @@ def _execute_tool_raw(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return {"error": f"Tool execution failed: {e}"}
 
 
-def execute_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def execute_tool(
+    name: str, arguments: dict[str, Any], *, actor: Actor = Actor.AGENT
+) -> dict[str, Any]:
     """
     Execute a tool with per-turn memoization for read-only calls.
 
@@ -2124,6 +2542,10 @@ def execute_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     synthetic ``warming`` envelope instead of being run; the result is NOT
     memoized so the next attempt (after IfcOpenShell finishes loading) gets
     fresh data.
+
+    *actor* attributes operation-layer writes (chat agent by default; the MCP
+    server passes ``Actor.MCP``). Reads are actor-agnostic, so memoization
+    stays keyed by (name, arguments) alone.
     """
     # Warm-up gate: refuse semantic tools until ifcopenshell is ready.
     envelope = warming_envelope(name)
@@ -2135,7 +2557,7 @@ def execute_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     if cached is not None:
         return {**cached, "_memo": True}
 
-    result = _execute_tool_raw(name, arguments)
+    result = _execute_tool_raw(name, arguments, actor=actor)
 
     # Post-execution: write tools evict the cache; reads populate it.
     if name in _WRITE_TOOL_NAMES:
@@ -2144,6 +2566,29 @@ def execute_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         tool_memo_cache.put(name, arguments, result)
 
     return result
+
+
+async def execute_tool_off_loop(
+    name: str, arguments: dict[str, Any], *, actor: Actor = Actor.AGENT
+) -> dict[str, Any]:
+    """Run :func:`execute_tool` on a worker thread.
+
+    Slow tool bodies (bSDD WAN calls up to their 15 s timeout, health checks,
+    sandbox runs) used to execute synchronously ON the chat event loop,
+    freezing every WebSocket for their duration. Off-loop execution fixes
+    that; write-tier tools additionally hold the shared edit lock, because
+    leaving the loop also leaves the loop's implicit serialization against
+    the REST editor routes (single-writer invariant, same treatment as the
+    MCP write path).
+    """
+    import asyncio
+
+    from app.services.edit_lock import edit_lock
+
+    if tool_tier(name)[0] == "write_edit":
+        async with edit_lock:
+            return await asyncio.to_thread(execute_tool, name, arguments, actor=actor)
+    return await asyncio.to_thread(execute_tool, name, arguments, actor=actor)
 
 
 def _truncate_list_tail(result: dict[str, Any], max_length: int) -> Optional[str]:

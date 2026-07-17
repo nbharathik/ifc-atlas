@@ -1,22 +1,39 @@
 import { useStore } from '../../store/useStore';
-import Icon from '../ui/Icon';
+import Icon, { type IconName } from '../ui/Icon';
 import {
-  formatArea,
-  formatAngle,
-  formatLength,
+  type MeasurementMode,
   type MeasurementSnapshot,
 } from '../../services/viewer/measurementController';
-import type { MeasurementMode, MeasurementUnit } from '../../store/useStore';
+import type { MeasurementUnit } from '../../store/useStore';
 
-const MODE_BUTTONS: Array<{ mode: Exclude<MeasurementMode, 'off'>; label: string; hint: string }> = [
-  { mode: 'linear', label: 'Line',  hint: 'Two-click linear distance (Esc to cancel)' },
-  { mode: 'box',    label: 'Box',   hint: 'Two-click rectangle on the face plane - instant area' },
-  { mode: 'area',   label: 'Poly',  hint: 'Polygon area: click vertices, Finish to close' },
-  { mode: 'angle',  label: 'Angle', hint: 'Three-click angle: vertex → arm1 → arm2 (N to toggle)' },
+const MODE_BUTTONS: Array<{
+  mode: Exclude<MeasurementMode, 'off'>;
+  label: string;
+  icon: IconName;
+  hint: string;
+}> = [
+  { mode: 'linear', label: 'Distance', icon: 'ruler', hint: 'Point-to-point distance' },
+  { mode: 'height', label: 'Height', icon: 'height', hint: 'Vertical height between two points' },
+  { mode: 'clearance', label: 'Clearance', icon: 'clearance', hint: 'Shortest gap between two picked faces' },
+  { mode: 'position', label: 'Position', icon: 'target', hint: 'Drop a coordinate marker' },
+  { mode: 'box', label: 'Rectangle', icon: 'square', hint: 'Rectangular area on a face' },
+  { mode: 'area', label: 'Polygon area', icon: 'polygon', hint: 'Area of a clicked polygon' },
+  { mode: 'angle', label: 'Angle', icon: 'angle', hint: 'Angle between two arms' },
 ];
 
+/** Static per-tool instruction. Per-step guidance follows the cursor. */
+const MODE_STEPS: Record<Exclude<MeasurementMode, 'off'>, string> = {
+  linear: 'Click two points. The distance follows your cursor.',
+  height: 'Click a base point, then a top point.',
+  clearance: 'Pick two faces to measure the shortest gap.',
+  position: 'Click anywhere to drop a coordinate marker.',
+  box: 'Click two opposite corners on one face.',
+  area: 'Click vertices. Enter or double-click finishes.',
+  angle: 'Click the corner, then the two arm ends.',
+};
+
 const UNIT_BUTTONS: Array<{ unit: MeasurementUnit; label: string; hint: string }> = [
-  { unit: 'm',  label: 'm',  hint: 'Metres' },
+  { unit: 'm', label: 'm', hint: 'Metres' },
   { unit: 'mm', label: 'mm', hint: 'Millimetres' },
   { unit: 'ft', label: 'ft', hint: 'Feet' },
 ];
@@ -26,160 +43,124 @@ interface Props {
   onFinish: () => void;
   onCancel: () => void;
   onClear: () => void;
-  onRemove: (id: string) => void;
 }
 
-/** Floating measurement toolbar + live readout. Visible only when a model
- *  is loaded. Hidden while the viewer is initialising so it never flashes
- *  before the scene is ready.
- *
- *  Design notes:
- *  - Bottom-centre of the viewport so it doesn't collide with the top-centre
- *    section/clip-plane bar or the top-right performance HUD.
- *  - Mode buttons are a single-select pill group (off / linear / area) so
- *    the state is always unambiguous and the active tool is at a glance.
- *  - The live readout shows the in-flight measurement value while the user
- *    is dropping vertices, flipping to the final committed value on commit.
- *  - Unit toggle sits on the right, persisted in Zustand (see `setMeasurement`).
+/**
+ * Measurement toolbar, centered at the top of the viewport. Row one picks the
+ * tool, unit, and history; row two tells the user what to do and offers
+ * Finish/Cancel. Live values render at the cursor (MeasurementCursorTip), so
+ * nothing here updates per pointer move.
  */
-export default function MeasurementControls({ snapshot, onFinish, onCancel, onClear, onRemove }: Props) {
-  const modelLoaded = useStore((s) => s.modelLoaded);
-  const mode = useStore((s) => s.measurement.mode);
-  const unit = useStore((s) => s.measurement.unit);
-  const setMeasurement = useStore((s) => s.setMeasurement);
-  const setMeasurementMode = useStore((s) => s.setMeasurementMode);
+export default function MeasurementControls({ snapshot, onFinish, onCancel, onClear }: Props) {
+  const modelLoaded = useStore((state) => state.modelLoaded);
+  const mode = useStore((state) => state.measurement.mode);
+  const unit = useStore((state) => state.measurement.unit);
+  const setMeasurement = useStore((state) => state.setMeasurement);
+  const setMeasurementMode = useStore((state) => state.setMeasurementMode);
+  const panelOpen = useStore((state) => state.measurementPanelOpen);
+  const setPanelOpen = useStore((state) => state.setMeasurementPanelOpen);
 
   if (!modelLoaded || mode === 'off') return null;
 
   const pendingCount = snapshot?.pending.length ?? 0;
   const committedCount = snapshot?.committed.length ?? 0;
-  const pendingValue = snapshot?.pendingValue ?? null;
-  const pendingPerimeter = snapshot?.pendingPerimeter ?? null;
-  const pendingAngleDeg = snapshot?.pendingAngleDeg ?? null;
   const canFinish = mode === 'area' && pendingCount >= 3;
-
-  // Live label: what the user sees while placing vertices.
-  let live: string | null = null;
-  if (mode === 'angle') {
-    if (pendingAngleDeg !== null) {
-      live = formatAngle(pendingAngleDeg);
-    } else if (pendingCount === 0) {
-      live = 'Click vertex…';
-    } else if (pendingCount === 1) {
-      live = 'Click arm 1…';
-    } else {
-      live = 'Click arm 2…';
-    }
-  } else if (pendingValue !== null) {
-    if (mode === 'linear') {
-      live = formatLength(pendingValue, unit);
-    } else {
-      live = formatArea(pendingValue, unit);
-    }
-  } else if (mode === 'linear' && pendingCount === 1) {
-    live = 'Click second point…';
-  } else if (mode === 'box') {
-    live = pendingCount === 0 ? 'Click first corner…' : 'Click opposite corner…';
-  } else if (mode === 'area' && pendingCount < 3) {
-    live = pendingCount === 0 ? 'Click first vertex…' : `${pendingCount} / 3+ vertices`;
-  } else if (mode === 'linear' && pendingCount === 0) {
-    live = 'Click start point…';
-  }
+  const activeTool = MODE_BUTTONS.find((button) => button.mode === mode);
 
   return (
-    <div
-      className="measurement-toolbar active"
-      role="toolbar"
-      aria-label="Measurement tools"
-    >
-      <Icon name="ruler" size={12} />
-
-      <div className="measurement-modes">
-        {MODE_BUTTONS.map(({ mode: m, label, hint }) => (
-          <button
-            key={m}
-            className={`measurement-mode-btn ${mode === m ? 'active' : ''}`}
-            onClick={() => setMeasurementMode(m)}
-            title={hint}
-            aria-pressed={mode === m}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div className="measurement-live" aria-live="polite">
-        {live ?? 'Pick a tool'}
-        {(mode === 'area' || mode === 'box') && pendingPerimeter !== null && pendingCount >= 2 && (
-          <span className="measurement-live-sub">
-            · {formatLength(pendingPerimeter, unit)}
-          </span>
-        )}
-      </div>
-
-      {mode === 'area' && canFinish && (
-        <button
-          className="measurement-btn measurement-btn-primary"
-          onClick={onFinish}
-          title="Close polygon and commit (Enter)"
-        >
-          ✓
-        </button>
-      )}
-
-      {pendingCount > 0 && (
-        <button
-          className="measurement-btn"
-          onClick={onCancel}
-          title="Discard in-flight measurement (Esc)"
-        >
-          ✕
-        </button>
-      )}
-
-      <div className="measurement-units">
-        {UNIT_BUTTONS.map(({ unit: u, label, hint }) => (
-          <button
-            key={u}
-            className={`measurement-unit-btn ${unit === u ? 'active' : ''}`}
-            onClick={() => setMeasurement({ unit: u })}
-            title={hint}
-            aria-pressed={unit === u}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {committedCount > 0 && (
-        <div className="measurement-history" aria-label="Committed measurements">
-          {snapshot!.committed.slice(0, 2).map((m) => (
+    <div className="measurement-toolbar" role="toolbar" aria-label="Measurement tools">
+      <div className="measurement-row">
+        <div className="measurement-tools" role="group" aria-label="Measurement tool">
+          {MODE_BUTTONS.map(({ mode: optionMode, label, icon, hint }) => (
             <button
-              key={m.id}
-              className="measurement-history-chip"
-              onClick={() => onRemove(m.id)}
-              title="Click to remove"
+              key={optionMode}
+              className={`measurement-tool-btn${mode === optionMode ? ' active' : ''}`}
+              onClick={() => setMeasurementMode(optionMode)}
+              title={`${label}. ${hint}`}
+              aria-label={label}
+              aria-pressed={mode === optionMode}
             >
-              <span className="measurement-history-val">
-                {m.kind === 'linear'
-                  ? formatLength(m.value, unit)
-                  : m.kind === 'area'
-                  ? formatArea(m.value, unit)
-                  : formatAngle(m.value)}
-              </span>
+              <Icon name={icon} size={13} />
             </button>
           ))}
-          {committedCount > 2 && (
-            <button
-              className="measurement-btn"
-              onClick={onClear}
-              title={`Clear all ${committedCount}`}
-            >
-              ×{committedCount}
-            </button>
-          )}
         </div>
-      )}
+
+        <div className="measurement-sep" aria-hidden="true" />
+
+        <div className="measurement-units" aria-label="Measurement units">
+          {UNIT_BUTTONS.map(({ unit: optionUnit, label, hint }) => (
+            <button
+              key={optionUnit}
+              className={`measurement-unit-btn ${unit === optionUnit ? 'active' : ''}`}
+              onClick={() => setMeasurement({ unit: optionUnit })}
+              title={hint}
+              aria-pressed={unit === optionUnit}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="measurement-sep" aria-hidden="true" />
+
+        <button
+          className={`measurement-btn${panelOpen ? ' active' : ''}`}
+          onClick={() => setPanelOpen(!panelOpen)}
+          title="Show the list of placed measurements"
+          aria-label="Measurement history"
+          aria-pressed={panelOpen}
+        >
+          <Icon name="clipboard-list" size={12} />
+          {committedCount > 0 && committedCount}
+        </button>
+
+        {committedCount > 0 && (
+          <button
+            className="measurement-btn"
+            onClick={onClear}
+            title={`Clear all ${committedCount} measurement${committedCount === 1 ? '' : 's'}`}
+            aria-label={`Clear all ${committedCount} measurements`}
+          >
+            <Icon name="trash" size={12} />
+          </button>
+        )}
+
+        <button
+          className="measurement-btn"
+          onClick={() => setMeasurementMode('off')}
+          title="Exit measurement (R or Esc)"
+          aria-label="Exit measurement mode"
+        >
+          <Icon name="x" size={12} />
+        </button>
+      </div>
+
+      <div className="measurement-row measurement-row-status">
+        <span className="measurement-tool-name">{activeTool?.label}</span>
+        <span className="measurement-step">{activeTool ? MODE_STEPS[activeTool.mode] : ''}</span>
+        {canFinish && (
+          <button
+            className="measurement-btn measurement-btn-primary"
+            onClick={onFinish}
+            title="Close the polygon (Enter)"
+            aria-label="Finish polygon measurement"
+          >
+            <Icon name="check" size={12} />
+            Finish
+          </button>
+        )}
+        {pendingCount > 0 && (
+          <button
+            className="measurement-btn"
+            onClick={onCancel}
+            title="Discard the points placed so far (Esc)"
+            aria-label="Cancel pending measurement"
+          >
+            <Icon name="x" size={12} />
+            Cancel
+          </button>
+        )}
+      </div>
     </div>
   );
 }

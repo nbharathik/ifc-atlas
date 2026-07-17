@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useStore } from '../../store/useStore';
 import * as api from '../../services/api';
 import type { ElementRelations } from '../../services/api';
@@ -343,12 +343,164 @@ function RelationsSection({ elementId }: { elementId: number }) {
   );
 }
 
+/** Coerce an edited string back toward the original value's type so a bool
+ *  property stays a bool and a number stays a number when it round-trips. */
+function coerceLike(next: string, original: unknown): string | number | boolean {
+  const t = next.trim();
+  if (typeof original === 'boolean') {
+    const l = t.toLowerCase();
+    if (l === 'true') return true;
+    if (l === 'false') return false;
+    return t;
+  }
+  if (typeof original === 'number') {
+    const n = Number(t);
+    return t !== '' && Number.isFinite(n) ? n : t;
+  }
+  return t;
+}
+
+/** Pre-commit validation matching coerceLike's coercion rules: reject drafts
+ *  that would silently change a value's type instead of shipping them to the
+ *  backend. Returns an error string or null when the draft is acceptable. */
+export function validateDraft(
+  next: string,
+  original: unknown,
+  { required = false }: { required?: boolean } = {},
+): string | null {
+  const t = next.trim();
+  if (required && t === '') return 'Value cannot be empty';
+  if (typeof original === 'boolean') {
+    const l = t.toLowerCase();
+    if (l !== 'true' && l !== 'false') return 'Enter true or false';
+    return null;
+  }
+  if (typeof original === 'number') {
+    if (t === '' || !Number.isFinite(Number(t))) return 'Enter a number';
+    return null;
+  }
+  return null;
+}
+
+/** A property value that becomes an inline text input in Edit mode. Commits on
+ *  Enter or blur; Escape cancels. The single commit path is onBlur (Enter and
+ *  Escape both blur), so the operation never fires twice. While the operation
+ *  is in flight the field is disabled (a fast second edit cannot race the
+ *  first); a type-invalid draft or a failed op shows an inline error and keeps
+ *  the field open for correction. */
+function EditableText({
+  value,
+  original,
+  required = false,
+  onCommit,
+}: {
+  value: string;
+  /** The pre-edit typed value; drives type validation (bool/number/string). */
+  original?: unknown;
+  /** Reject empty drafts (element names). */
+  required?: boolean;
+  onCommit: (next: string) => void | Promise<unknown>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const skipBlur = useRef(false);
+
+  useEffect(() => { setDraft(value); }, [value]);
+
+  const commit = async () => {
+    if (skipBlur.current) {
+      skipBlur.current = false;
+      setEditing(false);
+      setError(null);
+      return;
+    }
+    const next = draft.trim();
+    if (next === value.trim()) { setEditing(false); setError(null); return; }
+    const invalid = validateDraft(next, original ?? value, { required });
+    if (invalid) {
+      // Keep the editor open so the user can fix the draft; blur happened, so
+      // re-focus is up to them, but the error and draft are preserved.
+      setError(invalid);
+      return;
+    }
+    setError(null);
+    setPending(true);
+    try {
+      await onCommit(next);
+      setEditing(false);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  if (!editing) {
+    return (
+      <span
+        className="prop-value"
+        role="button"
+        tabIndex={0}
+        title="Click to edit"
+        style={{ cursor: 'text', borderBottom: '1px dashed var(--border, #444)' }}
+        onClick={() => { setDraft(value); setError(null); setEditing(true); }}
+        onKeyDown={(e) => { if (e.key === 'Enter') { setDraft(value); setError(null); setEditing(true); } }}
+      >
+        {value === '' ? '-' : value}
+      </span>
+    );
+  }
+
+  return (
+    <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', maxWidth: '52%' }}>
+      <input
+        className="prop-value"
+        autoFocus
+        value={draft}
+        disabled={pending}
+        aria-invalid={error !== null}
+        onChange={(e) => { setDraft(e.target.value); if (error) setError(null); }}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
+          else if (e.key === 'Escape') {
+            e.preventDefault();
+            skipBlur.current = true;
+            setDraft(value);
+            e.currentTarget.blur();
+          }
+        }}
+        style={{
+          font: 'inherit', color: 'inherit', textAlign: 'right',
+          background: 'var(--surface, #1a1a1a)',
+          border: `1px solid ${error ? 'var(--danger, #c55)' : 'var(--accent, #4a7)'}`,
+          borderRadius: 3,
+          padding: '0 4px', width: '100%',
+          opacity: pending ? 0.6 : 1,
+        }}
+      />
+      {error && (
+        <span style={{ fontSize: 10, color: 'var(--danger, #c55)', paddingTop: 1 }}>{error}</span>
+      )}
+    </span>
+  );
+}
+
 export default function PropertiesPanel({ embedded = false }: PropertiesPanelProps = {}) {
   const selectedElementId = useStore((s) => s.selectedElementId);
   const selectedIds = useStore((s) => s.selectedIds);
   const selectedElement = useStore((s) => s.selectedElement);
   const setSelectedElement = useStore((s) => s.setSelectedElement);
   const selectElement = useStore((s) => s.selectElement);
+  const editMode = useStore((s) => s.editMode);
+  const editModeAvailable = useStore((s) => s.editModeAvailable);
+  const toggleEditMode = useStore((s) => s.toggleEditMode);
+  const applyOperation = useStore((s) => s.applyOperation);
+  const detailRefreshSerial = useStore((s) => s.detailRefreshSerial);
+  // Inline editing is offered only when the backend reports editing enabled
+  // (runtime /edit-state probe), we're in Edit mode, and a backend exists
+  // (no authoring in the browser-only build).
+  const editable = editMode && editModeAvailable && !BROWSER_ONLY;
   const [propertyError, setPropertyError] = useState<string | null>(null);
   const [loadingElementId, setLoadingElementId] = useState<number | null>(null);
 
@@ -429,7 +581,10 @@ export default function PropertiesPanel({ embedded = false }: PropertiesPanelPro
       cancelled = true;
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [selectedElementId, setSelectedElement, selectElement]);
+    // detailRefreshSerial: bumped after an edit invalidates the selected
+    // element's cached detail - the id is unchanged, so without it this
+    // effect would never re-fetch and the panel would blank out post-commit.
+  }, [selectedElementId, setSelectedElement, selectElement, detailRefreshSerial]);
 
   const identityRows = useMemo(() => {
     if (!selectedElement) return [];
@@ -438,11 +593,11 @@ export default function PropertiesPanel({ embedded = false }: PropertiesPanelPro
       { k: 'GlobalId',  v: selectedElement.global_id },
       { k: 'Name',      v: selectedElement.name || '-' },
       { k: 'Type',      v: selectedElement.ifc_type },
+      { k: 'Description', v: selectedElement.description ?? '' },
+      { k: 'ObjectType', v: selectedElement.object_type ?? '' },
+      { k: 'Tag', v: selectedElement.tag ?? '' },
     ];
     if (selectedElement.predefined_type) rows.push({ k: 'Predefined', v: selectedElement.predefined_type });
-    if (selectedElement.object_type) rows.push({ k: 'ObjectType', v: selectedElement.object_type });
-    if (selectedElement.description) rows.push({ k: 'Description', v: selectedElement.description });
-    if (selectedElement.tag) rows.push({ k: 'Tag', v: selectedElement.tag });
     if (selectedElement.storey) rows.push({ k: 'Storey',   v: selectedElement.storey });
     if (selectedElement.material) rows.push({ k: 'Material', v: selectedElement.material });
     if (selectedElement.relating_type) rows.push({ k: 'Type Def', v: selectedElement.relating_type });
@@ -457,6 +612,23 @@ export default function PropertiesPanel({ embedded = false }: PropertiesPanelPro
     <div className="panel" style={containerStyle}>
       {!embedded && <div className="panel-header">Properties</div>}
       <div className="panel-body prop-panel-body">
+        {editModeAvailable && !BROWSER_ONLY && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '2px 0 6px' }}>
+            <button
+              type="button"
+              onClick={() => toggleEditMode()}
+              title={editMode ? 'Editing enabled - click a value to edit it' : 'Enable editing'}
+              style={{
+                fontSize: 11, padding: '2px 8px', borderRadius: 4, cursor: 'pointer',
+                border: '1px solid var(--border, #333)',
+                background: editMode ? 'var(--accent, #4a7)' : 'transparent',
+                color: editMode ? '#fff' : 'var(--text-muted, #999)',
+              }}
+            >
+              {editMode ? '● Editing' : '○ Edit'}
+            </button>
+          </div>
+        )}
         {selectedIds.length > 1 ? (
           <MultiSelectPanel ids={selectedIds} />
         ) : !selectedElement ? (
@@ -477,7 +649,31 @@ export default function PropertiesPanel({ embedded = false }: PropertiesPanelPro
               {identityRows.map(({ k, v }) => (
                 <div className="prop-row" key={k}>
                   <span className="prop-key">{k}</span>
-                  <span className="prop-value">{v as string}</span>
+                  {editable && k === 'Name' ? (
+                    <EditableText
+                      value={selectedElement.name ?? ''}
+                      required
+                      onCommit={(next) =>
+                        applyOperation('set_name', {
+                          element_id: selectedElement.id,
+                          new_name: next,
+                        })
+                      }
+                    />
+                  ) : editable && (k === 'Description' || k === 'ObjectType' || k === 'Tag') ? (
+                    <EditableText
+                      value={v == null ? '' : String(v)}
+                      onCommit={(next) =>
+                        applyOperation('set_attribute', {
+                          element_id: selectedElement.id,
+                          attribute: k,
+                          new_value: next,
+                        })
+                      }
+                    />
+                  ) : (
+                    <span className="prop-value">{v as string}</span>
+                  )}
                 </div>
               ))}
             </PropGroup>
@@ -508,7 +704,22 @@ export default function PropertiesPanel({ embedded = false }: PropertiesPanelPro
                 {Object.entries(pset.properties).map(([k, v]) => (
                   <div className="prop-row" key={k}>
                     <span className="prop-key">{k}</span>
-                    <span className="prop-value">{v === null ? '-' : String(v)}</span>
+                    {editable ? (
+                      <EditableText
+                        value={v === null ? '' : String(v)}
+                        original={v}
+                        onCommit={(next) =>
+                          applyOperation('set_property', {
+                            element_id: selectedElement.id,
+                            property_name: k,
+                            new_value: coerceLike(next, v),
+                            pset_name: pset.name,
+                          })
+                        }
+                      />
+                    ) : (
+                      <span className="prop-value">{v === null ? '-' : String(v)}</span>
+                    )}
                   </div>
                 ))}
               </PropGroup>

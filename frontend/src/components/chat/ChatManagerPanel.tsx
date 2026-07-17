@@ -11,9 +11,9 @@
  *   └──────────┴───────────────────┴──────────────────────────┘─┘
  *
  * Three top-level sections:
- *   - Tools     - manage tool sets (named bundles of tool names)
- *   - Prompts   - manage system prompt library
- *   - Config    - global chat defaults (model, temperature, etc.)
+ * - Tools - manage tool sets (named bundles of tool names)
+ * - Prompts - manage system prompt library
+ * - Config - global chat defaults (model, temperature, etc.)
  *
  * The sections are independent of agents. The 3 chat-mode pills
  * (Ask / Plan / Edit) consume the *active* tool set and prompt - set
@@ -23,6 +23,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useStore } from '../../store/useStore';
+import { STRUCTURAL_EDIT_ENABLED } from '../../config/featureFlags';
 import Icon, { type IconName } from '../ui/Icon';
 import type { SystemPromptEntry, ToolCatalogEntry, McpServerConfig, ModelEntry } from '../../types/ifc';
 import {
@@ -30,8 +31,10 @@ import {
   listModels, createModel, updateModel, deleteModel, reorderModels,
   getChatManagerBootstrap,
   getCachedChatManagerBootstrap,
+  getReferenceDocsStatus,
   type ProviderStatusEntry,
   type ModelPayload,
+  type ReferenceDocsStatus,
 } from '../../services/api';
 import type { AgentPreset } from '../../types/ifc';
 import AiKeysModal from './AiKeysModal';
@@ -39,17 +42,17 @@ import SkillsSection, { type PromptDraft } from './SkillsSection';
 import DocumentsSection from './DocumentsSection';
 import ToolsRegistrySection from './ToolsRegistrySection';
 import ModelsSection from './ModelsSection';
-import { EDIT_MODE_ENABLED } from '../../config/featureFlags';
-
+import KnowledgeSection from './KnowledgeSection';
 /** Sections rendered as sidebar tiles. */
-type Section = 'agents' | 'models' | 'skills' | 'tools' | 'docs' | 'mcp' | 'settings';
+type Section = 'agents' | 'models' | 'skills' | 'tools' | 'docs' | 'knowledge' | 'mcp' | 'settings';
 
 const SECTIONS: Array<{ id: Section; icon: IconName; label: string; hint: string }> = [
-  { id: 'agents',   icon: 'sparkle',     label: 'Agents',      hint: EDIT_MODE_ENABLED ? 'Ask and Edit, the two agents driving the chat' : 'Ask, the agent driving the chat' },
+  { id: 'agents',   icon: 'sparkle',     label: 'Agents',      hint: 'The agents driving the chat' },
   { id: 'models',   icon: 'cpu',         label: 'Models',      hint: 'OpenAI / Anthropic / OpenRouter models - add, edit, enable, reorder' },
   { id: 'skills',   icon: 'file-text',   label: 'Skills',      hint: 'Detailed system prompts for specialised tasks' },
   { id: 'tools',    icon: 'wrench',      label: 'Tools',       hint: 'Every tool the backend exposes' },
   { id: 'docs',     icon: 'file-text',   label: 'Documents',   hint: 'Files agents can search via the document index tool' },
+  { id: 'knowledge', icon: 'brain',      label: 'Knowledge',   hint: "Reference docs the AI consults via get_docs - IfcOpenShell API index + live bSDD" },
   { id: 'mcp',      icon: 'plug',        label: 'MCP Servers', hint: 'External MCP servers that contribute tools' },
   { id: 'settings', icon: 'sliders',     label: 'Settings',    hint: 'Provider keys, base URLs, default model and temperature' },
 ];
@@ -74,7 +77,7 @@ export default function ChatManagerPanel({ onClose }: Props) {
   const initialSection = useStore.getState().chatManagerInitialSection;
   const setChatManagerInitialSection = useStore((s) => s.setChatManagerInitialSection);
   const [section, setSection] = useState<Section>(
-    (initialSection && ['agents', 'models', 'skills', 'tools', 'docs', 'mcp', 'settings'].includes(initialSection))
+    (initialSection && ['agents', 'models', 'skills', 'tools', 'docs', 'knowledge', 'mcp', 'settings'].includes(initialSection))
       ? (initialSection as Section)
       : 'agents'
   );
@@ -124,25 +127,33 @@ export default function ChatManagerPanel({ onClose }: Props) {
   // Skills tile count reflects what's actually shown in the tab.
   const skillsCount = visiblePrompts.length;
 
-  // v1 Edit gate (EDIT_MODE_ENABLED): hide the edit-assistant agent and the
-  // write_edit-tier tools across this panel. Computed once and threaded into
-  // the Agents + Tools sections + their nav counts so everything stays
-  // consistent. Flip the flag to bring the Edit surface back. The backend
-  // EDIT_MODE_ENABLED gate must move in lock-step (it re-offers the write
-  // tools to the LLM).
+  // Edit gate: hide the edit-assistant agent and the write_edit-tier tools
+  // when the BACKEND reports editing disabled (runtime /edit-state probe into
+  // editModeAvailable). Because it is the backend's own flag, the two sides
+  // move in lock-step by construction - a backend that hides the tools here
+  // also refuses to offer them to the LLM.
+  const editModeAvailable = useStore((s) => s.editModeAvailable);
   const visibleAgents = useMemo(
-    () => (EDIT_MODE_ENABLED ? agents : agents.filter((a) => a.id !== 'edit-assistant')),
-    [agents],
+    () => (editModeAvailable ? agents : agents.filter((a) => a.id !== 'edit-assistant')),
+    [agents, editModeAvailable],
   );
   const visibleTools = useMemo(
-    () => (EDIT_MODE_ENABLED ? tools : tools.filter((t) => t.tier !== 'write_edit')),
-    [tools],
+    () => (editModeAvailable ? tools : tools.filter((t) => t.tier !== 'write_edit')),
+    [tools, editModeAvailable],
   );
 
-  // Agents tile reads "2" (Ask + Edit) normally; "1" (Ask only) when the Edit
-  // surface is gated off for v1.
-  const agentCount = EDIT_MODE_ENABLED ? 2 : 1;
+  // Agents tile reads "2" (Ask + Edit) with editing on; "1" (Ask only) when
+  // the Edit surface is gated off.
+  const agentCount = editModeAvailable ? 2 : 1;
   const docCount = useStore((s) => s.docIndexFiles.length);
+
+  // Knowledge tile - reference-docs index status (plan E4). Owned here so the
+  // nav tile count and the Knowledge tab render from the same object; the
+  // section refreshes it after a fetch via setRefDocsStatus.
+  const [refDocsStatus, setRefDocsStatus] = useState<ReferenceDocsStatus | null>(null);
+  useEffect(() => {
+    getReferenceDocsStatus().then(setRefDocsStatus).catch(() => { /* tile shows em-dash */ });
+  }, []);
 
   // ESC closes the panel.
   useEffect(() => {
@@ -247,7 +258,7 @@ export default function ChatManagerPanel({ onClose }: Props) {
             <span className="cm-title-icon"><Icon name="cpu" size={16} strokeWidth={1.8} /></span>
             <div>
               <div className="cm-title">Chat Manager</div>
-              <div className="cm-subtitle">Agents · skills · tools · MCP · settings for {EDIT_MODE_ENABLED ? 'Ask & Edit' : 'Ask'}</div>
+              <div className="cm-subtitle">Agents · skills · tools · MCP · settings for {editModeAvailable ? 'Ask & Edit' : 'Ask'}</div>
             </div>
           </div>
           <button className="cm-close" onClick={onClose} title="Close (Esc)">
@@ -276,6 +287,9 @@ export default function ChatManagerPanel({ onClose }: Props) {
                       : s.id === 'skills'   ? `${skillsCount} items`
                       : s.id === 'tools'    ? `${visibleTools.length} tools`
                       : s.id === 'docs'     ? `${docCount} files`
+                      : s.id === 'knowledge' ? (refDocsStatus === null ? ' - '
+                          : refDocsStatus.indexed ? `${refDocsStatus.doc_count} domains`
+                          : 'not indexed')
                       : s.id === 'mcp'      ? `${mcpServerCount} servers`
                       : 'global'}
                   </span>
@@ -318,6 +332,11 @@ export default function ChatManagerPanel({ onClose }: Props) {
             />
           ) : section === 'docs' ? (
             <DocumentsSection />
+          ) : section === 'knowledge' ? (
+            <KnowledgeSection
+              status={refDocsStatus}
+              onStatusChange={setRefDocsStatus}
+            />
           ) : section === 'mcp' ? (
             <McpSection
               servers={mcpServers}
@@ -371,7 +390,7 @@ function AgentRosterSection({ agents, tools }: AgentRosterSectionPropsExt) {
     defaults.sort(
       (x, y) =>
         DEFAULT_AGENT_IDS.indexOf(x.id as (typeof DEFAULT_AGENT_IDS)[number])
-        - DEFAULT_AGENT_IDS.indexOf(y.id as (typeof DEFAULT_AGENT_IDS)[number]),
+ - DEFAULT_AGENT_IDS.indexOf(y.id as (typeof DEFAULT_AGENT_IDS)[number]),
     );
     return defaults;
   }, [agents]);
@@ -504,6 +523,38 @@ function AgentRosterDetail({
       </div>
 
       <div className="cm-skills-detail-body">
+        {agent.id === 'edit-assistant' && (
+          <div className="cm-editscope-note">
+            <span className="cm-skills-section-title">Edit scopes - what it can change</span>
+            <div className="cm-editscope-row">
+              <span className="cm-editscope-badge cm-editscope-badge--semantic">Semantic</span>
+              <span>
+                Names, property &amp; pset values, classifications. Updates the 3D
+                viewer <strong>in place - no reload</strong>. Safe to run in bulk.
+                The default scope.
+              </span>
+            </div>
+            <div className="cm-editscope-row">
+              <span className="cm-editscope-badge cm-editscope-badge--structural">
+                Structural · {STRUCTURAL_EDIT_ENABLED ? 'beta' : 'off'}
+              </span>
+              <span>
+                Create walls / slabs, delete elements, run IFC code. Changes
+                geometry, so it <strong>reloads the 3D viewer</strong>.{' '}
+                {STRUCTURAL_EDIT_ENABLED
+                  ? 'Enable it with the scope toggle in the top edit bar.'
+                  : 'Turned off in this release - geometry authoring is not available yet.'}
+              </span>
+            </div>
+            <p className="cm-editscope-hint">
+              {STRUCTURAL_EDIT_ENABLED
+                ? 'In semantic scope the structural tools are removed from the agent entirely, so property editing never triggers a reload.'
+                : 'The structural tools are removed from the agent entirely, so editing is limited to metadata and never triggers a reload.'}
+              {' '}See
+              <code> dev/docs/EDIT_SCOPES.md</code>.
+            </p>
+          </div>
+        )}
         <div className="cm-skills-chips">
           <span className="cm-skills-chip">
             <span className="cm-skills-chip-label">Tools</span>

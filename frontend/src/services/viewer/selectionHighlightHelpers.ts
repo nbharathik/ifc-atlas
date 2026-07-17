@@ -69,6 +69,26 @@ export function computeAmberIds(
   return [];
 }
 
+export type DurableHighlightLayer = 'selection' | 'chat' | 'base' | 'none';
+
+/**
+ * Resolve the persistent visual that must be restored after a temporary
+ * canvas/tree hover highlight is removed. Selection wins over chat, and chat
+ * wins over colour-by / paint layers, matching ViewerPanel's rebuild order.
+ */
+export function resolveDurableHighlightLayer(
+  expressId: number | null,
+  amberIds: readonly number[],
+  chatIds: readonly number[],
+  hasBaseColour: boolean,
+): DurableHighlightLayer {
+  if (expressId === null) return 'none';
+  if (amberIds.includes(expressId)) return 'selection';
+  if (chatIds.includes(expressId)) return 'chat';
+  if (hasBaseColour) return 'base';
+  return 'none';
+}
+
 /**
  * What the highlight-rebuild loop should do given the previous + new
  * amber-ID sets. `skip: true` means the set is unchanged - calling

@@ -273,6 +273,11 @@ class PendingEditEnvelope(BaseModel):
     changes: list[PendingEditElement] = Field(default_factory=list)
     # Counts for the badge
     counts: dict[str, int] = Field(default_factory=dict)
+    # D4 verifier: health-check delta vs the live baseline + geometry sanity
+    # for created elements, computed on the sandbox BEFORE presenting the
+    # edit. {status: 'pass'|'warn'|'fail', new_errors, new_warnings,
+    # geometry: {checked, failures: [...]}, note}. None = verifier skipped.
+    verifier_verdict: Optional[dict[str, Any]] = None
 
 
 class AggregateRequest(BaseModel):
@@ -418,6 +423,18 @@ class ChatRequest(BaseModel):
     tool_mode: Literal["server", "client", "hybrid"] = "server"
     agent_id: Optional[str] = None
     attachments: list[ChatAttachment] = Field(default_factory=list)
+    # Express ids currently selected in the 3D viewer (client-authoritative -
+    # works in BROWSER_ONLY too). Injected per-turn as a "Current selection"
+    # context block so "rename the selected wall" just works without the agent
+    # polling /api/viewer/state (plan D6).
+    selected_ids: list[int] = Field(default_factory=list)
+    # Edit scope (see dev/docs/EDIT_SCOPES.md). "semantic" (default) restricts
+    # the agent to metadata edits that update the viewer in place - no 3D
+    # reload. "structural" additionally allows geometry edits (create/delete,
+    # execute_ifc_code) that reload the viewer. The frontend's Edit-mode scope
+    # toggle sets this; in semantic scope the structural write tools are
+    # stripped from the agent's allowlist.
+    edit_scope: Literal["semantic", "structural"] = "semantic"
     # Optional global tool-set filter. When set, the LLM only sees tools whose
     # name appears in tool_set_registry.get(tool_set_id).tools - applied on
     # top of any per-agent allowed_tools restriction. None = no filter.

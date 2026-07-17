@@ -20,6 +20,26 @@
 
 import { apiUrl } from '../../lib/platform';
 
+/** Exact binary runtime expected by the browser-side FragmentsManager. */
+export const EXPECTED_FRAGMENTS_FORMAT_VERSION = '3.4.3';
+
+export function assertCompatibleFragmentsFormatVersion(
+  actual: string | null | undefined,
+): string {
+  const normalized = actual?.trim() ?? '';
+  if (!normalized) {
+    throw new Error(
+      `Server fragment response has no format version; expected @thatopen/fragments ${EXPECTED_FRAGMENTS_FORMAT_VERSION}`,
+    );
+  }
+  if (normalized !== EXPECTED_FRAGMENTS_FORMAT_VERSION) {
+    throw new Error(
+      `Incompatible server fragment format ${normalized}; viewer requires ${EXPECTED_FRAGMENTS_FORMAT_VERSION}`,
+    );
+  }
+  return normalized;
+}
+
 export interface ServerConvertCapabilities {
   server_convert: boolean;
   available?: boolean;
@@ -47,6 +67,7 @@ export interface ConvertResult {
   profile: string;
   elapsedMs: number;
   sourceSha256: string;
+  fragmentsFormatVersion: string;
 }
 
 export interface ConvertProgressSnapshot {
@@ -214,6 +235,7 @@ export interface FragmentManifest {
   profile: string;
   size_bytes: number | null;
   serve_url: string | null;
+  fragments_format_version?: string;
 }
 
 /**
@@ -250,6 +272,9 @@ export async function fetchFragmentByFingerprint(
     apiUrl(`/api/ifc/fragments/serve?fingerprint=${encodeURIComponent(fingerprint)}&profile=${encodeURIComponent(profile)}`),
   );
   if (!resp.ok) throw new Error(`fragment serve failed: HTTP ${resp.status}`);
+  const fragmentsFormatVersion = assertCompatibleFragmentsFormatVersion(
+    resp.headers.get('X-Fragments-Format-Version'),
+  );
   const buf = await resp.arrayBuffer();
   return {
     bytes: new Uint8Array(buf),
@@ -257,6 +282,7 @@ export async function fetchFragmentByFingerprint(
     profile: resp.headers.get('X-Fragment-Profile') ?? profile,
     elapsedMs: 0,
     sourceSha256: fingerprint,
+    fragmentsFormatVersion,
   };
 }
 
@@ -523,6 +549,9 @@ export async function convertIfcOnServer(
       });
       throw new Error(`Server convert failed: ${errorText}`);
     }
+    const fragmentsFormatVersion = assertCompatibleFragmentsFormatVersion(
+      resp.headers.get('X-Fragments-Format-Version'),
+    );
     const buf = await resp.arrayBuffer();
     logServerConvertInfo('[serverConvert] POST /api/ifc/convert done', {
       status: resp.status,
@@ -538,6 +567,7 @@ export async function convertIfcOnServer(
       profile: resp.headers.get('X-Fragment-Profile') ?? profile,
       elapsedMs: Number(resp.headers.get('X-Fragment-Elapsed-Ms') ?? '0'),
       sourceSha256: resp.headers.get('X-Fragment-Source-Sha256') ?? '',
+      fragmentsFormatVersion,
     };
   } finally {
     progressController.abort();

@@ -7,9 +7,12 @@ import {
 import type { CommittedMeasurement } from '../measurementController';
 import * as THREE from 'three';
 
+/** UTF-8 BOM prepended by measurementsToCsv so Excel decodes m² correctly. */
+const BOM = String.fromCharCode(0xfeff);
+
 function makeMeasurement(
   id: string,
-  kind: 'linear' | 'area' | 'angle',
+  kind: CommittedMeasurement['kind'],
   value: number,
   timestamp = '2026-01-01T00:00:00.000Z',
 ): CommittedMeasurement {
@@ -23,9 +26,11 @@ function makeMeasurement(
 }
 
 describe('measurementsToCsv', () => {
-  it('produces a header row with 5 columns', () => {
+  it('preserves the legacy columns and appends construction metadata', () => {
     const csv = measurementsToCsv([], 'm');
-    expect(csv).toBe('index,kind,value,unit,timestamp');
+    expect(csv).toBe(
+      BOM + 'index,kind,value,unit,timestamp,x,y,z,coordinate_space,exact,source',
+    );
   });
 
   it('produces one data row per measurement', () => {
@@ -96,7 +101,9 @@ describe('measurementsToCsv', () => {
   });
 
   it('empty list produces only header', () => {
-    expect(measurementsToCsv([], 'm')).toBe('index,kind,value,unit,timestamp');
+    expect(measurementsToCsv([], 'm')).toBe(
+      BOM + 'index,kind,value,unit,timestamp,x,y,z,coordinate_space,exact,source',
+    );
   });
 
   it('is deterministic for same inputs', () => {
@@ -203,5 +210,66 @@ describe('measurementsToCsv - angle kind', () => {
     const rows = measurementsToCsv(ms, 'm').split('\n');
     expect(rows[1].split(',')[1]).toBe('linear');
     expect(rows[2].split(',')[1]).toBe('angle');
+  });
+});
+
+describe('measurementsToCsv - construction kinds', () => {
+  it.each(['height', 'clearance'] as const)('formats %s as a length', (kind) => {
+    const measurement = makeMeasurement('x', kind, 1.25);
+    const fields = measurementsToCsv([measurement], 'mm').split('\n')[1].split(',');
+    expect(fields[1]).toBe(kind);
+    expect(fields[2]).toBe('1250.000');
+    expect(fields[3]).toBe('mm');
+  });
+
+  it('exports project-local position components and provenance', () => {
+    const measurement: CommittedMeasurement = {
+      ...makeMeasurement('p', 'position', 0),
+      points: [new THREE.Vector3(10, 20, 30)],
+      coordinates: {
+        world: new THREE.Vector3(10, 20, 30),
+        local: new THREE.Vector3(1.25, 2.5, 3.75),
+        reference: 'Survey frame',
+      },
+      exact: true,
+      source: 'edge-midpoint',
+    };
+    const fields = measurementsToCsv([measurement], 'm').split('\n')[1].split(',');
+    expect(fields.slice(0, 5)).toEqual([
+      '1',
+      'position',
+      '',
+      'm',
+      '2026-01-01T00:00:00.000Z',
+    ]);
+    expect(fields.slice(5, 11)).toEqual([
+      '1.250',
+      '2.500',
+      '3.750',
+      'Survey frame',
+      'true',
+      'edge-midpoint',
+    ]);
+  });
+});
+
+describe('measurementsToCsv - escaping and encoding', () => {
+  it('prepends a UTF-8 BOM so Excel detects the encoding', () => {
+    expect(measurementsToCsv([], 'm').charCodeAt(0)).toBe(0xfeff);
+    expect(measurementsToCsv([makeMeasurement('x', 'area', 1.0)], 'm').charCodeAt(0)).toBe(0xfeff);
+  });
+
+  it('escapes coordinate_space values containing CSV metacharacters', () => {
+    const measurement: CommittedMeasurement = {
+      ...makeMeasurement('p', 'position', 0),
+      points: [new THREE.Vector3(1, 2, 3)],
+      coordinates: {
+        world: new THREE.Vector3(1, 2, 3),
+        local: new THREE.Vector3(1, 2, 3),
+        reference: 'Survey, "north" datum',
+      },
+    };
+    const row = measurementsToCsv([measurement], 'm').split('\n')[1];
+    expect(row).toContain('"Survey, ""north"" datum"');
   });
 });

@@ -1,6 +1,33 @@
 import { describe, expect, it } from 'vitest';
 
-import { summarizeFrameDeltas } from '../frameTimeRecorder';
+import {
+  shouldContinueFrameSampling,
+  summarizeFrameDeltas,
+} from '../frameTimeRecorder';
+
+describe('shouldContinueFrameSampling', () => {
+  const policy = (elapsedMs: number, validSamples: number) =>
+    shouldContinueFrameSampling({
+      elapsedMs,
+      requestedDurationMs: 2_000,
+      validSamples,
+      minimumSamples: 6,
+      maximumDurationMs: 10_000,
+    });
+
+  it('keeps the requested duration as a hard minimum', () => {
+    expect(policy(1_999, 100)).toBe(true);
+  });
+
+  it('continues beyond the duration until the sample floor is met', () => {
+    expect(policy(2_100, 5)).toBe(true);
+    expect(policy(2_100, 6)).toBe(false);
+  });
+
+  it('stops at the maximum-duration guard even with too few samples', () => {
+    expect(policy(10_000, 1)).toBe(false);
+  });
+});
 
 describe('summarizeFrameDeltas', () => {
   it('returns zeros for an empty window', () => {

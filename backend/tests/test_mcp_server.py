@@ -419,8 +419,11 @@ class TestWriteToolCatalog:
 
     def test_list_exposed_write_tools_returns_correct_count(self):
         from app.mcp_server import list_exposed_write_tools
+        from app.mcp_server.server import _WRITE_ALLOWLIST
         tools = list_exposed_write_tools()
-        assert len(tools) == 5
+        # Full write parity with the chat surface (R4): staged tools plus
+        # direct operations. Read-only history remains in the read catalog.
+        assert len(tools) == len(_WRITE_ALLOWLIST) == 10
 
     def test_list_exposed_write_tools_has_descriptions(self):
         from app.mcp_server import list_exposed_write_tools
@@ -656,8 +659,12 @@ class TestWriteToolHappyPath:
 
     @pytest.mark.asyncio
     async def test_write_tool_reaches_execute_tool_when_enabled(self, monkeypatch):
-        """When writes are on, a write-tool call returns JSON (not a gating error)."""
+        """When writes are on, a write-tool call returns JSON (not a gating error).
+
+        rename_element is a DIRECT op, so the backend edit-mode flag must be on
+        too (R4 dual-gate); with both flags the call reaches execute_tool."""
         monkeypatch.setenv("MCP_ALLOW_WRITES", "1")
+        monkeypatch.setattr("app.core.config.EDIT_MODE_ENABLED", True)
         from app.services.ifc_service import ifc_service as svc
         monkeypatch.setattr(svc, "_model", None)
         from app.mcp_server.server import _call_tool
@@ -1185,3 +1192,172 @@ class TestViewerSnapshotTool:
         result = await _call_tool("get_viewer_snapshot", {"timeout_s": 0})
         data = json.loads(result[0].text)
         assert data == {"error": "Viewer did not answer within 1s"}
+
+
+# ---------------------------------------------------------------------------
+# R4: write safety, attribution, visibility + G5 parity
+# ---------------------------------------------------------------------------
+
+class TestTierClosureAndParity:
+    """G5: the chat and MCP surfaces must never drift apart silently."""
+
+    def test_every_tool_definition_has_an_explicit_tier(self):
+        """tool_tier() fails open (unknown → read_model), which would silently
+        auto-expose a future untier'd tool on the MCP read surface. The two
+        registries must stay in exact sync."""
+        from app.services.tools import _TOOL_TIERS
+
+        def_names = {t["name"] for t in TOOL_DEFINITIONS}
+        tier_names = set(_TOOL_TIERS)
+        assert def_names == tier_names, (
+            f"TOOL_DEFINITIONS vs _TOOL_TIERS drift: "
+            f"missing tiers for {sorted(def_names - tier_names)}, "
+            f"stale tiers for {sorted(tier_names - def_names)}"
+        )
+
+    def test_chat_catalogue_subset_of_mcp_surface(self):
+        """Plan G5: chat tool catalogue ⊆ MCP catalogue (minus explicitly
+        UI-only tools). read_viewer-tier tools execute inside the browser
+        (client-executed) and map to the MCP viewer-bridge tools instead."""
+        from app.mcp_server.server import (
+            _MGMT_TOOL_NAMES,
+            _VIEWER_TOOL_NAMES,
+            _tool_names,
+            _write_tool_names,
+        )
+
+        # Chat tools that are deliberately NOT 1:1 on MCP: client-executed
+        # viewer tools (the MCP viewer bridge exposes equivalent commands).
+        ui_only = {
+            t["name"] for t in TOOL_DEFINITIONS
+            if tool_tier(t["name"])[0] == "read_viewer"
+        }
+        mcp_surface = _tool_names | _write_tool_names | _MGMT_TOOL_NAMES | _VIEWER_TOOL_NAMES
+        missing = {
+            t["name"] for t in TOOL_DEFINITIONS
+        } - ui_only - mcp_surface
+        assert missing == set(), (
+            f"chat tools invisible to MCP (add to a tier/allowlist or the "
+            f"ui_only set with justification): {sorted(missing)}"
+        )
+
+    def test_knowledge_tier_exposed_on_mcp(self):
+        """G3: get_docs + bSDD tools answer without a model - external clients
+        (incl. the stdio process) must see them."""
+        assert "read_knowledge" in _EXPOSED_TIERS
+        knowledge = [t for t in TOOL_DEFINITIONS if tool_tier(t["name"])[0] == "read_knowledge"]
+        assert knowledge, "expected knowledge-tier tools to exist"
+        for t in knowledge:
+            assert t["name"] in _tool_names, f"{t['name']} not exposed on MCP"
+
+
+class TestMcpWriteSafety:
+    @pytest.mark.asyncio
+    async def test_direct_op_requires_edit_mode(self, monkeypatch):
+        """MCP_ALLOW_WRITES alone must not unlock immediate live-model
+        mutation - direct ops also honour the backend EDIT_MODE gate."""
+        import importlib
+        srv = importlib.import_module('app.mcp_server.server')
+
+        monkeypatch.setenv("MCP_ALLOW_WRITES", "1")
+        monkeypatch.setattr("app.core.config.EDIT_MODE_ENABLED", False)
+        result = await srv._call_tool("rename_element", {"element_id": 1, "new_name": "X"})
+        data = json.loads(result[0].text)
+        assert "error" in data
+        assert "EDIT_MODE_ENABLED" in data["error"]
+
+    @pytest.mark.asyncio
+    async def test_direct_op_holds_edit_lock_and_publishes(self, monkeypatch):
+        """A direct op through MCP runs under the shared edit lock, executes
+        with actor=MCP, and broadcasts the op sync events."""
+        import importlib
+        srv = importlib.import_module('app.mcp_server.server')
+        from app.services import edit_lock as lock_mod
+        from app.services.operation_service import Actor
+
+        monkeypatch.setenv("MCP_ALLOW_WRITES", "1")
+        monkeypatch.setattr("app.core.config.EDIT_MODE_ENABLED", True)
+
+        seen: dict[str, Any] = {}
+
+        def _fake_execute(name, args, *, actor=Actor.AGENT):
+            seen["actor"] = actor
+            seen["locked_during_execute"] = lock_mod.edit_lock.locked()
+            return {
+                "op_id": "op-1", "operation": "set_name", "actor": actor.value,
+                "ok": True, "changed": True, "changed_ids": [1],
+                "patch_tier": "metadata", "description": "Renamed", "action": "metadata_changed",
+            }
+
+        published: list[dict] = []
+
+        async def _fake_publish(result, **kwargs):
+            published.append(result)
+
+        monkeypatch.setattr(srv, "execute_tool", _fake_execute)
+        monkeypatch.setattr(lock_mod, "publish_operation_events", _fake_publish)
+        result = await srv._call_tool("rename_element", {"element_id": 1, "new_name": "X"})
+        data = json.loads(result[0].text)
+        assert data["ok"] is True
+        assert seen["actor"] == Actor.MCP
+        assert seen["locked_during_execute"] is True, "mutation must run under the edit lock"
+        assert published and published[0]["op_id"] == "op-1"
+
+    @pytest.mark.asyncio
+    async def test_staged_tool_does_not_require_edit_mode(self, monkeypatch):
+        """create_wall_from_ends keeps the pending-edit ceremony and only
+        needs MCP_ALLOW_WRITES (the user still applies via diff preview)."""
+        import importlib
+        srv = importlib.import_module('app.mcp_server.server')
+        from app.services.operation_service import Actor
+
+        monkeypatch.setenv("MCP_ALLOW_WRITES", "1")
+        monkeypatch.setattr("app.core.config.EDIT_MODE_ENABLED", False)
+
+        def _fake_execute(name, args, *, actor=Actor.AGENT):
+            return {"error": "No IFC model is currently loaded."}
+
+        monkeypatch.setattr(srv, "execute_tool", _fake_execute)
+        result = await srv._call_tool(
+            "create_wall_from_ends", {"start": [0, 0], "end": [1, 0]}
+        )
+        data = json.loads(result[0].text)
+        # It reached the tool body (model error), not the EDIT_MODE gate.
+        assert "EDIT_MODE_ENABLED" not in str(data)
+
+    def test_undo_available_on_write_surface(self):
+        """A client that just direct-applied a mistake needs a recovery path."""
+        from app.mcp_server.server import _write_tool_names
+        assert "undo_last_edit" in _write_tool_names
+
+
+class TestActorThreading:
+    def test_execute_tool_defaults_to_agent_actor(self, monkeypatch):
+        from app.services import tools as tools_mod
+        from app.services.operation_service import Actor
+
+        seen = {}
+
+        def _fake_raw(name, args, *, actor=Actor.AGENT):
+            seen["actor"] = actor
+            return {"ok": True}
+
+        monkeypatch.setattr(tools_mod, "_execute_tool_raw", _fake_raw)
+        monkeypatch.setattr(tools_mod, "warming_envelope", lambda name: None)
+        tools_mod.execute_tool("get_project_info", {"fresh": "args-1"})
+        assert seen["actor"] == Actor.AGENT
+
+    def test_execute_tool_forwards_mcp_actor(self, monkeypatch):
+        from app.services import tools as tools_mod
+        from app.services.operation_service import Actor
+
+        seen = {}
+
+        def _fake_raw(name, args, *, actor=Actor.AGENT):
+            seen["actor"] = actor
+            return {"ok": True}
+
+        monkeypatch.setattr(tools_mod, "_execute_tool_raw", _fake_raw)
+        monkeypatch.setattr(tools_mod, "warming_envelope", lambda name: None)
+        tools_mod.execute_tool("get_project_info", {"fresh": "args-2"}, actor=Actor.MCP)
+        assert seen["actor"] == Actor.MCP

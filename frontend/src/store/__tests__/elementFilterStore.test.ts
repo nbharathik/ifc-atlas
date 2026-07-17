@@ -3,10 +3,18 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
+  createFilterCondition,
+  draftFromNamedDefinition,
   OPERATORS,
   isNumericOperator,
+  isUnaryOperator,
   validateFilterForm,
+  validateFilterConditions,
   formatOperatorLabel,
+  namedDefinitionFromDraft,
+  parseNamedFilterStorage,
+  serializeNamedFilters,
+  splitScopeValues,
 } from '../../components/panels/ElementFilterPanel';
 import { useStore } from '../useStore';
 
@@ -25,6 +33,15 @@ describe('isNumericOperator', () => {
     expect(isNumericOperator('neq')).toBe(false);
     expect(isNumericOperator('contains')).toBe(false);
     expect(isNumericOperator('startswith')).toBe(false);
+    expect(isNumericOperator('exists')).toBe(false);
+  });
+});
+
+describe('isUnaryOperator', () => {
+  it('recognises existence operators only', () => {
+    expect(isUnaryOperator('exists')).toBe(true);
+    expect(isUnaryOperator('not_exists')).toBe(true);
+    expect(isUnaryOperator('eq')).toBe(false);
   });
 });
 
@@ -52,6 +69,11 @@ describe('validateFilterForm', () => {
     expect(err).toMatch(/value is required/i);
   });
 
+  it('does not require a value for exists or not_exists', () => {
+    expect(validateFilterForm('FireRating', 'exists', '')).toBeNull();
+    expect(validateFilterForm('FireRating', 'not_exists', '')).toBeNull();
+  });
+
   it('errors when numeric op gets non-numeric value', () => {
     const err = validateFilterForm('Area', 'gt', 'not-a-number');
     expect(err).toMatch(/numeric value/i);
@@ -67,8 +89,8 @@ describe('validateFilterForm', () => {
 });
 
 describe('OPERATORS list', () => {
-  it('has 8 operators', () => {
-    expect(OPERATORS).toHaveLength(8);
+  it('has the 10 operators accepted by the indexed endpoint', () => {
+    expect(OPERATORS).toHaveLength(10);
   });
 
   it('every operator has a non-empty value and label', () => {
@@ -78,7 +100,7 @@ describe('OPERATORS list', () => {
     }
   });
 
-  it('contains eq, neq, contains, startswith, gt, lt, gte, lte', () => {
+  it('contains comparison and property-existence operators', () => {
     const values = OPERATORS.map((o) => o.value);
     expect(values).toContain('eq');
     expect(values).toContain('neq');
@@ -88,6 +110,78 @@ describe('OPERATORS list', () => {
     expect(values).toContain('lt');
     expect(values).toContain('gte');
     expect(values).toContain('lte');
+    expect(values).toContain('exists');
+    expect(values).toContain('not_exists');
+  });
+});
+
+describe('multi-condition filter helpers', () => {
+  it('reports the failing condition by index', () => {
+    const conditions = [
+      createFilterCondition({ propertyName: 'FireRating', operator: 'eq', value: '2h' }),
+      createFilterCondition({ propertyName: 'Area', operator: 'gt', value: 'not-a-number' }),
+    ];
+    expect(validateFilterConditions(conditions)).toMatch(/condition 2.*numeric/i);
+  });
+
+  it('splits, trims, and de-duplicates type/storey scopes', () => {
+    expect(splitScopeValues('IfcWall, IfcSlab; IfcWall\nIfcDoor')).toEqual([
+      'IfcWall', 'IfcSlab', 'IfcDoor',
+    ]);
+  });
+
+  it('round-trips named filters with OR logic, scopes, psets, ranges and missing values', () => {
+    const definition = namedDefinitionFromDraft({
+      name: 'Envelope review',
+      logic: 'or',
+      conditions: [
+        createFilterCondition({
+          propertyName: 'FireRating',
+          psetName: 'Pset_WallCommon',
+          operator: 'startswith',
+          value: '2',
+        }),
+        createFilterCondition({ propertyName: 'GrossArea', operator: 'gte', value: '25.5' }),
+        createFilterCondition({ propertyName: 'Reference', operator: 'not_exists' }),
+      ],
+      ifcTypes: 'IfcWall, IfcCurtainWall',
+      storeys: 'Level 1',
+    }, { id: 'filter-envelope', revision: 3 });
+
+    expect(definition).toMatchObject({
+      id: 'filter-envelope',
+      revision: 3,
+      name: 'Envelope review',
+      scope: { kind: 'all' },
+    });
+    const draft = draftFromNamedDefinition(definition);
+    expect(draft.logic).toBe('or');
+    expect(draft.ifcTypes).toBe('IfcWall, IfcCurtainWall');
+    expect(draft.storeys).toBe('Level 1');
+    expect(draft.conditions.map(({ propertyName, psetName, operator, value }) => ({
+      propertyName, psetName, operator, value,
+    }))).toEqual([
+      { propertyName: 'FireRating', psetName: 'Pset_WallCommon', operator: 'startswith', value: '2' },
+      { propertyName: 'GrossArea', psetName: '', operator: 'gte', value: '25.5' },
+      { propertyName: 'Reference', psetName: '', operator: 'not_exists', value: '' },
+    ]);
+  });
+
+  it('persists valid definitions and ignores corrupt entries', () => {
+    const definition = namedDefinitionFromDraft({
+      name: 'Walls',
+      logic: 'and',
+      conditions: [createFilterCondition({ propertyName: 'Name', operator: 'contains', value: 'wall' })],
+      ifcTypes: 'IfcWall',
+      storeys: '',
+    }, { id: 'walls', revision: 1 });
+    const serialized = serializeNamedFilters([definition]);
+    expect(parseNamedFilterStorage(serialized)).toHaveLength(1);
+
+    const parsed = JSON.parse(serialized) as { schemaVersion: number; definitions: unknown[] };
+    parsed.definitions.push({ id: 'broken' });
+    expect(parseNamedFilterStorage(JSON.stringify(parsed)).map((item) => item.id)).toEqual(['walls']);
+    expect(parseNamedFilterStorage('{not-json')).toEqual([]);
   });
 });
 

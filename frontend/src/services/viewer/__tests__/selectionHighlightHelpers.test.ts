@@ -7,6 +7,7 @@ import {
   computeAmberIds,
   decideSelectionWork,
   countSelectionChurn,
+  resolveDurableHighlightLayer,
 } from '../selectionHighlightHelpers';
 
 describe('SELECTION_HIGHLIGHT_MATERIAL_SPEC', () => {
@@ -68,6 +69,16 @@ describe('computeAmberIds', () => {
     const out = computeAmberIds(null, input);
     out.push(99);
     expect(input).toEqual([1, 2, 3]);
+  });
+});
+
+describe('resolveDurableHighlightLayer', () => {
+  it('restores persistent layers in selection > chat > paint order', () => {
+    expect(resolveDurableHighlightLayer(7, [7], [7], true)).toBe('selection');
+    expect(resolveDurableHighlightLayer(7, [], [7], true)).toBe('chat');
+    expect(resolveDurableHighlightLayer(7, [], [], true)).toBe('base');
+    expect(resolveDurableHighlightLayer(7, [], [], false)).toBe('none');
+    expect(resolveDurableHighlightLayer(null, [7], [7], true)).toBe('none');
   });
 });
 

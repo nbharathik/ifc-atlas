@@ -5,6 +5,7 @@ dev/
 .agents/
 .claude/
 .codex/
+memory/
 CLAUDE.md
 AGENTS.md
 dev.py
@@ -37,6 +38,8 @@ build/
 frontend/dist/
 frontend/dist-demo/
 frontend/.vite/
+frontend/test-results/
+frontend/playwright-report/
 *.tsbuildinfo
 site/
 

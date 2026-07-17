@@ -7,21 +7,44 @@ import { ViewHelper } from 'three/examples/jsm/helpers/ViewHelper.js';
 import { useStore } from '../../store/useStore';
 import type { ViewerPerformanceMode } from '../../store/useStore';
 import { apiUrl } from '../../lib/platform';
-import { BROWSER_ONLY, RENDER_ON_DEMAND } from '../../config/featureFlags';
+import { BROWSER_ONLY, RENDER_ON_DEMAND, STRUCTURAL_EDIT_ENABLED } from '../../config/featureFlags';
 import { modelService } from '../../services/ifc/ModelService';
 import { ClipPlaneController } from '../../services/viewer/clipPlaneController';
 import { SectionBoxController } from '../../services/viewer/sectionBoxController';
+import {
+  LatestSectionWorkspaceController,
+  createSectionWorkspace,
+  createSelectionSectionPreset,
+  parseSectionWorkspace,
+  toRelativeClipPlaneStates,
+  type SectionBounds,
+} from '../../services/viewer/sectionWorkspace';
 import { ClipEdgesService } from '../../services/viewer/clipEdgesService';
 import {
   MeasurementController,
   type MeasurementSnapshot,
 } from '../../services/viewer/measurementController';
-import { snapToFaceVertex } from '../../services/viewer/vertexSnapHelpers';
+import { facePointsToVec3 } from '../../services/viewer/vertexSnapHelpers';
+import {
+  engineSnapCandidates,
+  anchorSnapCandidates,
+  selectBestSnapCandidate,
+  type ConstructionSnapCandidate,
+  type EngineSnapHit,
+} from '../../services/viewer/constructionSnapCandidates';
+import {
+  shortestDistanceBetweenTriangles,
+  type Triangle3,
+} from '../../services/viewer/constructionMeasurement';
+// B5 mount point: wall drawing tool - all logic lives in services/editor/.
+import { WallDrawController } from '../../services/editor/wallDrawController';
+import EditToolbar from './EditToolbar';
 import HighlightBadge from './HighlightBadge';
 import SelectionSummaryChip from './SelectionSummaryChip';
 import PerformanceHud from './PerformanceHud';
 import PerformanceDashboard from './PerformanceDashboard';
-import FloatingChatDock from './FloatingChatDock';
+import FloatingChatDock, { FloatingChatPill } from './FloatingChatDock';
+import ViewerResetControl from './ViewerResetControl';
 import MeasurementControls from './MeasurementControls';
 import MeasurementLabels from './MeasurementLabels';
 import MeasurementPanel from './MeasurementPanel';
@@ -31,6 +54,9 @@ import ViewportNavControls from './ViewportNavControls';
 import ErrorBoundary from '../ui/ErrorBoundary';
 import { findIfcTypeForId, collectLeavesUnder, getSpatialNodeIndex } from '../../services/viewer/spatialTreeHelpers';
 import { setHoverTooltipData } from '../../services/viewer/hoverTooltipBridge';
+import { setMeasurementTip } from '../../services/viewer/measurementTipBridge';
+import { buildMeasurementTip } from '../../services/viewer/measurementTipContent';
+import MeasurementCursorTip from './MeasurementCursorTip';
 import {
   registerViewerBridge,
   unregisterViewerBridge,
@@ -45,11 +71,7 @@ import {
   getWebIfcSettingsForProfile,
   AUTO_PERF_PROFILE_THRESHOLD_BYTES,
 } from '../../services/viewer/parseProfiles';
-import { clientPointToNdc, queryFastPicker } from '../../services/viewer/fastPickerGuard';
-import {
-  GHOST_ISOLATION_OPACITY,
-  decideGhostWork,
-} from '../../services/viewer/ghostModeHelpers';
+import { GHOST_ISOLATION_OPACITY } from '../../services/viewer/ghostModeHelpers';
 import {
   pushClickLatencySample,
   medianClickLatency,
@@ -72,10 +94,26 @@ import {
   type InteractionQualityState,
   type RuntimeViewerQuality,
 } from '../../services/viewer/interactionQualityController';
-import { isNoopSameElementClick } from '../../services/viewer/pickingPipeline';
 import {
+  canReuseExactHoverPick,
+  canReusePrefetchedPick,
+  createPickLeaseCoordinator,
+  isClickGesture,
+  isConfirmedVoidPick,
+  isNoopSameElementClick,
+  type PickLeaseCoordinator,
+} from '../../services/viewer/pickingPipeline';
+import {
+  createContextMenuPickGuard,
+  type ContextMenuPickOutcome,
+} from '../../services/viewer/contextMenuPickGuard';
+import {
+  canUseFurnishingMerge,
+  canUseNavigationLod,
   resolveLodTier,
   resolveModelGraphicsQuality,
+  shouldAttachNavigationLod,
+  shouldPinAllVisible,
   type LodTier,
 } from '../../services/viewer/lodTierPolicy';
 import { solveCameraFrame } from '../../services/viewer/frameCameraMath';
@@ -86,7 +124,14 @@ import {
   type FragmentUpdateScheduler,
 } from '../../services/viewer/fragmentUpdateScheduler';
 import { prewarmExpressToLocalCache } from '../../services/viewer/localIdCachePrewarm';
-import { summarizeFrameDeltas } from '../../services/viewer/frameTimeRecorder';
+import {
+  PANEL_RESIZE_END_EVENT,
+  PANEL_RESIZE_START_EVENT,
+} from '../../services/viewer/panelResizeSession';
+import {
+  shouldContinueFrameSampling,
+  summarizeFrameDeltas,
+} from '../../services/viewer/frameTimeRecorder';
 import {
   getMainPassStats,
   isMainPassFresh,
@@ -101,15 +146,17 @@ import {
 import {
   SELECTION_HIGHLIGHT_OPACITY,
   computeAmberIds,
-  decideSelectionWork,
   getSelectionHighlightColor,
 } from '../../services/viewer/selectionHighlightHelpers';
-import { createRebuildScheduler, type RebuildScheduler } from '../../services/viewer/rebuildScheduler';
 import {
-  decideVisibilityWork,
-  planInvisibleSetTransition,
-  type VisibilitySnapshot,
-} from '../../services/viewer/visibilityRebuildHelpers';
+  createLatestAsyncScheduler,
+  type LatestAsyncRunContext,
+  type LatestAsyncScheduler,
+} from '../../services/viewer/latestAsyncScheduler';
+import {
+  RenderStateCoordinator,
+  type VisibilityMutationTarget,
+} from '../../services/viewer/renderStateCoordinator';
 import {
   convertIfcOnServer,
   getServerCapabilities,
@@ -139,6 +186,8 @@ import {
   disposeStreamingPreview,
 } from '../../services/viewer/streamingPreviewBuilder';
 import {
+  computeSceneBVH,
+  getBVHCoverage,
   installBVH,
 } from '../../services/viewer/bvhSetup';
 import {
@@ -146,20 +195,29 @@ import {
   hasPendingFragmentZFightingMitigation,
   resetFragmentZFightingTracking,
 } from '../../services/viewer/zFightingMitigation';
-import { applyFurnishingMerge } from '../../services/viewer/furnishingMerge';
-import type { FurnishingMergeResult } from '../../services/viewer/furnishingMerge';
+import {
+  applyFurnishingMerge,
+  FurnishingMergeLifecycle,
+} from '../../services/viewer/furnishingMerge';
 import {
   StoreyFrustumCuller,
   extractStoreyNodes,
 } from '../../services/viewer/storeyFrustumCuller';
 import { ElementFrustumCuller } from '../../services/viewer/elementFrustumCuller';
+import { createInvalidationRenderLoop } from '../../services/viewer/invalidationRenderLoop';
+import { getSpatialTileManifest } from '../../services/api';
+import { SpatialTileLodService } from '../../services/viewer/spatialTileLod';
+import {
+  adaptSpatialTileManifest,
+  rebaseSpatialTileManifestBounds,
+} from '../../services/viewer/spatialTileManifestAdapter';
+import { SpatialTileVisibilityController } from '../../services/viewer/spatialTileVisibilityController';
 import {
   decideCullerWork,
   runCullerPlan,
   type CullerSnapshot,
 } from '../../services/viewer/cullerCoordinationHelpers';
 import { decideCullerPolicy } from '../../services/viewer/cullerStatePolicy';
-import { padBox } from '../../services/viewer/sectionBoxHelpers';
 import {
   INITIAL_TREE_HOVER_STATE,
   isResolutionStale,
@@ -172,6 +230,7 @@ import {
 import { IfcConvertWorker } from '../../services/viewer/ifcConvertWorker';
 import {
   readFragmentCacheIDB,
+  deleteFragmentCacheIDBEntry,
   writeRawFragmentCacheIDB,
   scheduleFragmentCacheIDBPersist,
   requestPersistentStorageOnce,
@@ -287,26 +346,6 @@ type ViewerTheme = keyof typeof THEME_COLORS;
 const CHAT_HIGHLIGHT_COLOR = new THREE.Color(0x00d2ff);
 const CHAT_HIGHLIGHT_LIMIT = 500;
 
-type NativeHighlightSnapshot = {
-  colourBy: string;
-  spatialTreeRef: unknown;
-  /** Reference identity of the store's `colourLayers` record at snapshot time. */
-  colourLayersRef: unknown;
-  highlightedIds: number[];
-  amberIds: number[];
-  /** Merged base colour used to restore ids leaving the amber/cyan sets. */
-  baseExpressColors: Map<number, THREE.Color>;
-};
-
-function sameNumberSet(a: readonly number[], b: readonly number[]): boolean {
-  if (a.length !== b.length) return false;
-  const set = new Set(a);
-  for (const value of b) {
-    if (!set.has(value)) return false;
-  }
-  return true;
-}
-
 // Map the user-facing performance mode onto the runtime quality ladder.
 function performanceModeToQualityTarget(mode: ViewerPerformanceMode): RuntimeViewerQuality {
   switch (mode) {
@@ -319,14 +358,6 @@ function performanceModeToQualityTarget(mode: ViewerPerformanceMode): RuntimeVie
     default:
       return 'balanced';
   }
-}
-
-function differenceFromSet(source: ReadonlySet<number>, exclude: ReadonlySet<number>): number[] {
-  const out: number[] = [];
-  for (const value of source) {
-    if (!exclude.has(value)) out.push(value);
-  }
-  return out;
 }
 
 function isExpressIdSelected(
@@ -429,17 +460,14 @@ export default function ViewerPanel({
   const setPerfDashOpen = useStore((s) => s.setPerfDashOpen);
   const setContextMenuStateRef = useRef(setContextMenuState);
   setContextMenuStateRef.current = setContextMenuState;
-  // Stale async highlight builds bail when this generation changes.
-  const highlightGenRef = useRef(0);
   // Allows click handling to bypass the queued highlight rebuild when needed.
-  const rebuildSchedulerRef = useRef<RebuildScheduler | null>(null);
-  // Latest highlight callback for long-lived pointer handlers.
-  const rebuildNativeHighlightsRef = useRef<(() => Promise<void>) | null>(null);
-  const ghostAppliedRef = useRef(false);
+  const rebuildSchedulerRef = useRef<LatestAsyncScheduler | null>(null);
+  // In-flight async state readers are retained until their model reads settle,
+  // so the main teardown can keep fragment workers alive long enough.
+  const latestAsyncSchedulersRef = useRef<Set<LatestAsyncScheduler>>(new Set());
   // Hover refs update at pointer frequency without re-rendering the viewer.
   const hoveredLocalIdRef = useRef<number | null>(null);
   const hoveredExpressIdRef = useRef<number | null>(null);
-  const nativeHighlightSnapshotRef = useRef<NativeHighlightSnapshot | null>(null);
   // Raycasts provide both IDs; cache them to avoid later per-id async lookups.
   const expressToLocalCacheRef = useRef<Map<number, number>>(new Map());
   // Per-session rolling window for the PerformanceHud click-latency chip.
@@ -454,24 +482,38 @@ export default function ViewerPanel({
   }>({ runStartTs: null, paceWaitMs: 0, flushMs: 0 });
   // Stale in-flight hover raycasts bail when this generation changes.
   const hoverGenRef = useRef(0);
+  // Drops cached/prefetched raycast hits when a fragment replacement
+  // (furnishing merge/unmerge) lands: a pre-swap hit reused inside the
+  // 150 ms exact-hover click window would select geometry that no longer
+  // exists. Installed by the canvas-interaction closure.
+  const pointerPickCachesInvalidateRef = useRef<(() => void) | null>(null);
   // Suppresses low-priority hover work during camera navigation.
   const cameraNavigatingRef = useRef(false);
   const lodCleanupRef = useRef<(() => void) | null>(null);
+  const navigationLodAppearanceRefreshRef = useRef<(() => void) | null>(null);
+  const furnishingMergeDesiredRefreshRef = useRef<(() => void) | null>(null);
+  const visibilityRepairRef = useRef<(() => Promise<void>) | null>(null);
+  const exactPickLeaseRef = useRef<PickLeaseCoordinator | null>(null);
   // Runtime pixel ratio, graphics quality, and hover-gate ladder state.
   const interactionQualityRef = useRef<InteractionQualityState>(
     DEFAULT_INTERACTION_QUALITY_STATE,
   );
   // Full local-ID list cache for ghost-mode set calculations.
   const allLocalIdsCacheRef = useRef<number[] | null>(null);
-  const ghostAppliedLocalSetRef = useRef<Set<number>>(new Set());
-  const ghostAppliedOpacityRef = useRef(0);
-  // Separate ghost-opacity set for non-isolated ids during isolate mode.
-  const isolateGhostAppliedLocalSetRef = useRef<Set<number>>(new Set());
-  const isolateGhostAppliedOpacityRef = useRef(0);
   // Structural ref: Postproduction is not a public export from OBC Front.
   const postproductionRef =
     useRef<GhostPostproductionTarget<OBCF.EdgeDetectionPassMode> | null>(null);
   const fragmentUpdateSchedulerRef = useRef<FragmentUpdateScheduler | null>(null);
+  const renderKickRef = useRef<((ms?: number) => void) | null>(null);
+  // The sole normal-path owner of fragment visibility, opacity, and highlight
+  // mutations. Subsystems publish named masks/layers instead of writing the
+  // shared worker state directly.
+  const renderStateCoordinatorRef = useRef<RenderStateCoordinator | null>(null);
+  const renderStateShutdownRef = useRef<Promise<void> | null>(null);
+  const storeyCullerVisibilityRef = useRef<VisibilityMutationTarget | null>(null);
+  const elementCullerVisibilityRef = useRef<VisibilityMutationTarget | null>(null);
+  const spatialTileVisibilityRef = useRef<VisibilityMutationTarget | null>(null);
+  const furnishingVisibilityRef = useRef<VisibilityMutationTarget | null>(null);
 
   const updateLoadProgress = useCallback((next: Partial<ViewerLoadProgress>) => {
     setLoadProgress((previous) => {
@@ -519,6 +561,204 @@ export default function ViewerPanel({
     }
   }, []);
 
+  /** Invalidate only the renderer for plain Three.js visibility/buffer changes. */
+  const requestViewerRender = useCallback((ms = 100) => {
+    renderKickRef.current?.(ms);
+  }, []);
+
+  // Create one coordinator per mounted fragments model. Effects declared
+  // below publish their current layers after this effect has installed it.
+  useEffect(() => {
+    if (!viewerReady || !viewerRef.current) return;
+    const { model, components } = viewerRef.current;
+    const waitForPaintBoundary = () => new Promise<void>((resolve) => {
+      let settled = false;
+      let timeout = 0;
+      let firstFrame = 0;
+      let secondFrame = 0;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        document.removeEventListener('visibilitychange', armTimeout);
+        if (firstFrame) window.cancelAnimationFrame(firstFrame);
+        if (secondFrame) window.cancelAnimationFrame(secondFrame);
+        resolve();
+      };
+      // Hidden/background WebViews can suspend rAF indefinitely, so a hidden
+      // document keeps a short bounded fallback. A visible viewport must
+      // prefer the true paint boundary even under heavy load; its longer
+      // bound exists only to keep shutdown finite.
+      const armTimeout = () => {
+        window.clearTimeout(timeout);
+        timeout = window.setTimeout(
+          finish,
+          document.visibilityState === 'hidden' ? 160 : 2_000,
+        );
+      };
+      document.addEventListener('visibilitychange', armTimeout);
+      armTimeout();
+      // One rAF callback runs before its frame is painted. Resolving from the
+      // following rAF guarantees at least one compositor paint has occurred
+      // after the renderer was armed.
+      firstFrame = window.requestAnimationFrame(() => {
+        firstFrame = 0;
+        secondFrame = window.requestAnimationFrame(() => {
+          secondFrame = 0;
+          finish();
+        });
+      });
+    });
+    const coordinator = new RenderStateCoordinator({
+      model,
+      requestRender: async (_generation, source) => {
+        const scheduler = fragmentUpdateSchedulerRef.current;
+        const isCullerShow = source.includes('culler-show');
+        const isCullerHide = source.includes('culler-hide');
+        const isHover = source.includes('hover');
+        const reason: FragmentUpdateReason = isCullerShow
+          ? 'culler-show'
+          : isCullerHide
+            ? 'culler-hide'
+            : isHover
+              ? 'hover-highlight'
+              : source.includes('highlight')
+                ? 'click-highlight'
+                : 'ghost-visibility';
+        // Coordinator urgency controls when an idle culler hide is allowed to
+        // mutate worker state. Once that mutation has happened its refresh may
+        // never be held behind navigation, or already-hidden geometry can be
+        // painted for the duration of an orbit.
+        const priority: FragmentUpdatePriority = 'visual';
+        if (scheduler) {
+          // Every scheduler run serializes through this model's FINISH event;
+          // requestAndWait therefore cannot be satisfied by a late event from
+          // the preceding camera batch.
+          await scheduler.requestAndWait({ priority, force: true, reason });
+          // onRunEnd arms the renderer before requestAndWait resolves. Queue
+          // this callback afterwards, so acknowledgement crosses the next
+          // painted-frame boundary instead of merely the worker-update edge.
+          await waitForPaintBoundary();
+          return;
+        }
+        // Startup fallback before the normal scheduler is attached.
+        const fragmentsManager = components.get(OBC.FragmentsManager);
+        await fragmentsManager.core.update(true);
+        requestViewerRender(120);
+        await waitForPaintBoundary();
+      },
+      raf: (callback) => window.requestAnimationFrame(callback),
+      cancelRaf: (handle) => window.cancelAnimationFrame(handle as number),
+      onError: (error) => {
+        if (import.meta.env.DEV) console.debug('[viewer] render-state reconciliation failed', error);
+      },
+    });
+    renderStateCoordinatorRef.current = coordinator;
+    const guardCullerTarget = (target: VisibilityMutationTarget): VisibilityMutationTarget => {
+      const guard = async (run: () => Promise<void>, includesHide: boolean) => {
+        const state = useStore.getState();
+        const userPolicy = state.isolatedIds.length > 0 || state.hiddenIds.length > 0;
+        if (userPolicy || (includesHide && cameraNavigatingRef.current)) {
+          if (userPolicy) await target.clearVisibility?.();
+          const error = new Error(userPolicy
+            ? 'Culler mutation superseded by user visibility'
+            : 'Culler hide superseded by active navigation');
+          error.name = 'AbortError';
+          throw error;
+        }
+        await run();
+      };
+      return {
+        setVisible: (ids, visible) => guard(() => target.setVisible(ids, visible), !visible),
+        applyVisibilityDelta: (toHide, toShow) => guard(() => (
+          target.applyVisibilityDelta?.(toHide, toShow) ?? Promise.resolve()
+        ), toHide.length > 0),
+        clearVisibility: () => target.clearVisibility?.() ?? Promise.resolve(),
+      };
+    };
+    storeyCullerVisibilityRef.current = guardCullerTarget(coordinator.createVisibilityTarget('culler:storey', {
+      urgency: 'idle',
+      reason: 'culler-hide:storey',
+    }, {
+      urgency: 'visual',
+      reason: 'culler-show:storey',
+    }));
+    elementCullerVisibilityRef.current = guardCullerTarget(coordinator.createVisibilityTarget('culler:element', {
+      urgency: 'idle',
+      reason: 'culler-hide:element',
+    }, {
+      urgency: 'visual',
+      reason: 'culler-show:element',
+    }));
+    spatialTileVisibilityRef.current = guardCullerTarget(coordinator.createVisibilityTarget('culler:spatial-tiles', {
+      urgency: 'idle',
+      reason: 'culler-hide:spatial-tiles',
+    }, {
+      urgency: 'visual',
+      reason: 'culler-show:spatial-tiles',
+    }));
+    furnishingVisibilityRef.current = coordinator.createVisibilityTarget('geometry:furnishing-merge', {
+      urgency: 'visual',
+      reason: 'furnishing-merge',
+    });
+    if (import.meta.env.DEV) {
+      (window as unknown as Record<string, unknown>).__ifcRenderState = () => coordinator.snapshot();
+    }
+    return () => {
+      const shutdown = coordinator.shutdown();
+      renderStateShutdownRef.current = shutdown;
+      void shutdown.finally(() => {
+        if (renderStateCoordinatorRef.current === coordinator) renderStateCoordinatorRef.current = null;
+        if (renderStateShutdownRef.current === shutdown) renderStateShutdownRef.current = null;
+      });
+      storeyCullerVisibilityRef.current = null;
+      elementCullerVisibilityRef.current = null;
+      spatialTileVisibilityRef.current = null;
+      furnishingVisibilityRef.current = null;
+      if (import.meta.env.DEV) {
+        delete (window as unknown as Record<string, unknown>).__ifcRenderState;
+      }
+    };
+  }, [viewerReady, requestViewerRender]);
+
+  const setCoordinatedHover = useCallback(async (
+    source: 'canvas' | 'tree',
+    localId: number | null,
+  ) => {
+    const coordinator = renderStateCoordinatorRef.current;
+    if (!coordinator) return;
+    const layer = `appearance:hover:${source}`;
+    await coordinator.update({
+      highlights: [{
+        layer,
+        definition: localId === null
+          ? null
+          : {
+              layer,
+              priority: 30,
+              entries: [{
+                styleKey: 'hover:amber',
+                ids: [localId],
+                material: HOVER_HIGHLIGHT_MATERIAL,
+              }],
+            },
+      }],
+    }, { urgency: 'visual', reason: `highlight:hover:${source}` });
+  }, []);
+
+  // Disabling hover must also release an already-painted preview; merely
+  // suppressing future raycasts leaves stale tint behind.
+  useEffect(() => useStore.subscribe(
+    (state) => state.hoverHighlightEnabled,
+    (enabled) => {
+      if (enabled) return;
+      hoveredLocalIdRef.current = null;
+      hoveredExpressIdRef.current = null;
+      void setCoordinatedHover('canvas', null).catch(() => {});
+      void setCoordinatedHover('tree', null).catch(() => {});
+    },
+  ), [setCoordinatedHover]);
+
   // Click-to-highlight latency is recorded after the highlight flush resolves.
   const recordClickLatencyFlush = useCallback(() => {
     const tClickStart = pendingClickStartRef.current;
@@ -563,9 +803,9 @@ export default function ViewerPanel({
     }
   }, []);
 
-  // Selection / highlight / focus-mode / ghost-opacity are NOT subscribed at
-  // the React render level - they're consumed inside `rebuildNativeHighlights`
-  // and the ghost-focus scheduler via `useStore.getState()` plus reactive
+  // Selection / highlight / focus-mode / ghost-opacity are not subscribed at
+  // the React render level. The coordinator schedulers consume the latest
+  // values via `useStore.getState()` plus reactive
   // `useStore.subscribe(...)` calls. Subscribing here was forcing a full
   // ViewerPanel re-render on every click for no JSX benefit.
   const isolatedIds = useStore((s) => s.isolatedIds);
@@ -627,406 +867,243 @@ export default function ViewerPanel({
     return out;
   }, []);
 
-  // Cache-only fast path; null means the caller must await full resolution.
-  const peekLocalIdsSync = useCallback((expressIds: number[]): number[] | null => {
-    const cache = expressToLocalCacheRef.current;
-    const out: number[] = [];
-    for (const id of expressIds) {
-      let lid = cache.get(id);
-      if (lid === undefined) {
-        const remembered = modelService.getRememberedLocalId(id);
-        if (remembered === null) return null;
-        cache.set(id, remembered);
-        lid = remembered;
-      }
-      out.push(lid);
-    }
-    return out;
-  }, []);
 
-  // Apply native fragment highlights (exact mesh geometry, not bounding boxes).
-  // Cyan for AI/chat-highlighted elements, amber for the clicked selection.
-  // Both use the fragment highlight API which renders the actual element faces.
-  const rebuildNativeHighlights = useCallback(async () => {
-    if (!viewerRef.current) return;
-    const { model } = viewerRef.current;
-    const myGen = ++highlightGenRef.current;
-    const resolveLocalIdsForHighlight = async (expressIds: number[]) => {
-      let lids = await expressToLocalIds(model, expressIds);
-      if (lids.length === 0 && expressIds.length > 0) {
-        lids = expressIds;
-        if (import.meta.env.DEV) {
-          console.warn('[viewer] express->local returned empty; trying raw IDs', expressIds);
-        }
+  /**
+   * Phase-1 layered compositor. Each semantic source publishes a named layer;
+   * RenderStateCoordinator diffs the effective winner per local ID. This path
+   * never performs a model-wide reset during an ordinary selection, AI result,
+   * or colour change.
+   */
+  /** Rebuild the expensive colour-by/colour-layer base only when it changes. */
+  const rebuildCoordinatedBaseAppearance = useCallback(async (run: LatestAsyncRunContext) => {
+    const coordinator = renderStateCoordinatorRef.current;
+    const refs = viewerRef.current;
+    if (!coordinator || !refs) return;
+    const isStale = () => (
+      run.isSuperseded()
+      || renderStateCoordinatorRef.current !== coordinator
+      || viewerRef.current !== refs
+    );
+    const state = useStore.getState();
+    const mergedBase = new Map<number, {
+      styleKey: string;
+      material: FRAGS.MaterialDefinition;
+    }>();
+
+    if (state.colourBy !== 'off' && state.spatialTree) {
+      for (const group of buildColourGroups(state.spatialTree, state.colourBy)) {
+        const localIds = await expressToLocalIds(refs.model, group.ids);
+        if (isStale()) return;
+        const styleKey = `colour-by:${group.color.getHexString()}`;
+        const material: FRAGS.MaterialDefinition = {
+          color: group.color,
+          opacity: 0.95,
+          transparent: false,
+          renderedFaces: FRAGS.RenderedFaces.ONE,
+          customId: styleKey,
+        };
+        for (const id of localIds) mergedBase.set(id, { styleKey, material });
       }
-      return lids;
-    };
-    const paintSelection = async (expressIds: number[]) => {
-      const lids = await resolveLocalIdsForHighlight(expressIds);
-      if (myGen !== highlightGenRef.current || lids.length === 0) return;
-      await model.highlight(lids, {
-        color: getSelectionHighlightColor(),
-        opacity: SELECTION_HIGHLIGHT_OPACITY,
+    }
+
+    const layerColourCache = new Map<string, THREE.Color>();
+    for (const group of flattenColourLayers(state.colourLayers)) {
+      const localIds = await expressToLocalIds(refs.model, group.ids);
+      if (isStale()) return;
+      let colour = layerColourCache.get(group.color);
+      if (!colour) {
+        colour = new THREE.Color(group.color);
+        layerColourCache.set(group.color, colour);
+      }
+      const styleKey = `colour-layer:${colour.getHexString()}`;
+      const material: FRAGS.MaterialDefinition = {
+        color: colour,
+        opacity: 0.95,
         transparent: false,
         renderedFaces: FRAGS.RenderedFaces.ONE,
-      });
-    };
-    const paintChatHighlight = async (expressIds: number[]) => {
-      const lids = await expressToLocalIds(model, expressIds);
-      if (myGen !== highlightGenRef.current || lids.length === 0) return;
-      await model.highlight(lids, {
-        color: CHAT_HIGHLIGHT_COLOR,
-        opacity: 1.0,
-        transparent: false,
-        renderedFaces: FRAGS.RenderedFaces.ONE,
-      });
-    };
-    const restoreBaseHighlights = async (
-      expressIds: number[],
-      snapshot: NativeHighlightSnapshot,
-    ) => {
-      if (expressIds.length === 0) return;
-      const chatSet = new Set(snapshot.highlightedIds);
-      const chatIds: number[] = [];
-      const colourGroups = new Map<THREE.Color, number[]>();
-      for (const id of expressIds) {
-        if (chatSet.has(id)) {
-          chatIds.push(id);
-          continue;
-        }
-        const color = snapshot.baseExpressColors.get(id);
-        if (!color) continue;
-        const group = colourGroups.get(color);
-        if (group) group.push(id);
-        else colourGroups.set(color, [id]);
-      }
-      // Resolve ids once, then repaint colour groups concurrently.
-      const allRestoreIds: number[] = [];
-      for (const ids of colourGroups.values()) allRestoreIds.push(...ids);
-      if (allRestoreIds.length > 0) {
-        await expressToLocalIds(model, allRestoreIds);
-        if (myGen !== highlightGenRef.current) return;
-      }
-      const repaints: Promise<void>[] = [];
-      for (const [color, ids] of colourGroups) {
-        repaints.push((async () => {
-          const lids = await expressToLocalIds(model, ids); // cache hits now
-          if (myGen !== highlightGenRef.current || lids.length === 0) return;
-          await model.highlight(lids, {
-            color,
-            opacity: 0.95,
-            transparent: false,
-            renderedFaces: FRAGS.RenderedFaces.ONE,
-          });
-        })());
-      }
-      if (chatIds.length > 0) {
-        repaints.push(paintChatHighlight(chatIds));
-      }
-      await Promise.all(repaints);
-    };
+        customId: styleKey,
+      };
+      for (const id of localIds) mergedBase.set(id, { styleKey, material });
+    }
+
+    const grouped = new Map<string, {
+      ids: number[];
+      material: FRAGS.MaterialDefinition;
+    }>();
+    for (const [id, visual] of mergedBase) {
+      const group = grouped.get(visual.styleKey);
+      if (group) group.ids.push(id);
+      else grouped.set(visual.styleKey, { ids: [id], material: visual.material });
+    }
+    if (isStale()) return;
+    await coordinator.update({
+      highlights: [{
+        layer: 'appearance:base-colour',
+        definition: grouped.size > 0
+          ? {
+              layer: 'appearance:base-colour',
+              priority: 10,
+              entries: [...grouped].map(([styleKey, group]) => ({
+                styleKey,
+                ids: group.ids,
+                material: group.material,
+              })),
+            }
+          : null,
+      }],
+    }, { urgency: 'frame', reason: 'highlight:base-colour' });
+  }, [expressToLocalIds]);
+
+  /** AI/search results own a separate lower-priority durable layer. */
+  const rebuildCoordinatedResultHighlights = useCallback(async (run: LatestAsyncRunContext) => {
+    const coordinator = renderStateCoordinatorRef.current;
+    const refs = viewerRef.current;
+    if (!coordinator || !refs) return;
+    const highlightedIds = useStore.getState().highlightedIds.slice(0, CHAT_HIGHLIGHT_LIMIT);
+    const localIds = await expressToLocalIds(
+      refs.model,
+      highlightedIds,
+    );
+    if (
+      run.isSuperseded()
+      || renderStateCoordinatorRef.current !== coordinator
+      || viewerRef.current !== refs
+    ) return;
+    await coordinator.update({
+      highlights: [{
+        layer: 'appearance:ai-results',
+        definition: localIds.length > 0
+          ? {
+              layer: 'appearance:ai-results',
+              priority: 20,
+              entries: [{
+                styleKey: 'ai-results:cyan',
+                ids: localIds,
+                material: {
+                  color: CHAT_HIGHLIGHT_COLOR,
+                  opacity: 1,
+                  transparent: false,
+                  renderedFaces: FRAGS.RenderedFaces.ONE,
+                  customId: 'ai-results:cyan',
+                },
+              }],
+            }
+          : null,
+      }],
+    }, { urgency: 'visual', reason: 'highlight:ai-results' });
+  }, [expressToLocalIds]);
+
+  /** Selection is the highest durable layer and owns click-to-paint timing. */
+  const rebuildCoordinatedSelection = useCallback(async (run: LatestAsyncRunContext) => {
+    const coordinator = renderStateCoordinatorRef.current;
+    const refs = viewerRef.current;
+    if (!coordinator || !refs) return;
+    const clickStartForRun = pendingClickStartRef.current;
     try {
       const state = useStore.getState();
-      const highlightedIds = state.highlightedIds.slice(0, CHAT_HIGHLIGHT_LIMIT);
-      const amberIds = computeAmberIds(state.selectedElementId, state.selectedIds);
-      const prevSnapshot = nativeHighlightSnapshotRef.current;
-      const canDeltaSelection =
-        prevSnapshot !== null
-        && prevSnapshot.colourBy === state.colourBy
-        && prevSnapshot.spatialTreeRef === state.spatialTree
-        && prevSnapshot.colourLayersRef === state.colourLayers
-        && sameNumberSet(prevSnapshot.highlightedIds, highlightedIds);
-
-      if (canDeltaSelection) {
-        const work = decideSelectionWork(prevSnapshot.amberIds, amberIds);
-        if (work.skip) {
-          // No flush will fire for this rebuild - drop any armed click-probe
-          // start so a later unrelated 'click-highlight' flush (AI/chat
-          // rebuild) can't consume it and record a bogus sample (C-15).
-          pendingClickStartRef.current = null;
-          return;
-        }
-
-        const idsToReset = differenceFromSet(work.prevIds, work.nextIds);
-        const idsToPaint = differenceFromSet(work.nextIds, work.prevIds);
-
-        // Selection fast path: when every id in all three stages - reset,
-        // base-layer restore (colour-by / chat cyan under the outgoing
-        // amber), fresh paint - resolves synchronously (always true for
-        // canvas clicks - pointer-up seeds the cache), post the worker RPCs
-        // fire-and-forget in dependency order and kick ONE flush in the
-        // SAME turn. Ordering the pipeline already guarantees: the worker
-        // executes messages in arrival order, and the flush's scheduler
-        // drain posts its refreshView after this synchronous turn - i.e.
-        // after every RPC below. The awaited fallback cost 3+ serial worker
-        // round-trips per click while colour-by or chat layers were active.
-        {
-          const resetLids = peekLocalIdsSync(idsToReset);
-          const paintLids = peekLocalIdsSync(idsToPaint);
-          if (resetLids !== null && paintLids !== null) {
-            // Restore plan for ids leaving the amber set: chat cyan wins
-            // over colour-by, mirroring restoreBaseHighlights.
-            const chatSet = new Set(prevSnapshot.highlightedIds);
-            const chatRestoreIds: number[] = [];
-            const colourRestore = new Map<THREE.Color, number[]>();
-            for (const id of idsToReset) {
-              if (chatSet.has(id)) {
-                chatRestoreIds.push(id);
-                continue;
+      const localIds = await expressToLocalIds(
+        refs.model,
+        computeAmberIds(state.selectedElementId, state.selectedIds),
+      );
+      if (
+        run.isSuperseded()
+        || renderStateCoordinatorRef.current !== coordinator
+        || viewerRef.current !== refs
+      ) return;
+      await coordinator.update({
+        highlights: [{
+          layer: 'appearance:selection',
+          definition: localIds.length > 0
+            ? {
+                layer: 'appearance:selection',
+                priority: 40,
+                entries: [{
+                  styleKey: 'selection:amber',
+                  ids: localIds,
+                  material: {
+                    color: getSelectionHighlightColor(),
+                    opacity: SELECTION_HIGHLIGHT_OPACITY,
+                    transparent: false,
+                    renderedFaces: FRAGS.RenderedFaces.ONE,
+                    customId: 'selection:amber',
+                  },
+                }],
               }
-              const color = prevSnapshot.baseExpressColors.get(id);
-              if (!color) continue;
-              const group = colourRestore.get(color);
-              if (group) group.push(id);
-              else colourRestore.set(color, [id]);
-            }
-            const chatLids = peekLocalIdsSync(chatRestoreIds);
-            let colourGroupsResolved: Array<[THREE.Color, number[]]> | null = [];
-            for (const [color, ids] of colourRestore) {
-              const lids = peekLocalIdsSync(ids);
-              if (lids === null) {
-                colourGroupsResolved = null;
-                break;
-              }
-              colourGroupsResolved.push([color, lids]);
-            }
-            if (chatLids !== null && colourGroupsResolved !== null) {
-              if (resetLids.length > 0) {
-                model.resetHighlight(resetLids).catch(() => { /* non-fatal */ });
-              }
-              for (const [color, lids] of colourGroupsResolved) {
-                if (lids.length === 0) continue;
-                model.highlight(lids, {
-                  color,
-                  opacity: 0.95,
-                  transparent: false,
-                  renderedFaces: FRAGS.RenderedFaces.ONE,
-                }).catch(() => { /* non-fatal */ });
-              }
-              if (chatLids.length > 0) {
-                model.highlight(chatLids, {
-                  color: CHAT_HIGHLIGHT_COLOR,
-                  opacity: 1.0,
-                  transparent: false,
-                  renderedFaces: FRAGS.RenderedFaces.ONE,
-                }).catch(() => { /* non-fatal */ });
-              }
-              if (paintLids.length > 0) {
-                model.highlight(paintLids, {
-                  color: getSelectionHighlightColor(),
-                  opacity: SELECTION_HIGHLIGHT_OPACITY,
-                  transparent: false,
-                  renderedFaces: FRAGS.RenderedFaces.ONE,
-                }).catch(() => { /* non-fatal */ });
-              }
-              nativeHighlightSnapshotRef.current = {
-                ...prevSnapshot,
-                amberIds,
-              };
-              requestFragmentUpdate('click-highlight');
-              return;
-            }
-          }
-        }
-
-        if (idsToReset.length > 0) {
-          const resetLocalIds = await resolveLocalIdsForHighlight(idsToReset);
-          if (myGen !== highlightGenRef.current) return;
-          if (resetLocalIds.length > 0) {
-            await model.resetHighlight(resetLocalIds);
-          }
-          if (myGen !== highlightGenRef.current) return;
-          await restoreBaseHighlights(idsToReset, prevSnapshot);
-        }
-
-        if (idsToPaint.length > 0) {
-          await paintSelection(idsToPaint);
-        }
-
-        if (myGen !== highlightGenRef.current) return;
-        nativeHighlightSnapshotRef.current = {
-          ...prevSnapshot,
-          amberIds,
-        };
-        requestFragmentUpdate('click-highlight');
-        return;
+            : null,
+        }],
+      }, { urgency: 'visual', reason: 'highlight:selection' });
+      if (
+        clickStartForRun !== null
+        && pendingClickStartRef.current === clickStartForRun
+      ) {
+        recordClickLatencyFlush();
       }
-
-      await model.resetHighlight(undefined);
-      hoveredLocalIdRef.current = null;
-      hoveredExpressIdRef.current = null;
-      if (myGen !== highlightGenRef.current) return;
-
-      // Base colour layer; selection/chat highlights are painted on top.
-      const baseExpressColors = new Map<number, THREE.Color>();
-      if (state.colourBy !== 'off' && state.spatialTree) {
-        const groups = buildColourGroups(state.spatialTree, state.colourBy);
-        for (const group of groups) {
-          if (myGen !== highlightGenRef.current) return;
-          for (const id of group.ids) {
-            baseExpressColors.set(id, group.color);
-          }
-          const lids = await expressToLocalIds(model, group.ids);
-          if (myGen !== highlightGenRef.current) return;
-          if (lids.length > 0) {
-            await model.highlight(lids, {
-              color: group.color,
-              opacity: 0.95,
-              transparent: false,
-              renderedFaces: FRAGS.RenderedFaces.ONE,
-            });
-          }
-        }
+    } catch (error) {
+      if (pendingClickStartRef.current === clickStartForRun) {
+        pendingClickStartRef.current = null;
       }
-
-      // Generic colour layers (store `colourLayers`): painted AFTER the
-      // colour-by groups so a layer colour wins per id; flattenColourLayers
-      // already applies the last-set-layer-wins rule for overlapping ids.
-      // Same opacity as colour-by so the snapshot restore paths repaint
-      // both sources through one code path.
-      const layerGroups = flattenColourLayers(state.colourLayers);
-      if (layerGroups.length > 0) {
-        // One shared THREE.Color per hex string: the restore paths group
-        // ids by colour-OBJECT identity, so per-id clones would shatter a
-        // layer into single-id highlight calls on every deselect.
-        const layerColourCache = new Map<string, THREE.Color>();
-        for (const group of layerGroups) {
-          if (myGen !== highlightGenRef.current) return;
-          let colour = layerColourCache.get(group.color);
-          if (!colour) {
-            colour = new THREE.Color(group.color);
-            layerColourCache.set(group.color, colour);
-          }
-          for (const id of group.ids) {
-            baseExpressColors.set(id, colour);
-          }
-          const lids = await expressToLocalIds(model, group.ids);
-          if (myGen !== highlightGenRef.current) return;
-          if (lids.length > 0) {
-            await model.highlight(lids, {
-              color: colour,
-              opacity: 0.95,
-              transparent: false,
-              renderedFaces: FRAGS.RenderedFaces.ONE,
-            });
-          }
-        }
-      }
-
-      // Cyan highlight for elements surfaced by the AI/chat agent
-      if (highlightedIds.length > 0) {
-        await paintChatHighlight(highlightedIds);
-      }
-
-      // Amber highlight for selected element(s). Multi-select (Shift+click)
-      // populates selectedIds; single select uses selectedElementId only.
-      // The single-vs-multi rule lives in `computeAmberIds` so vitest can
-      // pin it.
-      if (amberIds.length > 0) {
-        // Fragments' raycast returns `itemId` which in practice is the IFC
-        // Express ID. We convert to local IDs for the highlight API. If the
-        // conversion returns empty (older fragment versions, cached models,
-        // or edge cases), fall back to passing the IDs straight through on
-        // the chance they are already local IDs - the highlight API will
-        // silently no-op on invalid IDs so it's safe to try.
-        let lids = await expressToLocalIds(model, amberIds);
-        if (lids.length === 0) {
-          lids = amberIds;
-          if (import.meta.env.DEV) {
-            console.warn('[viewer] express-to-local returned empty; trying raw IDs', amberIds);
-          }
-        }
-        if (import.meta.env.DEV) {
-          console.debug('[viewer] highlight selection', {
-            amberIds,
-            localIds: lids,
-          });
-        }
-        if (myGen !== highlightGenRef.current) return;
-        if (lids.length > 0) {
-          await model.highlight(lids, {
-            color: getSelectionHighlightColor(),
-            opacity: SELECTION_HIGHLIGHT_OPACITY,
-            transparent: false,
-            renderedFaces: FRAGS.RenderedFaces.ONE,
-          });
-        }
-      }
-
-      if (myGen !== highlightGenRef.current) return;
-      nativeHighlightSnapshotRef.current = {
-        colourBy: state.colourBy,
-        spatialTreeRef: state.spatialTree,
-        colourLayersRef: state.colourLayers,
-        highlightedIds,
-        amberIds,
-        baseExpressColors,
-      };
-      // Fire-and-forget the coalesced render kick. The fragment scheduler
-      // folds selection, chat-highlight, camera, and visibility refreshes
-      // into the next paint instead of starting overlapping forced updates.
-      requestFragmentUpdate('click-highlight');
-    } catch (err) {
-      // Highlight errors are non-fatal, but a silent swallow hides real
-      // failures (no amber, no flush) - surface them in dev builds.
-      if (import.meta.env.DEV) console.debug('[viewer] highlight rebuild failed', err);
+      throw error;
     }
-  }, [expressToLocalIds, peekLocalIdsSync, requestFragmentUpdate]);
+  }, [expressToLocalIds, recordClickLatencyFlush]);
 
-  // Rebuild highlights whenever highlighted IDs, selected element,
-  // multi-select, colourBy, or the colour-layer record changes.
-  //
-  // rAF coalesce (see `rebuildScheduler.ts`): a
-  // single Zustand action that mutates two of these four keys (e.g.
-  // Shift+click writing both `selectedElementId` and `selectedIds`)
-  // would otherwise fire two rebuilds back-to-back. The `myGen`
-  // cancellation pattern correctly suppresses the first call's *writes*,
-  // but its `await model.resetHighlight(undefined)` and colour-by
-  // recompute have already cost wall-clock work. The scheduler
-  // collapses N synchronous subscriber notifications into one rebuild
-  // on the next frame.
-  // Tear down the LOD navigation swap when this ViewerPanel unmounts (the
-  // component remounts per model load, so this fires between models).
+  // Keep expensive appearance sources on independent latest-state schedulers.
+  // A selection click no longer rebuilds or translates every colour-by ID.
+  useEffect(() => {
+    if (!viewerReady) return;
+    const makeScheduler = (
+      label: string,
+      run: (context: LatestAsyncRunContext) => Promise<void>,
+    ) => (
+      createLatestAsyncScheduler({
+        raf: (cb) => window.requestAnimationFrame(cb),
+        cancelRaf: (handle) => window.cancelAnimationFrame(handle),
+        run,
+        onError: (error) => {
+          if (import.meta.env.DEV) console.debug(`[viewer] ${label} scheduler failed`, error);
+        },
+      })
+    );
+    const baseScheduler = makeScheduler('base appearance', rebuildCoordinatedBaseAppearance);
+    const resultScheduler = makeScheduler('result highlight', rebuildCoordinatedResultHighlights);
+    const selectionScheduler = makeScheduler('selection highlight', rebuildCoordinatedSelection);
+    const schedulers = [baseScheduler, resultScheduler, selectionScheduler];
+    for (const scheduler of schedulers) latestAsyncSchedulersRef.current.add(scheduler);
+    rebuildSchedulerRef.current = selectionScheduler;
+
+    const unsubscribers = [
+      useStore.subscribe((state) => state.colourBy, baseScheduler.schedule),
+      useStore.subscribe((state) => state.spatialTree, baseScheduler.schedule),
+      useStore.subscribe((state) => state.colourLayers, baseScheduler.schedule),
+      useStore.subscribe((state) => state.highlightedIds, resultScheduler.schedule),
+      useStore.subscribe((state) => state.selectedElementId, selectionScheduler.schedule),
+      useStore.subscribe((state) => state.selectedIds, selectionScheduler.schedule),
+    ];
+    baseScheduler.schedule();
+    resultScheduler.schedule();
+    selectionScheduler.schedule();
+
+    return () => {
+      for (const unsubscribe of unsubscribers) unsubscribe();
+      for (const scheduler of schedulers) {
+        const shutdown = scheduler.shutdown();
+        void shutdown.finally(() => latestAsyncSchedulersRef.current.delete(scheduler));
+      }
+      if (rebuildSchedulerRef.current === selectionScheduler) {
+        rebuildSchedulerRef.current = null;
+      }
+    };
+  }, [
+    viewerReady,
+    rebuildCoordinatedBaseAppearance,
+    rebuildCoordinatedResultHighlights,
+    rebuildCoordinatedSelection,
+  ]);
+
+  // Tear down the optional whole-model LOD swap between model sessions.
   useEffect(() => () => {
     try { lodCleanupRef.current?.(); } catch { /* best-effort */ }
     lodCleanupRef.current = null;
   }, []);
-
-  useEffect(() => {
-    if (!viewerReady) return;
-    let postPaintHandle: number | null = null;
-    const scheduler = createRebuildScheduler({
-      raf: (cb) => window.requestAnimationFrame(cb),
-      cancelRaf: (handle) => window.cancelAnimationFrame(handle),
-      run: () => {
-        if (postPaintHandle !== null) {
-          window.clearTimeout(postPaintHandle);
-        }
-        postPaintHandle = window.setTimeout(() => {
-          postPaintHandle = null;
-          void rebuildNativeHighlights();
-        }, 0);
-      },
-    });
-    rebuildSchedulerRef.current = scheduler;
-    rebuildNativeHighlightsRef.current = rebuildNativeHighlights;
-    const u1 = useStore.subscribe((s) => s.highlightedIds, scheduler.schedule);
-    const u2 = useStore.subscribe((s) => s.selectedElementId, scheduler.schedule);
-    const u3 = useStore.subscribe((s) => s.selectedIds, scheduler.schedule);
-    const u4 = useStore.subscribe((s) => s.colourBy, scheduler.schedule);
-    const u5 = useStore.subscribe((s) => s.spatialTree, scheduler.schedule);
-    const u6 = useStore.subscribe((s) => s.colourLayers, scheduler.schedule);
-    return () => {
-      u1(); u2(); u3(); u4(); u5(); u6();
-      scheduler.cancel();
-      if (postPaintHandle !== null) {
-        window.clearTimeout(postPaintHandle);
-        postPaintHandle = null;
-      }
-      rebuildSchedulerRef.current = null;
-      rebuildNativeHighlightsRef.current = null;
-    };
-  }, [viewerReady, rebuildNativeHighlights]);
 
   // Ghost mode for focused selection: use native setOpacity instead of
   // traversing THREE.js materials directly (avoids transparency-sort flickering).
@@ -1039,7 +1116,7 @@ export default function ViewerPanel({
   //      one - `setOpacity` on a few elements is fast; `setOpacity` on
   //      thousands every selection click was the main slowness.
   //   4. rAF-coalesce slider drags via
-  //      `createRebuildScheduler`. Profiling measured up to ~60
+  //      `createLatestAsyncScheduler`. Profiling measured up to ~60
   //      `selectionGhostOpacity` writes/second during a continuous drag,
   //      each one firing a fresh fire-and-forget `apply()` that raced
   //      worker round-trips. The scheduler caps that at one apply per
@@ -1049,323 +1126,176 @@ export default function ViewerPanel({
   useEffect(() => {
     if (!viewerReady) return;
 
-    const apply = async () => {
-      if (!viewerRef.current) return;
-      const { model } = viewerRef.current;
-
-      // Read latest state inside the rAF callback so high-frequency slider
-      // ticks collapse into one apply per frame at the latest opacity.
+    const applyCoordinatedFocusOpacity = async (run: LatestAsyncRunContext) => {
+      const coordinator = renderStateCoordinatorRef.current;
+      const refs = viewerRef.current;
+      if (!coordinator || !refs || !useStore.getState().modelLoaded) return;
+      const isStale = () => (
+        run.isSuperseded()
+        || renderStateCoordinatorRef.current !== coordinator
+        || viewerRef.current !== refs
+      );
       const state = useStore.getState();
-      const selectedElementId = state.selectedElementId;
-      const highlightedIds = state.highlightedIds;
-      const selectionFocusMode = state.selectionFocusMode;
-      const selectionGhostOpacity = state.selectionGhostOpacity;
+      const focusExpressIds = new Set<number>();
+      if (state.selectedElementId != null) focusExpressIds.add(state.selectedElementId);
+      for (const id of state.selectedIds) focusExpressIds.add(id);
+      for (const id of state.highlightedIds) focusExpressIds.add(id);
+      const shouldGhost = state.selectionFocusMode === 'ghost' && focusExpressIds.size > 0;
 
-      const hasFocus = selectedElementId != null || highlightedIds.length > 0;
-      const shouldGhost = selectionFocusMode === 'ghost' && hasFocus;
-
-      // Cheap early-exit: ghost-off and never applied.
-      if (!shouldGhost && !ghostAppliedRef.current) return;
-
-      // Lazy-init the full local-id list (cached for the model lifetime).
-      // Only needed when we're about to compute the next ghost set.
-      if (shouldGhost && !allLocalIdsCacheRef.current) {
-        try {
-          allLocalIdsCacheRef.current = await model.getLocalIds();
-        } catch {
-          return;
-        }
+      if (!shouldGhost) {
+        if (isStale()) return;
+        await coordinator.setOpacityLayer('opacity:selection-focus', null, 1, {
+          urgency: 'visual',
+          reason: 'opacity:selection-focus-clear',
+        });
+        return;
       }
 
-      // Build the next ghost set (empty when ghost-off).
-      let nextGhostSet: Set<number> = new Set();
-      if (shouldGhost) {
-        const allLocal = allLocalIdsCacheRef.current;
-        if (!allLocal || allLocal.length === 0) return;
-
-        const focusExpressIds: number[] = [
-          ...(selectedElementId != null ? [selectedElementId] : []),
-          ...highlightedIds,
-        ];
-        const focusLocal = await expressToLocalIds(model, focusExpressIds);
-        const focusSet = new Set(focusLocal);
-
-        for (const id of allLocal) {
-          if (!focusSet.has(id)) nextGhostSet.add(id);
-        }
+      let allLocalIds = allLocalIdsCacheRef.current;
+      if (!allLocalIds) {
+        allLocalIds = await refs.model.getLocalIds();
+        if (isStale()) return;
+        allLocalIdsCacheRef.current = allLocalIds;
       }
-
-      // Dispatch through the tested ghost-state helper.
-      const plan = decideGhostWork({
-        shouldGhost,
-        ghostApplied: ghostAppliedRef.current,
-        prevGhostSet: ghostAppliedLocalSetRef.current,
-        nextGhostSet,
-        prevOpacity: ghostAppliedOpacityRef.current,
-        nextOpacity: selectionGhostOpacity,
-      });
-
-      switch (plan.kind) {
-        case 'skip':
-        case 'noop':
-          return;
-        case 'tear-down': {
-          // Reset only the previously ghosted elements; keep the full reset as
-          // a defensive fallback if the local refs drift.
-          if (plan.idsToRestore.length > 0) {
-            try { await model.resetOpacity(plan.idsToRestore); } catch {}
-          } else {
-            try { await model.resetOpacity(undefined); } catch {}
-          }
-          ghostAppliedLocalSetRef.current = new Set();
-          ghostAppliedRef.current = false;
-          ghostAppliedOpacityRef.current = 0;
-          // Opacity flips need a forced render to appear immediately.
-          requestFragmentUpdate('ghost-visibility');
-          return;
-        }
-        case 'first-apply': {
-          if (plan.idsToGhost.length > 0) {
-            await model.setOpacity(plan.idsToGhost, plan.opacity);
-          }
-          ghostAppliedLocalSetRef.current = nextGhostSet;
-          ghostAppliedRef.current = true;
-          ghostAppliedOpacityRef.current = plan.opacity;
-          requestFragmentUpdate('ghost-visibility');
-          return;
-        }
-        case 'delta': {
-          // Apply only ghost-set deltas and post restore/ghost writes together.
-          await Promise.all([
-            plan.newlyRestored.length > 0
-              ? model.resetOpacity(plan.newlyRestored)
-              : Promise.resolve(),
-            plan.newlyGhosted.length > 0
-              ? model.setOpacity(plan.newlyGhosted, plan.opacity)
-              : Promise.resolve(),
-          ]);
-          ghostAppliedLocalSetRef.current = nextGhostSet;
-          ghostAppliedOpacityRef.current = plan.opacity;
-          requestFragmentUpdate('ghost-visibility');
-          return;
-        }
-        case 'opacity-only-change': {
-          // Slider drag: same focus set, new opacity value.
-          await model.setOpacity(plan.ids, plan.opacity);
-          ghostAppliedOpacityRef.current = plan.opacity;
-          requestFragmentUpdate('ghost-visibility');
-          return;
-        }
-      }
+      const focusLocal = new Set(await expressToLocalIds(refs.model, [...focusExpressIds]));
+      if (isStale()) return;
+      const ghosted: number[] = [];
+      for (const id of allLocalIds) if (!focusLocal.has(id)) ghosted.push(id);
+      await coordinator.setOpacityLayer(
+        'opacity:selection-focus',
+        ghosted,
+        state.selectionGhostOpacity,
+        { urgency: 'frame', reason: 'opacity:selection-focus' },
+      );
     };
 
-    const scheduler = createRebuildScheduler({
+    const scheduler = createLatestAsyncScheduler({
       raf: (cb) => window.requestAnimationFrame(cb),
       cancelRaf: (handle) => window.cancelAnimationFrame(handle),
-      run: () => { void apply().catch(() => {}); },
+      run: applyCoordinatedFocusOpacity,
+      onError: (error) => {
+        if (import.meta.env.DEV) console.debug('[viewer] focus opacity scheduler failed', error);
+      },
     });
+    latestAsyncSchedulersRef.current.add(scheduler);
     const u1 = useStore.subscribe((s) => s.selectedElementId, scheduler.schedule);
     const u2 = useStore.subscribe((s) => s.highlightedIds, scheduler.schedule);
-    const u3 = useStore.subscribe((s) => s.selectionFocusMode, scheduler.schedule);
-    const u4 = useStore.subscribe((s) => s.selectionGhostOpacity, scheduler.schedule);
+    const u3 = useStore.subscribe((s) => s.selectedIds, scheduler.schedule);
+    const u4 = useStore.subscribe((s) => s.selectionFocusMode, scheduler.schedule);
+    const u5 = useStore.subscribe((s) => s.selectionGhostOpacity, scheduler.schedule);
     // Evaluate the current focus state on mount.
     scheduler.schedule();
 
     return () => {
-      u1(); u2(); u3(); u4();
-      scheduler.cancel();
+      u1(); u2(); u3(); u4(); u5();
+      const shutdown = scheduler.shutdown();
+      void shutdown.finally(() => latestAsyncSchedulersRef.current.delete(scheduler));
     };
   }, [viewerReady, expressToLocalIds, requestFragmentUpdate]);
 
   // Visibility changes (isolate / hide), coalesced into one rebuild per frame.
   useEffect(() => {
     if (!viewerReady) return;
-    let previousVisibilitySnapshot: VisibilitySnapshot = {
-      isolatedIds: [],
-      hiddenIds: [],
-      ghostModeOn: false,
-    };
-    // Local ids last written invisible by the hide/isolate branches; the
-    // delta plan writes only the symmetric difference on transitions.
-    let appliedInvisibleLocalSet = new Set<number>();
+    const applyCoordinatedVisibility = async (run: LatestAsyncRunContext) => {
+      const coordinator = renderStateCoordinatorRef.current;
+      const refs = viewerRef.current;
+      if (!coordinator || !refs || !useStore.getState().modelLoaded) return;
+      const isStale = () => (
+        run.isSuperseded()
+        || renderStateCoordinatorRef.current !== coordinator
+        || viewerRef.current !== refs
+      );
+      const state = useStore.getState();
+      let userHiddenLocal: number[] = [];
+      let isolateGhostLocal: number[] | null = null;
 
-    const getAllLocalIds = async (model: FRAGS.FragmentsModel) => {
-      const cached = allLocalIdsCacheRef.current;
-      if (cached) return cached;
-      const localIds = await model.getLocalIds();
-      allLocalIdsCacheRef.current = localIds;
-      return localIds;
-    };
-
-    const applyVisibility = async (
-      isolatedIds: number[],
-      hiddenIds: number[],
-      ghostOn: boolean,
-    ) => {
-      if (!viewerRef.current) return;
-      const { model } = viewerRef.current;
-
-      try {
-        if (!useStore.getState().modelLoaded) return;
-        const nextSnapshot: VisibilitySnapshot = {
-          isolatedIds,
-          hiddenIds,
-          ghostModeOn: ghostOn,
-        };
-        const work = decideVisibilityWork(previousVisibilitySnapshot, nextSnapshot);
-        if (work.skip) return;
-
-        // model.setVisible expects LOCAL ids. Translate Express IDs first.
-        const allLocalIds = await getAllLocalIds(model);
-
-        // Delta discipline for the hide/isolate/reset branches: write only
-        // the symmetric difference against the invisible set last written
-        // (planInvisibleSetTransition). The reset branch keeps a full-model
-        // repair write because visibility is co-owned with the frustum
-        // cullers and the engine Hider state.
-        const applyInvisibleSet = async (nextInvisible: Set<number>) => {
-          const plan = planInvisibleSetTransition(appliedInvisibleLocalSet, nextInvisible);
-          if (plan.toShow.length > 0) await model.setVisible(plan.toShow, true);
-          if (plan.toHide.length > 0) await model.setVisible(plan.toHide, false);
-          appliedInvisibleLocalSet = nextInvisible;
-        };
-
-        const clearIsolateGhostOpacity = async () => {
-          const plan = decideGhostWork({
-            shouldGhost: false,
-            ghostApplied: isolateGhostAppliedLocalSetRef.current.size > 0,
-            prevGhostSet: isolateGhostAppliedLocalSetRef.current,
-            nextGhostSet: new Set<number>(),
-            prevOpacity: isolateGhostAppliedOpacityRef.current,
-            nextOpacity: 0,
-          });
-          if (plan.kind === 'tear-down' && plan.idsToRestore.length > 0) {
-            await model.resetOpacity(plan.idsToRestore);
-          }
-          isolateGhostAppliedLocalSetRef.current = new Set();
-          isolateGhostAppliedOpacityRef.current = 0;
-        };
-
-        if (isolatedIds.length > 0) {
-          const isolatedLocal = await expressToLocalIds(model, isolatedIds);
-          const isoSet = new Set(isolatedLocal);
-          // Build the non-isolated set only for branches that need it.
-          const buildNonIsoLocalSet = () => {
-            const nonIso = new Set<number>();
-            for (const id of allLocalIds) {
-              if (!isoSet.has(id)) nonIso.add(id);
-            }
-            return nonIso;
-          };
-
-          if (ghostOn) {
-            // Isolate ghosting uses its own delta-tracked ghost set.
-            const nextGhostSet = new Set<number>();
-            for (const id of allLocalIds) {
-              if (!isoSet.has(id)) nextGhostSet.add(id);
-            }
-            const ghostApplied = isolateGhostAppliedLocalSetRef.current.size > 0;
-            const plan = decideGhostWork({
-              shouldGhost: true,
-              ghostApplied,
-              prevGhostSet: isolateGhostAppliedLocalSetRef.current,
-              nextGhostSet,
-              prevOpacity: isolateGhostAppliedOpacityRef.current,
-              nextOpacity: GHOST_ISOLATION_OPACITY,
-            });
-            switch (plan.kind) {
-              case 'skip':
-              case 'noop':
-                // Steady state: no renderer round-trip.
-                break;
-              case 'first-apply':
-                // idsToGhost already contains the non-isolated set.
-                if (plan.idsToGhost.length > 0) await model.setVisible(plan.idsToGhost, true);
-                if (isolatedLocal.length > 0) await model.setVisible(isolatedLocal, true);
-                if (plan.idsToGhost.length > 0) {
-                  await model.setOpacity(plan.idsToGhost, plan.opacity);
-                }
-                isolateGhostAppliedLocalSetRef.current = nextGhostSet;
-                isolateGhostAppliedOpacityRef.current = plan.opacity;
-                break;
-              case 'delta':
-                // Newly restored ids are now isolated.
-                if (plan.newlyRestored.length > 0) {
-                  await model.setVisible(plan.newlyRestored, true);
-                  await model.resetOpacity(plan.newlyRestored);
-                }
-                // Newly ghosted ids are now outside the isolate set.
-                if (plan.newlyGhosted.length > 0) {
-                  await model.setVisible(plan.newlyGhosted, true);
-                  await model.setOpacity(plan.newlyGhosted, plan.opacity);
-                }
-                isolateGhostAppliedLocalSetRef.current = nextGhostSet;
-                isolateGhostAppliedOpacityRef.current = plan.opacity;
-                break;
-              case 'opacity-only-change':
-                // Defensive case for future isolate-opacity controls.
-                await model.setOpacity(plan.ids, plan.opacity);
-                isolateGhostAppliedOpacityRef.current = plan.opacity;
-                break;
-              case 'tear-down':
-                // Defensive branch keeps the switch exhaustive.
-                if (plan.idsToRestore.length > 0) {
-                  await model.resetOpacity(plan.idsToRestore);
-                }
-                isolateGhostAppliedLocalSetRef.current = new Set();
-                isolateGhostAppliedOpacityRef.current = 0;
-                break;
-            }
-            // Ghost mode leaves the model visible, so reset the hidden-set tracker.
-            appliedInvisibleLocalSet = new Set();
-          } else {
-            // Normal mode: hide non-isolated elements by delta.
-            await clearIsolateGhostOpacity();
-            await applyInvisibleSet(buildNonIsoLocalSet());
-          }
-        } else if (hiddenIds.length > 0) {
-          const hiddenLocal = await expressToLocalIds(model, hiddenIds);
-          await clearIsolateGhostOpacity();
-          await applyInvisibleSet(new Set(hiddenLocal));
-        } else {
-          // Reset all visibility owners back to the all-visible baseline.
-          await clearIsolateGhostOpacity();
-          await model.setVisible(allLocalIds, true);
-          appliedInvisibleLocalSet = new Set();
+      if (state.isolatedIds.length > 0) {
+        let allLocalIds = allLocalIdsCacheRef.current;
+        if (!allLocalIds) {
+          allLocalIds = await refs.model.getLocalIds();
+          if (isStale()) return;
+          allLocalIdsCacheRef.current = allLocalIds;
         }
-        if (viewerRef.current?.model !== model || !useStore.getState().modelLoaded) return;
-        previousVisibilitySnapshot = {
-          isolatedIds: [...isolatedIds],
-          hiddenIds: [...hiddenIds],
-          ghostModeOn: ghostOn,
-        };
-        // Force a coalesced render kick for visibility and opacity writes.
-        requestFragmentUpdate('ghost-visibility');
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        if (msg.includes('Model not found')) return;
-        console.warn('Visibility update failed:', e);
+        const isolatedLocal = new Set(await expressToLocalIds(refs.model, state.isolatedIds));
+        if (isStale()) return;
+        if (isolatedLocal.size === 0) {
+          // Stale express IDs (for example after a revision) must never turn
+          // into "hide every local ID". Clear the renderer mask while keeping
+          // the semantic selection available for diagnostics.
+          if (import.meta.env.DEV) {
+            console.warn('[viewer] isolate request resolved to no local IDs; visibility left intact');
+          }
+        } else {
+          const outsideIsolation: number[] = [];
+          for (const id of allLocalIds) if (!isolatedLocal.has(id)) outsideIsolation.push(id);
+          if (state.ghostModeOn) isolateGhostLocal = outsideIsolation;
+          else userHiddenLocal = outsideIsolation;
+        }
+      } else if (state.hiddenIds.length > 0) {
+        userHiddenLocal = await expressToLocalIds(refs.model, state.hiddenIds);
+        if (isStale()) return;
       }
+
+      const hasUserVisibilityPolicy = state.isolatedIds.length > 0 || state.hiddenIds.length > 0;
+      if (hasUserVisibilityPolicy) {
+        // The patch below releases the actual culler masks atomically. Reset
+        // local ownership in the same turn so the next post-policy settle
+        // recomputes a fresh verdict instead of trusting stale flags.
+        storeyFrustumCullerRef.current?.releaseOwnership();
+        elementFrustumCullerRef.current?.releaseOwnership();
+        spatialTileCullerRef.current?.releaseOwnership();
+      }
+      if (isStale()) return;
+      await coordinator.update({
+        visibility: [
+          { layer: 'visibility:user', hiddenIds: userHiddenLocal },
+          // Culling is a performance hint, never a semantic override. Release
+          // stale masks atomically whenever the user hides or isolates.
+          ...(hasUserVisibilityPolicy
+            ? [
+                { layer: 'culler:storey', hiddenIds: null },
+                { layer: 'culler:element', hiddenIds: null },
+                { layer: 'culler:spatial-tiles', hiddenIds: null },
+              ]
+            : []),
+        ],
+        opacity: [{
+          layer: 'opacity:isolation-ghost',
+          ids: isolateGhostLocal,
+          opacity: GHOST_ISOLATION_OPACITY,
+        }],
+      }, {
+        urgency: 'visual',
+        reason: 'visibility:user',
+      });
     };
 
-    const scheduler = createRebuildScheduler({
+    const scheduler = createLatestAsyncScheduler({
       raf: (cb) => window.requestAnimationFrame(cb),
       cancelRaf: (handle) => window.cancelAnimationFrame(handle),
-      run: () => {
-        const state = useStore.getState();
-        void applyVisibility(state.isolatedIds, state.hiddenIds, state.ghostModeOn);
-      },
+      run: applyCoordinatedVisibility,
     });
+    latestAsyncSchedulersRef.current.add(scheduler);
+    const repairVisibility = async () => {
+      const coordinator = renderStateCoordinatorRef.current;
+      if (!coordinator) return;
+      await coordinator.repair({ urgency: 'visual', reason: 'visibility:repair' });
+    };
+    visibilityRepairRef.current = repairVisibility;
     const unsubIso = useStore.subscribe((state) => state.isolatedIds, scheduler.schedule);
     const unsubHide = useStore.subscribe((state) => state.hiddenIds, scheduler.schedule);
     const unsubGhost = useStore.subscribe((state) => state.ghostModeOn, scheduler.schedule);
     scheduler.schedule();
 
     return () => {
+      if (visibilityRepairRef.current === repairVisibility) {
+        visibilityRepairRef.current = null;
+      }
       unsubIso();
       unsubHide();
       unsubGhost();
-      scheduler.cancel();
+      const shutdown = scheduler.shutdown();
+      void shutdown.finally(() => latestAsyncSchedulersRef.current.delete(scheduler));
     };
   }, [viewerReady, expressToLocalIds, requestFragmentUpdate]);
 
@@ -1374,17 +1304,19 @@ export default function ViewerPanel({
   const clipControllerRef = useRef<ClipPlaneController | null>(null);
   const clipEdgesServiceRef = useRef<ClipEdgesService | null>(null);
   const sectionBoxEnabled = useStore((s) => s.sectionBoxEnabled);
-  const setSectionBoxEnabled = useStore((s) => s.setSectionBoxEnabled);
+  const sectionWorkspace = useStore((s) => s.sectionWorkspace);
+  const setSectionWorkspace = useStore((s) => s.setSectionWorkspace);
   const toggleSectionBox = useStore((s) => s.toggleSectionBox);
   const sectionBoxControllerRef = useRef<SectionBoxController | null>(null);
+  const sectionWorkspaceControllerRef = useRef<LatestSectionWorkspaceController | null>(null);
 
   useEffect(() => {
     if (!viewerReady || !viewerRef.current) return;
-    const { components, world, modelCenter } = viewerRef.current;
+    const { components, world, modelCenter, modelSize } = viewerRef.current;
     const clipper = components.get(OBC.Clipper);
     const edgesService = new ClipEdgesService(components, world as unknown as OBC.World);
     clipEdgesServiceRef.current = edgesService;
-    const controller = new ClipPlaneController(clipper, world as unknown as OBC.World, modelCenter, {
+    const controller = new ClipPlaneController(clipper, world as unknown as OBC.World, modelCenter, modelSize, {
       onOffsetChanged: (id, offset) => updateClipPlane(id, { offset }),
       clipEdgesService: edgesService,
     });
@@ -1400,15 +1332,43 @@ export default function ViewerPanel({
   // Section box controller for the viewer lifetime.
   useEffect(() => {
     if (!viewerReady || !viewerRef.current) return;
-    const { components, world } = viewerRef.current;
+    const { components, world, modelCenter } = viewerRef.current;
     const clipper = components.get(OBC.Clipper);
     const ctrl = new SectionBoxController(clipper, world as unknown as OBC.World);
+    const workspaceCtrl = new LatestSectionWorkspaceController({
+      apply: (definition, context) => {
+        if (context.isSuperseded()) return;
+        const boxDefinition = definition.box;
+        if (boxDefinition?.enabled) {
+          const [minX, minY, minZ, maxX, maxY, maxZ] = boxDefinition.bounds;
+          ctrl.enable(new THREE.Box3(
+            new THREE.Vector3(minX, minY, minZ),
+            new THREE.Vector3(maxX, maxY, maxZ),
+          ));
+          clipper.enabled = true;
+        } else {
+          ctrl.disable();
+        }
+        // Workspace planes are durable world-space definitions; the clip-plane
+        // sync effect consumes the reconciled store planes and re-enables the
+        // shared clipper, so no direct controller write happens here.
+        useStore.getState().applyWorkspaceClipPlanes(toRelativeClipPlaneStates(
+          definition,
+          [modelCenter.x, modelCenter.y, modelCenter.z],
+        ));
+        requestFragmentUpdate('manual', false, 'camera');
+      },
+      onError: (error) => console.warn('Section workspace apply failed:', error),
+    });
     sectionBoxControllerRef.current = ctrl;
+    sectionWorkspaceControllerRef.current = workspaceCtrl;
     return () => {
+      void workspaceCtrl.shutdown();
       ctrl.dispose();
       sectionBoxControllerRef.current = null;
+      sectionWorkspaceControllerRef.current = null;
     };
-  }, [viewerReady]);
+  }, [viewerReady, requestFragmentUpdate]);
 
   useEffect(() => {
     const controller = clipControllerRef.current;
@@ -1439,22 +1399,49 @@ export default function ViewerPanel({
     };
   }, [viewerReady, sectionBoxEnabled, requestFragmentUpdate]);
 
-  // React to sectionBoxEnabled store changes - enable or disable the 6-plane crop.
+  // Apply the durable section workspace. The bounds that produced a selection
+  // or storey crop remain authoritative while the box is toggled, so enabling
+  // can never replace them with the full-model AABB.
   useEffect(() => {
-    const ctrl = sectionBoxControllerRef.current;
+    const workspaceCtrl = sectionWorkspaceControllerRef.current;
     const refs = viewerRef.current;
-    if (!ctrl || !refs) return;
-    if (sectionBoxEnabled) {
-      // Compute an AABB from the loaded model's center + size.
+    if (!workspaceCtrl || !refs) return;
+
+    let workspace = sectionWorkspace;
+    if (sectionBoxEnabled && !workspace?.box) {
       const { modelCenter: c, modelSize: s } = refs;
       const half = s.clone().multiplyScalar(0.5);
-      const box = new THREE.Box3(c.clone().sub(half), c.clone().add(half));
-      ctrl.enable(box);
-      refs.components.get(OBC.Clipper).enabled = true;
-    } else {
-      ctrl.disable();
+      const min = c.clone().sub(half);
+      const max = c.clone().add(half);
+      workspace = createSectionWorkspace({
+        id: 'model-bounds',
+        name: 'Full model section box',
+        source: 'custom',
+        planes: [],
+        box: { enabled: true, bounds: [min.x, min.y, min.z, max.x, max.y, max.z] },
+      });
+      setSectionWorkspace(workspace);
     }
-  }, [sectionBoxEnabled]);
+
+    const desired = workspace
+      ? createSectionWorkspace({
+          id: workspace.id,
+          name: workspace.name,
+          source: workspace.source,
+          planes: workspace.planes,
+          box: workspace.box
+            ? { ...workspace.box, enabled: sectionBoxEnabled }
+            : null,
+        })
+      : createSectionWorkspace({
+          id: 'section-off',
+          name: 'Section box off',
+          source: 'custom',
+          planes: [],
+          box: null,
+        });
+    void workspaceCtrl.setDefinition(desired).catch(() => {});
+  }, [sectionBoxEnabled, sectionWorkspace, setSectionWorkspace]);
 
   // Alt+B toggles the section box.
   useEffect(() => {
@@ -1478,8 +1465,12 @@ export default function ViewerPanel({
       const active = document.activeElement;
       if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
       e.preventDefault();
-      const { selectedElementId, clipToElementFn } = useStore.getState();
-      if (selectedElementId != null && clipToElementFn) clipToElementFn(selectedElementId);
+      const { selectedElementId, selectedIds, clipToElementFn, clipToElementsFn } = useStore.getState();
+      if (selectedIds.length > 0 && clipToElementsFn) {
+        clipToElementsFn(selectedIds, `${selectedIds.length} selected elements`);
+      } else if (selectedElementId != null && clipToElementFn) {
+        clipToElementFn(selectedElementId);
+      }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
@@ -1489,32 +1480,56 @@ export default function ViewerPanel({
   const measurementMode = useStore((s) => s.measurement.mode);
   const measurementUnit = useStore((s) => s.measurement.unit);
   const setMeasurementMode = useStore((s) => s.setMeasurementMode);
+  const editMode = useStore((s) => s.editMode);
+  const editModeAvailable = useStore((s) => s.editModeAvailable);
+  const pickPlaneMode = useStore((s) => s.pickPlaneMode);
   const measurementControllerRef = useRef<MeasurementController | null>(null);
+  const clearanceFirstTriangleRef = useRef<Triangle3 | null>(null);
   const [measurementSnapshot, setMeasurementSnapshot] = useState<MeasurementSnapshot | null>(null);
 
   /** Active furnishing merge, disposed on toggle-off. */
-  const furnishingMergeRef = useRef<FurnishingMergeResult | null>(null);
+  const furnishingMergeLifecycleRef = useRef<FurnishingMergeLifecycle | null>(null);
+  const furnishingMergeShutdownRef = useRef<Promise<void> | null>(null);
 
   /** Per-storey AABB frustum culler. */
   const storeyFrustumCullerRef = useRef<StoreyFrustumCuller | null>(null);
   const elementFrustumCullerRef = useRef<ElementFrustumCuller | null>(null);
-  /** GPU color-coded model picker used as a fast miss guard before raycast. */
-  const fastPickerRef = useRef<OBC.FastModelPicker | null>(null);
-
+  const spatialTileCullerRef = useRef<SpatialTileVisibilityController | null>(null);
+  const storeyCullerEpochRef = useRef(0);
+  const elementCullerEpochRef = useRef(0);
+  const spatialTileCullerEpochRef = useRef(0);
+  const storeyCullerTransitionRef = useRef<Promise<void>>(Promise.resolve());
+  const elementCullerTransitionRef = useRef<Promise<void>>(Promise.resolve());
+  const spatialTileCullerTransitionRef = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
     if (!viewerReady || !viewerRef.current) return;
     const { world, model } = viewerRef.current;
     const scene = world.scene.three as THREE.Scene;
+    // Per-move cursor updates go through the measurementTipBridge, not React.
+    // Only structural changes (mode, a point placed, a measurement committed
+    // or removed) reach the snapshot state, so hover sweeps while measuring
+    // stop reconciling the whole viewer tree.
+    const lastShape = { mode: 'off', pending: -1, committed: -1 };
     const controller = new MeasurementController(scene, model, {
-      onChange: (snap) => setMeasurementSnapshot(snap),
+      onChange: (snap) => {
+        if (
+          snap.mode === lastShape.mode
+          && snap.pending.length === lastShape.pending
+          && snap.committed.length === lastShape.committed
+        ) return;
+        lastShape.mode = snap.mode;
+        lastShape.pending = snap.pending.length;
+        lastShape.committed = snap.committed.length;
+        setMeasurementSnapshot(snap);
+      },
     });
     measurementControllerRef.current = controller;
-    // Seed the HUD with an empty snapshot.
     setMeasurementSnapshot(controller.snapshot());
     return () => {
       controller.dispose();
       measurementControllerRef.current = null;
       setMeasurementSnapshot(null);
+      setMeasurementTip(null);
       // Reset store mode so the next mount does not inherit measurement clicks.
       useStore.getState().setMeasurementMode('off');
     };
@@ -1523,18 +1538,67 @@ export default function ViewerPanel({
   useEffect(() => {
     const controller = measurementControllerRef.current;
     if (!controller) return;
+    clearanceFirstTriangleRef.current = null;
     controller.setMode(measurementMode);
+    if (measurementMode === 'off') setMeasurementTip(null);
   }, [measurementMode]);
 
+  // B5 mount point: wall drawing tool (Edit mode). ViewerPanel only owns the
+  // instance lifetime - same seam as the MeasurementController above. The ref
+  // feeds the pointer-up click hub; the state feeds the EditToolbar overlay.
+  const wallDrawControllerRef = useRef<WallDrawController | null>(null);
+  const [wallDrawController, setWallDrawController] = useState<WallDrawController | null>(null);
+  useEffect(() => {
+    if (!STRUCTURAL_EDIT_ENABLED) return;
+    if (!viewerReady || !viewerRef.current || !editModeAvailable || !editMode) return;
+    const { world } = viewerRef.current;
+    const controller = new WallDrawController({
+      scene: world.scene.three as THREE.Scene,
+      dom: world.renderer!.three.domElement,
+      getCamera: () => world.camera.three as THREE.Camera,
+      onPreviewChange: () => requestViewerRender(80),
+      onArm: () => {
+        const state = useStore.getState();
+        state.setMeasurementMode('off');
+        state.setPickPlaneMode(false);
+      },
+    });
+    wallDrawControllerRef.current = controller;
+    setWallDrawController(controller);
+    return () => {
+      controller.dispose();
+      wallDrawControllerRef.current = null;
+      setWallDrawController(null);
+    };
+  }, [viewerReady, editModeAvailable, editMode, requestViewerRender]);
+
+  useEffect(() => {
+    if (measurementMode !== 'off') wallDrawControllerRef.current?.disarm();
+  }, [measurementMode]);
+
+  useEffect(() => {
+    if (pickPlaneMode) wallDrawControllerRef.current?.disarm();
+  }, [pickPlaneMode]);
+
   // Escape cancels pending measurement points, then exits the tool.
+  // Enter closes an area polygon once it has three or more vertices.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
       const ctrl = measurementControllerRef.current;
       if (!ctrl || ctrl.getMode() === 'off') return;
+      if (e.key === 'Enter') {
+        const snap = ctrl.snapshot();
+        if (snap.mode === 'area' && snap.pending.length >= 3) {
+          e.stopPropagation();
+          ctrl.commit();
+        }
+        return;
+      }
+      if (e.key !== 'Escape') return;
       const snap = ctrl.snapshot();
       if (snap.pending.length > 0) {
         e.stopPropagation();
+        clearanceFirstTriangleRef.current = null;
         ctrl.cancel();
       } else {
         e.stopPropagation();
@@ -1564,6 +1628,7 @@ export default function ViewerPanel({
   const gridVisible = useStore((s) => s.gridVisible);
   // Frustum-culling master switch from Settings > Performance.
   const frustumCullingEnabled = useStore((s) => s.frustumCullingEnabled);
+  const modelFingerprint = useStore((s) => s.modelFingerprint);
   useEffect(() => {
     if (!viewerReady) return;
     const gridObj = viewerRef.current?.grid?.three;
@@ -1573,27 +1638,153 @@ export default function ViewerPanel({
   }, [viewerReady, gridVisible]);
 
   // Furnishing merge replaces furnishing meshes with one static mesh.
-  const furnishingMerged = useStore((s) => s.furnishingMerged);
   useEffect(() => {
     if (!viewerReady || !viewerRef.current) return;
     const { model, world } = viewerRef.current;
     const scene = world.scene.three as THREE.Scene;
+    let active = true;
+    const lifecycle = new FurnishingMergeLifecycle({
+      apply: (signal) => applyFurnishingMerge(
+        model,
+        scene,
+        signal,
+        furnishingVisibilityRef.current ?? model,
+      ),
+      afterUnmerge: async () => {
+        if (!active) return;
+        // Furnishing disposal restores its source ids directly. First release
+        // app-culler ownership so their autoCulled flags cannot claim ids that
+        // were just made visible, then rebuild the authoritative user policy.
+        const storeyCuller = storeyFrustumCullerRef.current;
+        const elementCuller = elementFrustumCullerRef.current;
+        const spatialTileCuller = spatialTileCullerRef.current;
+        if (spatialTileCuller?.isBuilt) {
+          await spatialTileCuller.clearCull(spatialTileVisibilityRef.current ?? model);
+        } else if (storeyCuller?.isBuilt) {
+          await storeyCuller.clearCull(model, storeyCullerVisibilityRef.current ?? model);
+        }
+        if (!spatialTileCuller?.isBuilt && elementCuller?.isBuilt) {
+          await elementCuller.clearCull(model, elementCullerVisibilityRef.current ?? model);
+        }
+        await visibilityRepairRef.current?.();
 
-    if (furnishingMerged) {
-      void applyFurnishingMerge(model, scene).then((result) => {
-        furnishingMergeRef.current = result;
-        // Flush immediately after the merge visibility changes.
+        const state = useStore.getState();
+        let culledStoreys = 0;
+        let culledElements = 0;
+        if (state.isolatedIds.length === 0 && state.hiddenIds.length === 0) {
+          const camera = world.camera.three as THREE.Camera;
+          if (spatialTileCuller?.isBuilt) {
+            // Mirror getSpatialTileViewOptions: the selection's tile stays
+            // pinned through this idle hide pass.
+            const selectedExpressIds = new Set<number>([
+              ...state.selectedIds,
+              ...(state.selectedElementId == null ? [] : [state.selectedElementId]),
+            ]);
+            const pinnedLocalIds = new Set<number>();
+            for (const expressId of selectedExpressIds) {
+              const localId = expressToLocalCacheRef.current.get(expressId)
+                ?? modelService.getRememberedLocalId(expressId)
+                ?? undefined;
+              if (localId !== undefined) pinnedLocalIds.add(localId);
+            }
+            const result = await spatialTileCuller.tick(
+              camera,
+              spatialTileVisibilityRef.current ?? model,
+              {
+                pinnedLocalIds,
+                viewportHeightPx: world.renderer?.three.domElement.clientHeight
+                  || containerRef.current?.clientHeight
+                  || window.innerHeight,
+              },
+            );
+            culledElements = result.hiddenElementCount;
+          } else if (storeyCuller?.isBuilt) {
+            culledStoreys = await storeyCuller.tick(
+              camera,
+              model,
+              storeyCullerVisibilityRef.current ?? model,
+            );
+          }
+          if (!spatialTileCuller?.isBuilt && elementCuller?.isBuilt) {
+            const ownedByStorey = storeyCuller?.isBuilt
+              ? new Set(storeyCuller.getCulledMemberIds())
+              : undefined;
+            culledElements = await elementCuller.tick(
+              camera,
+              model,
+              ownedByStorey,
+              elementCullerVisibilityRef.current ?? model,
+            );
+          }
+        }
+        if (spatialTileCuller?.isBuilt || storeyCuller?.isBuilt || elementCuller?.isBuilt) {
+          useStore.getState().updatePerfMetrics({ culledStoreys, culledElements });
+        }
+
+        // Keep all repairs inside the serialized lifecycle. A new merge cannot
+        // start until culling, visibility, and durable highlight layers settle.
+        rebuildSchedulerRef.current?.schedule();
         requestFragmentUpdate('manual');
-      });
-    } else {
-      if (furnishingMergeRef.current) {
-        void furnishingMergeRef.current.dispose().then(() => {
-          furnishingMergeRef.current = null;
-          requestFragmentUpdate('manual');
-        });
+      },
+      onStateChange: () => {
+        if (!active) return;
+        // A merge/unmerge swaps fragments under an unchanged camera, which
+        // the exact-hover/prefetch reuse guards cannot detect on their own.
+        pointerPickCachesInvalidateRef.current?.();
+        // Keep an unstyled LOD proxy out of the scene for the whole merge /
+        // unmerge transition, not just while the persisted toggle is true.
+        navigationLodAppearanceRefreshRef.current?.();
+        requestFragmentUpdate('manual');
+      },
+    });
+    furnishingMergeLifecycleRef.current = lifecycle;
+    const canMergeForState = (state: ReturnType<typeof useStore.getState>) => (
+      canUseFurnishingMerge({
+        enabled: state.furnishingMerged,
+        isolatedCount: state.isolatedIds.length,
+        hiddenCount: state.hiddenIds.length,
+        ghostModeOn: state.ghostModeOn,
+        selectedElementId: state.selectedElementId,
+        selectedCount: state.selectedIds.length,
+        highlightedCount: state.highlightedIds.length,
+        colourBy: state.colourBy,
+        colourLayerCount: Object.keys(state.colourLayers).length,
+        hoverHighlightEnabled: state.hoverHighlightEnabled,
+        measurementMode: state.measurement.mode,
+      })
+    );
+    const reconcileDesiredState = (enabled: boolean) => {
+      void lifecycle.setDesired(enabled && !exactPickLeaseRef.current?.active);
+    };
+    const refreshDesiredState = () => {
+      reconcileDesiredState(canMergeForState(useStore.getState()));
+    };
+    furnishingMergeDesiredRefreshRef.current = refreshDesiredState;
+    const unsubscribe = useStore.subscribe(
+      canMergeForState,
+      reconcileDesiredState,
+      { fireImmediately: true },
+    );
+    return () => {
+      active = false;
+      unsubscribe();
+      if (furnishingMergeDesiredRefreshRef.current === refreshDesiredState) {
+        furnishingMergeDesiredRefreshRef.current = null;
       }
-    }
-  }, [viewerReady, furnishingMerged, requestFragmentUpdate]);
+      if (furnishingMergeLifecycleRef.current === lifecycle) {
+        furnishingMergeLifecycleRef.current = null;
+      }
+      const shutdown = lifecycle.shutdown();
+      furnishingMergeShutdownRef.current = shutdown;
+      const clearShutdownRef = () => {
+        if (furnishingMergeShutdownRef.current === shutdown) {
+          furnishingMergeShutdownRef.current = null;
+        }
+      };
+      void shutdown.then(clearShutdownRef, clearShutdownRef);
+      navigationLodAppearanceRefreshRef.current?.();
+    };
+  }, [viewerReady, requestFragmentUpdate]);
 
   // Storey AABB frustum culler builds when model and tree are ready.
   const spatialTree = useStore((s) => s.spatialTree);
@@ -1630,25 +1821,10 @@ export default function ViewerPanel({
   useEffect(() => {
     if (!viewerReady || !viewerRef.current || !spatialTree) return;
     const { model } = viewerRef.current;
-
-    // Dispose the previous culler and restore any hidden storeys.
+    const epoch = ++storeyCullerEpochRef.current;
     const prev = storeyFrustumCullerRef.current;
-    if (prev) {
-      // Repaint after clearCull restores visibility.
-      void prev.dispose(model).then(() => requestFragmentUpdate('culler-show'));
-      storeyFrustumCullerRef.current = null;
-    }
-
-    // Master switch from Settings > Performance.
-    if (!frustumCullingEnabled) return;
-
+    storeyFrustumCullerRef.current = null;
     const storeyNodes = extractStoreyNodes(spatialTree);
-    if (storeyNodes.length < 2) {
-      // Single-storey or no storeys - culling has no benefit.
-      return;
-    }
-
-    // Size gate keeps storey culling off for models where it adds no benefit.
     const totalLeaves = collectLeavesUnder(spatialTree).length;
     const policy = decideCullerPolicy({
       navigationState: 'idle',
@@ -1659,15 +1835,29 @@ export default function ViewerPanel({
       elementCullerBuilt: true,
       autoCulledCount: 0,
     });
-    if (!policy.storeyCullerEnabled) return;
-
-    // Padding keeps storey-edge geometry stable during small pans.
-    const culler = new StoreyFrustumCuller({ padFraction: 0.03 });
-    storeyFrustumCullerRef.current = culler;
-
-    // Fire-and-forget async build; resolved ids reuse the express-to-local cache.
-    void culler.build(model, storeyNodes, expressToLocalCacheRef.current)
-      .catch(() => {/* build failure is silent */});
+    const shouldBuild = frustumCullingEnabled
+      && storeyNodes.length >= 2
+      && policy.storeyCullerEnabled;
+    const install = async () => {
+      if (prev) {
+        await prev.dispose(model, storeyCullerVisibilityRef.current ?? model).catch(() => {});
+      }
+      if (!shouldBuild || epoch !== storeyCullerEpochRef.current) return;
+      const culler = new StoreyFrustumCuller({ padFraction: 0.03 });
+      storeyFrustumCullerRef.current = culler;
+      await culler.build(model, storeyNodes, expressToLocalCacheRef.current).catch(() => {});
+      if (epoch !== storeyCullerEpochRef.current) {
+        if (storeyFrustumCullerRef.current === culler) storeyFrustumCullerRef.current = null;
+        await culler.dispose();
+      }
+    };
+    const transition = storeyCullerTransitionRef.current
+      .catch(() => {})
+      .then(install);
+    storeyCullerTransitionRef.current = transition;
+    return () => {
+      if (storeyCullerEpochRef.current === epoch) storeyCullerEpochRef.current += 1;
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewerReady, spatialTree, frustumCullingEnabled]);
 
@@ -1675,19 +1865,9 @@ export default function ViewerPanel({
   useEffect(() => {
     if (!viewerReady || !viewerRef.current || !spatialTree) return;
     const { model } = viewerRef.current;
-
-    // Dispose the previous culler and restore any hidden elements.
+    const epoch = ++elementCullerEpochRef.current;
     const prev = elementFrustumCullerRef.current;
-    if (prev) {
-      // Repaint after clearCull restores visibility (see storey effect).
-      void prev.dispose(model).then(() => requestFragmentUpdate('culler-show'));
-      elementFrustumCullerRef.current = null;
-    }
-
-    // Master switch from Settings > Performance.
-    if (!frustumCullingEnabled) return;
-
-    // Skip element culling for small models where the visibility churn costs more.
+    elementFrustumCullerRef.current = null;
     const allExpressIds = collectLeavesUnder(spatialTree);
     const policy = decideCullerPolicy({
       navigationState: 'idle',
@@ -1698,24 +1878,241 @@ export default function ViewerPanel({
       elementCullerBuilt: true,
       autoCulledCount: 0,
     });
-    if (!policy.elementCullerEnabled) return;
-
-    // Padding keeps frustum-edge elements from flapping visible/hidden.
-    const culler = new ElementFrustumCuller({ padFraction: 0.03 });
-    elementFrustumCullerRef.current = culler;
-
-    // Convert leaf express ids through the cache-backed resolver, then build.
+    const shouldBuild = frustumCullingEnabled && policy.elementCullerEnabled;
     const buildAsync = async () => {
+      if (prev) {
+        await prev.dispose(model, elementCullerVisibilityRef.current ?? model).catch(() => {});
+      }
+      if (!shouldBuild || epoch !== elementCullerEpochRef.current) return;
+      const culler = new ElementFrustumCuller({ padFraction: 0.03 });
+      elementFrustumCullerRef.current = culler;
       try {
         const localIds = await expressToLocalIds(model, allExpressIds);
-        if (localIds.length > 0) {
+        if (localIds.length > 0 && epoch === elementCullerEpochRef.current) {
           await culler.build(model, localIds);
         }
       } catch { /* build failure is silent */ }
+      if (epoch !== elementCullerEpochRef.current) {
+        if (elementFrustumCullerRef.current === culler) elementFrustumCullerRef.current = null;
+        await culler.dispose();
+      }
     };
-    void buildAsync();
+    const transition = elementCullerTransitionRef.current
+      .catch(() => {})
+      .then(buildAsync);
+    elementCullerTransitionRef.current = transition;
+    return () => {
+      if (elementCullerEpochRef.current === epoch) elementCullerEpochRef.current += 1;
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewerReady, spatialTree, frustumCullingEnabled]);
+
+  // Prefer backend-preprocessed, geometry-derived tiles when available. This
+  // replaces the client geometry scan above for large models, but keeps those
+  // cullers as a safe fallback while upload/AABB preprocessing is still warm.
+  useEffect(() => {
+    const epoch = ++spatialTileCullerEpochRef.current;
+    const previous = spatialTileCullerRef.current;
+    spatialTileCullerRef.current = null;
+    const abort = new AbortController();
+    const model = viewerRef.current?.model ?? null;
+    const shouldBuild = viewerReady
+      && !!model
+      && !BROWSER_ONLY
+      && frustumCullingEnabled
+      && !!modelFingerprint;
+
+    const waitForRetry = (delayMs: number) => new Promise<void>((resolve) => {
+      if (abort.signal.aborted) {
+        resolve();
+        return;
+      }
+      const timer = window.setTimeout(done, delayMs);
+      function done() {
+        window.clearTimeout(timer);
+        abort.signal.removeEventListener('abort', done);
+        resolve();
+      }
+      abort.signal.addEventListener('abort', done, { once: true });
+    });
+
+    const install = async () => {
+      if (previous) {
+        await previous.dispose(spatialTileVisibilityRef.current ?? undefined).catch(() => {});
+      }
+      if (!shouldBuild || !model || abort.signal.aborted
+        || epoch !== spatialTileCullerEpochRef.current) return;
+
+      const retryDelays = [750, 1_500, 3_000, 5_000, 8_000, 8_000, 8_000];
+      for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+        if (abort.signal.aborted || epoch !== spatialTileCullerEpochRef.current) return;
+        try {
+          const dto = await getSpatialTileManifest(4, { signal: abort.signal });
+          const currentFingerprint = useStore.getState().modelFingerprint;
+          // Placement points are not conservative bounds. Wait for the real
+          // geometry AABB sidecar rather than risking false-negative culls.
+          if (dto.aabb_source !== 'real' || dto.source_sha256 !== currentFingerprint) {
+            if (attempt < retryDelays.length) await waitForRetry(retryDelays[attempt]);
+            continue;
+          }
+
+          const expressIds = [...new Set(dto.tiles.flatMap((tile) => tile.element_ids))];
+          await expressToLocalIds(model, expressIds);
+          if (abort.signal.aborted || epoch !== spatialTileCullerEpochRef.current) return;
+
+          // IfcOpenShell reports IFC world coordinates, while a fragment may
+          // be axis-converted or auto-coordinated. Keep backend membership but
+          // prove each active tile's bounds in the mounted renderer space.
+          const rebased = await rebaseSpatialTileManifestBounds(
+            dto,
+            expressToLocalCacheRef.current,
+            async (localIds) => {
+              const box = await model.getMergedBox([...localIds]);
+              if (!box || box.isEmpty()) return null;
+              return [
+                box.min.x, box.min.y, box.min.z,
+                box.max.x, box.max.y, box.max.z,
+              ];
+            },
+            {
+              batchSize: 8,
+              isCancelled: () => (
+                abort.signal.aborted || epoch !== spatialTileCullerEpochRef.current
+              ),
+              yieldAfterBatch: () => new Promise<void>((resolve) => window.setTimeout(resolve, 0)),
+            },
+          );
+          if (abort.signal.aborted || epoch !== spatialTileCullerEpochRef.current) return;
+          const adapted = adaptSpatialTileManifest(rebased.manifest, {
+            mountedFingerprint: currentFingerprint,
+            expressToLocal: expressToLocalCacheRef.current,
+          });
+          const controller = new SpatialTileVisibilityController(
+            new SpatialTileLodService(adapted.manifest),
+            { padFraction: 0.03 },
+          );
+          if (!controller.isBuilt) return;
+
+          // One visibility owner at a time. Let any fallback build settle,
+          // clear its mask, and then install the preprocessed tile controller.
+          await Promise.all([
+            storeyCullerTransitionRef.current.catch(() => {}),
+            elementCullerTransitionRef.current.catch(() => {}),
+          ]);
+          if (abort.signal.aborted || epoch !== spatialTileCullerEpochRef.current) {
+            await controller.dispose();
+            return;
+          }
+          const storey = storeyFrustumCullerRef.current;
+          const element = elementFrustumCullerRef.current;
+          storeyFrustumCullerRef.current = null;
+          elementFrustumCullerRef.current = null;
+          if (storey) {
+            await storey.dispose(model, storeyCullerVisibilityRef.current ?? model).catch(() => {});
+          }
+          if (element) {
+            await element.dispose(model, elementCullerVisibilityRef.current ?? model).catch(() => {});
+          }
+
+          spatialTileCullerRef.current = controller;
+          try {
+            const state = useStore.getState();
+            if (state.isolatedIds.length === 0 && state.hiddenIds.length === 0) {
+              const selectedExpressIds = new Set<number>([
+                ...state.selectedIds,
+                ...(state.selectedElementId == null ? [] : [state.selectedElementId]),
+              ]);
+              const pinnedLocalIds = new Set<number>();
+              for (const expressId of selectedExpressIds) {
+                const localId = expressToLocalCacheRef.current.get(expressId);
+                if (localId !== undefined) pinnedLocalIds.add(localId);
+              }
+              const viewportHeightPx = viewerRef.current?.world.renderer?.three.domElement.clientHeight
+                || containerRef.current?.clientHeight
+                || window.innerHeight;
+              const result = await controller.tick(
+                viewerRef.current!.world.camera.three as THREE.Camera,
+                spatialTileVisibilityRef.current ?? model,
+                { pinnedLocalIds, viewportHeightPx },
+              );
+              useStore.getState().updatePerfMetrics({
+                culledStoreys: 0,
+                culledElements: result.hiddenElementCount,
+              });
+            }
+          } catch (tickError) {
+            // The controller is installed and owns the visibility layer; the
+            // next camera settle re-applies the hide pass. Retrying the whole
+            // install would orphan this controller's hides in the shared layer.
+            if (import.meta.env.DEV) {
+              console.debug('[viewer] initial spatial tile tick deferred', tickError);
+            }
+          }
+          useStore.getState().logActivity({
+            kind: 'info',
+            summary: `Spatial viewer index ready: ${controller.tileCount} tiles, ${adapted.mappedElements} stable elements.`,
+            detail: adapted.unresolvedExpressIds.length > 0 || rebased.failedExpressIds.length > 0
+              ? `${new Set([
+                  ...adapted.unresolvedExpressIds,
+                  ...rebased.failedExpressIds,
+                ]).size} elements remain conservatively resident.`
+              : 'Geometry remains mounted; visibility and LOD decisions are state-only.',
+          });
+          return;
+        } catch (error) {
+          if (abort.signal.aborted) return;
+          if (attempt >= retryDelays.length) {
+            if (import.meta.env.DEV) {
+              console.debug('[viewer] preprocessed spatial tiles unavailable; retaining client culler', error);
+            }
+            return;
+          }
+          await waitForRetry(retryDelays[attempt]);
+        }
+      }
+    };
+
+    const transition = spatialTileCullerTransitionRef.current
+      .catch(() => {})
+      .then(install);
+    spatialTileCullerTransitionRef.current = transition;
+    return () => {
+      abort.abort();
+      if (spatialTileCullerEpochRef.current === epoch) spatialTileCullerEpochRef.current += 1;
+    };
+  }, [
+    viewerReady,
+    frustumCullingEnabled,
+    modelFingerprint,
+    expressToLocalIds,
+  ]);
+
+  // Tree/AI selection can target a tile that is currently outside the camera
+  // frustum. Reveal its exact LOD0 immediately and keep highlight state intact.
+  useEffect(() => useStore.subscribe(
+    (state) => ({
+      selectedElementId: state.selectedElementId,
+      selectedIds: state.selectedIds,
+    }),
+    ({ selectedElementId, selectedIds }) => {
+      const controller = spatialTileCullerRef.current;
+      const target = spatialTileVisibilityRef.current;
+      const model = viewerRef.current?.model;
+      if (!controller?.isBuilt || !target || !model) return;
+      const expressIds = [...new Set([
+        ...selectedIds,
+        ...(selectedElementId == null ? [] : [selectedElementId]),
+      ])];
+      if (expressIds.length === 0) return;
+      void expressToLocalIds(model, expressIds)
+        .then((localIds) => controller.revealLocalIds(new Set(localIds), target))
+        .catch(() => {});
+    },
+    { equalityFn: (a, b) => (
+      a.selectedElementId === b.selectedElementId
+      && a.selectedIds === b.selectedIds
+    ) },
+  ), [expressToLocalIds]);
 
   const computeFitDistance = useCallback(
     (
@@ -1778,6 +2175,35 @@ export default function ViewerPanel({
     if (!container) return;
 
     let disposed = false;
+    const contextMenuPickGuard = createContextMenuPickGuard();
+    const pendingRaycasts = new Set<Promise<unknown>>();
+    const trackRaycast = <T,>(operation: Promise<T>): Promise<T> => {
+      pendingRaycasts.add(operation);
+      const release = () => pendingRaycasts.delete(operation);
+      void operation.then(release, release);
+      return operation;
+    };
+    const exactPickLease = createPickLeaseCoordinator((active) => {
+      if (disposed || exactPickLeaseRef.current !== exactPickLease) return;
+      if (active) {
+        // Restore the authoritative full fragments before any worker raycast.
+        navigationLodAppearanceRefreshRef.current?.();
+        return;
+      }
+      // The awaiting click continuation publishes selection in a microtask.
+      // Re-evaluate merge/LOD in the next task so durable appearance wins and
+      // another overlapping pick can acquire its lease first.
+      window.setTimeout(() => {
+        if (
+          disposed
+          || exactPickLeaseRef.current !== exactPickLease
+          || exactPickLease.active
+        ) return;
+        navigationLodAppearanceRefreshRef.current?.();
+        furnishingMergeDesiredRefreshRef.current?.();
+      }, 0);
+    });
+    exactPickLeaseRef.current = exactPickLease;
     const components = new OBC.Components();
     const initStart = performance.now();
     let perfSamplingCleanup: (() => void) | null = null;
@@ -1786,9 +2212,26 @@ export default function ViewerPanel({
     let viewHelperCleanup: (() => void) | null = null;
     let pixelRatioCleanup: (() => void) | null = null;
     let renderOnDemandCleanup: (() => void) | null = null;
+    let contextRecoveryCleanup: (() => void) | null = null;
     let zFightingCleanup: (() => void) | null = null;
     let fragmentUpdateScheduler: FragmentUpdateScheduler | null = null;
+    let devPickAtHook: ((x: number, y: number) => Promise<{
+      expressId: number;
+      localId: number;
+    } | null>) | null = null;
+    let devSnapAtHook: ((x: number, y: number, thresholdPx?: number) => Promise<{
+      hitClasses: string[];
+      edgeHits: number;
+      snap: {
+        kind: string;
+        source: string;
+        exact: boolean;
+        distancePx: number;
+        point: { x: number; y: number; z: number };
+      } | null;
+    }>) | null = null;
     let hoverIntentTimer: number | null = null;
+    let globalSlowTimer: number | null = null;
     // Unsubscribe for the viewer-performance-mode listener.
     let interactionQualityUnsub: (() => void) | null = null;
     const startupState = useStore.getState();
@@ -1813,7 +2256,7 @@ export default function ViewerPanel({
 
     async function init() {
       // Show slow-load feedback after 20 s on any loading path.
-      const globalSlowTimer = window.setTimeout(() => {
+      globalSlowTimer = window.setTimeout(() => {
         if (!disposed) setLoadingSlow(true);
       }, 20_000);
       try {
@@ -1839,6 +2282,7 @@ export default function ViewerPanel({
           stencil: false,
           preserveDrawingBuffer: false,
         });
+        world.renderer.showLogo = false;
         try {
           const ppRenderer = world.renderer as unknown as OBCF.PostproductionRenderer;
           // Keep postprocessing manual-mode churn off when the composer is disabled.
@@ -1856,29 +2300,16 @@ export default function ViewerPanel({
               needsUpdate: boolean;
             };
             onDemandRenderer.mode = OBC.RendererMode.MANUAL;
-            let renderUntilTs = performance.now() + 1500; // initial paint window
-            renderKick = (ms = 300) => {
-              const until = performance.now() + ms;
-              if (until > renderUntilTs) renderUntilTs = until;
-              onDemandRenderer.needsUpdate = true;
-            };
-            const keepAliveMs = import.meta.env.DEV ? 1000 : 0;
-            let lastKeepAlive = performance.now();
-            let dirtyLoopHandle = 0;
-            const dirtyLoop = () => {
-              if (disposed) return;
-              const now = performance.now();
-              if (now < renderUntilTs) {
-                onDemandRenderer.needsUpdate = true;
-              } else if (keepAliveMs > 0 && now - lastKeepAlive >= keepAliveMs) {
-                lastKeepAlive = now;
-                onDemandRenderer.needsUpdate = true;
-              }
-              dirtyLoopHandle = window.requestAnimationFrame(dirtyLoop);
-            };
-            dirtyLoopHandle = window.requestAnimationFrame(dirtyLoop);
+            const invalidationLoop = createInvalidationRenderLoop({
+              now: () => performance.now(),
+              raf: (callback) => window.requestAnimationFrame(callback),
+              cancelRaf: (handle) => window.cancelAnimationFrame(handle),
+              invalidate: () => { onDemandRenderer.needsUpdate = true; },
+              initialWindowMs: 1_500,
+            });
+            renderKick = (ms = 300) => invalidationLoop.kick(ms);
             renderOnDemandCleanup = () => {
-              window.cancelAnimationFrame(dirtyLoopHandle);
+              invalidationLoop.stop();
               try {
                 onDemandRenderer.mode = OBC.RendererMode.AUTO;
               } catch { /* renderer may already be disposed */ }
@@ -1912,6 +2343,42 @@ export default function ViewerPanel({
           } catch {
             /* flag is best-effort: any shape mismatch keeps AUTO mode */
           }
+        }
+        renderKickRef.current = renderKick;
+        // The @thatopen renderer recreates its THREE.WebGLRenderer on context
+        // restore, but application render state (selection highlights,
+        // visibility masks, ghost opacity) lives in the coordinator's applied
+        // caches and must be replayed onto the fresh GPU state.
+        {
+          const rendererCanvas = world.renderer!.three.domElement;
+          const onContextLost = () => {
+            useStore.getState().logActivity({
+              kind: 'error',
+              summary: 'WebGL context lost',
+              detail: 'Waiting for the browser to restore the 3D context.',
+            });
+          };
+          const onContextRestored = () => {
+            renderKick(600);
+            // repair() invalidates the applied caches, so visibility AND
+            // appearance replay in full - invalidateAppearance alone would
+            // leave hidden/isolated masks unrepainted.
+            void renderStateCoordinatorRef.current
+              ?.repair({ urgency: 'visual', reason: 'webgl-context-restored' })
+              .catch(() => {});
+            requestFragmentUpdate('manual');
+            useStore.getState().logActivity({
+              kind: 'info',
+              summary: 'WebGL context restored',
+              detail: 'Reapplied selection, visibility, and appearance state.',
+            });
+          };
+          rendererCanvas.addEventListener('webglcontextlost', onContextLost);
+          rendererCanvas.addEventListener('webglcontextrestored', onContextRestored);
+          contextRecoveryCleanup = () => {
+            rendererCanvas.removeEventListener('webglcontextlost', onContextLost);
+            rendererCanvas.removeEventListener('webglcontextrestored', onContextRestored);
+          };
         }
         // Postproduction starts disabled until an effect needs it.
         try {
@@ -2266,33 +2733,38 @@ export default function ViewerPanel({
         };
         applyTheme(useStore.getState().theme);
 
-        // FastModelPicker - GPU color-coded pass for fast miss-detection.
-        // getModelAt() renders one flat-shaded pass and reads back one pixel:
-        // returns a model UUID if geometry sits under the cursor, or null for
-        // empty space. We use it as a pre-filter before model.raycast() so
-        // hover and click events skip the expensive triangle traversal when
-        // the cursor is over void. models.dispose() is called by components.dispose().
-        try {
-          const pickers = components.get(OBC.FastModelPickers);
-          fastPickerRef.current = pickers.get(world as unknown as OBC.World);
-        } catch {
-          // FastModelPicker may be unavailable in some preview/test environments.
-          fastPickerRef.current = null;
-        }
-
         // Initialize fragments with a blob-backed worker for broader runtime compatibility.
         const fragmentsManager = components.get(OBC.FragmentsManager);
+        // Assigned once any load path converges. Scheduler runs after that
+        // point wait for this model's FINISH event before the next run starts,
+        // preventing a late camera event from acknowledging a later selection.
+        let fragmentModelForUpdateAck: FRAGS.FragmentsModel | null = null;
+        // Captured after FragmentsManager.init(). Normal engine calls are then
+        // routed through the scheduler, while the scheduler itself invokes this
+        // original method to avoid recursively enqueueing its own update.
+        let rawCoreUpdate: ((force?: boolean) => Promise<void>) | null = null;
         // Pace forced flushes around the engine maxUpdateRate guard.
         let droppedForcedFlushes = 0;
+        // Non-forced acknowledgement waits register here so newly enqueued
+        // immediate work (a click flush, an orbit camera batch) can release
+        // them instead of queueing behind a silent no-change tick.
+        const ackPreemptors = new Set<() => void>();
         // Resolve `core` lazily because the getter is unavailable before init().
         const readEngineLastUpdate = (): number | null => {
           const enginePacing = fragmentsManager.core as unknown as { _lastUpdate?: unknown };
           return typeof enginePacing._lastUpdate === 'number' ? enginePacing._lastUpdate : null;
         };
-        const coreUpdatePaced = async (force: boolean): Promise<void> => {
+        const invokeRawCoreUpdate = (force: boolean): Promise<void> => {
+          if (rawCoreUpdate) return rawCoreUpdate(force);
+          return fragmentsManager.core.update(force);
+        };
+        const coreUpdatePaced = async (force: boolean): Promise<boolean> => {
           if (!force) {
-            await fragmentsManager.core.update(false);
-            return;
+            const callAt = performance.now();
+            await invokeRawCoreUpdate(false);
+            const after = readEngineLastUpdate();
+            // A rate-limited no-op has no model FINISH event to await.
+            return after === null || after >= callAt;
           }
           const tForcedStart = performance.now();
           for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -2309,7 +2781,7 @@ export default function ViewerPanel({
               }
             }
             const callAt = performance.now();
-            await fragmentsManager.core.update(true);
+            await invokeRawCoreUpdate(true);
             const after = readEngineLastUpdate();
             // _lastUpdate advancing past callAt means the engine accepted the run.
             if (after === null || after >= callAt) {
@@ -2318,7 +2790,7 @@ export default function ViewerPanel({
                 attribution.paceWaitMs = callAt - tForcedStart;
                 attribution.flushMs = performance.now() - callAt;
               }
-              return;
+              return true;
             }
             droppedForcedFlushes += 1;
             if (import.meta.env.DEV) {
@@ -2331,10 +2803,66 @@ export default function ViewerPanel({
           // Surface exhausted retries as a scheduler error.
           throw new Error('fragments forced update dropped by engine pacing (3 attempts)');
         };
+        const coreUpdatePacedAndAcknowledged = async (force: boolean): Promise<void> => {
+          const acknowledgedModel = fragmentModelForUpdateAck;
+          if (!acknowledgedModel) {
+            await coreUpdatePaced(force);
+            return;
+          }
+          let finished = false;
+          let acknowledgementTimeout = 0;
+          let resolveFinished!: () => void;
+          const finish = new Promise<void>((resolve) => {
+            resolveFinished = resolve;
+          });
+          const onViewUpdated = () => {
+            finished = true;
+            resolveFinished();
+          };
+          acknowledgedModel.onViewUpdated.add(onViewUpdated);
+          try {
+            const accepted = await coreUpdatePaced(force);
+            // A forced FragmentsModels update resolves only after
+            // forceUpdateFinish has consumed the model's FINISH request, so its
+            // returned promise is already the acknowledgement. Non-forced
+            // camera work returns earlier and must wait for onViewUpdated.
+            if (accepted && !force && !finished) {
+              // A no-change tick never emits FINISH. Newly enqueued immediate
+              // work preempts this wait so clicks never queue behind it, and
+              // bounded silence resolves as a benign no-op acknowledgement.
+              let preempted = false;
+              const preempt = () => {
+                preempted = true;
+                resolveFinished();
+              };
+              ackPreemptors.add(preempt);
+              try {
+                acknowledgementTimeout = window.setTimeout(resolveFinished, 2_500);
+                await finish;
+              } finally {
+                ackPreemptors.delete(preempt);
+              }
+              if (import.meta.env.DEV && !finished) {
+                console.debug('[viewer] non-forced view-update acknowledgement released', {
+                  reason: preempted ? 'preempted-by-immediate-work' : 'no-view-change-timeout',
+                });
+              }
+            }
+          } finally {
+            window.clearTimeout(acknowledgementTimeout);
+            try { acknowledgedModel.onViewUpdated.remove(onViewUpdated); } catch { /* disposed */ }
+          }
+        };
         fragmentUpdateScheduler = createFragmentUpdateScheduler({
           raf: (cb) => window.requestAnimationFrame(cb),
           cancelRaf: (handle) => window.cancelAnimationFrame(handle),
-          update: (force) => coreUpdatePaced(force),
+          update: (force) => coreUpdatePacedAndAcknowledged(force),
+          // Queued immediate work must not sit behind a silent no-change
+          // tick's acknowledgement watchdog; release those waits right away.
+          onEnqueue: (request) => {
+            if (request.priority === 'idle') return;
+            for (const preempt of Array.from(ackPreemptors)) preempt();
+          },
           // Stamp click-highlight flush starts for latency attribution.
           onRunStart: (run) => {
             // Every scheduler run mutates visuals; keep painting through it.
@@ -2343,17 +2871,9 @@ export default function ViewerPanel({
               clickFlushAttributionRef.current.runStartTs = performance.now();
             }
           },
-          // Stop click-to-highlight timing only after the highlight flush completes.
-          onRunEnd: (run, error) => {
+          onRunEnd: () => {
             // The flush just landed worker results - paint them.
             renderKick(350);
-            if (!run.reasons.includes('click-highlight')) return;
-            if (error !== null) {
-              // Drop abandoned probes so later unrelated flushes cannot consume them.
-              pendingClickStartRef.current = null;
-              return;
-            }
-            recordClickLatencyFlush();
           },
         });
         fragmentUpdateSchedulerRef.current = fragmentUpdateScheduler;
@@ -2401,23 +2921,39 @@ export default function ViewerPanel({
           };
         }
 
-        // RENDER_ON_DEMAND: the engine's auto-redraw timer calls core.update
-        // directly after worker messages (tile arrivals have no app-visible
-        // event), bypassing the fragment scheduler. Wrap it so every
-        // engine-driven update marks the scene dirty - same guarded instance
-        // patch pattern as the core.load wrap above.
-        if (RENDER_ON_DEMAND) {
-          try {
-            const coreAny = fragmentsManager.core as unknown as {
-              update: (force?: boolean) => Promise<void>;
-            };
-            const origUpdate = coreAny.update.bind(fragmentsManager.core);
-            coreAny.update = (force?: boolean) => {
-              renderKick(350);
-              return origUpdate(force);
-            };
-          } catch { /* best-effort: AUTO-equivalent painting via other kicks */ }
-        }
+        // The engine's auto-redraw timer calls core.update directly after
+        // worker messages. Route those calls through the same single-flight
+        // scheduler as camera and appearance work so an unrelated FINISH event
+        // can never acknowledge a later selection/visibility flush.
+        try {
+          const coreAny = fragmentsManager.core as unknown as {
+            update: (force?: boolean) => Promise<void>;
+          };
+          rawCoreUpdate = coreAny.update.bind(fragmentsManager.core);
+          coreAny.update = async (force = false) => {
+            if (RENDER_ON_DEMAND) renderKick(350);
+            const scheduler = fragmentUpdateScheduler;
+            if (!scheduler || disposed) {
+              if (disposed) return;
+              await rawCoreUpdate?.(force);
+              return;
+            }
+            try {
+              await scheduler.requestAndWait({
+                priority: force ? 'visual' : 'camera',
+                force,
+                reason: 'camera',
+              });
+            } catch (error) {
+              // Auto-redraw calls are fire-and-forget inside the fragments
+              // engine. Keep teardown cancellations and a lost FINISH event
+              // from becoming unhandled promise rejections.
+              if (!disposed && (error as { name?: string })?.name !== 'AbortError') {
+                console.warn('[viewer] scheduled engine update failed', error);
+              }
+            }
+          };
+        } catch { /* best-effort: direct app updates still use the scheduler */ }
 
         // Adaptive graphics quality is now driven by the
         // interaction-quality ladder (interactionQualityController.ts) instead
@@ -2752,6 +3288,7 @@ export default function ViewerPanel({
               });
             } catch {
               model = null;
+              await deleteFragmentCacheIDBEntry(cacheKey);
               // Clear stale worker placeholders before falling back to live parse.
               clearFragmentThreadPlaceholder(fragmentsManager, modelId);
               modelId = makeViewerModelId();
@@ -3130,6 +3667,7 @@ export default function ViewerPanel({
               });
             } catch {
               model = null;
+              await deleteFragmentCacheIDBEntry(cacheKey);
               clearFragmentThreadPlaceholder(fragmentsManager, modelId);
               modelId = makeViewerModelId();
               updateLoadProgress({
@@ -3351,6 +3889,7 @@ export default function ViewerPanel({
         }
 
         if (!model) throw new Error('Model could not be loaded');
+        fragmentModelForUpdateAck = model;
 
         // Cached-load backend warm-up: when the viewer loads from cached
         // fragments (manifest fast-path, IDB cache, or server cache hit
@@ -3419,14 +3958,12 @@ export default function ViewerPanel({
         // Runs async-deferred so it doesn't stall the first paint.
         if (import.meta.env.VITE_VIEWER_COMPUTE_SCENE_BVH === 'true') {
           setTimeout(() => {
-            void import('../../services/viewer/bvhSetup').then(({ computeSceneBVH, getBVHCoverage }) => {
-              const bvhCount = computeSceneBVH(world.scene.three);
-              const cov = getBVHCoverage(world.scene.three);
-              console.info(
-                `[BVH] Computed BVH for ${bvhCount} meshes. ` +
-                `Coverage: ${cov.bvhMeshes}/${cov.totalMeshes} (${cov.coveragePct.toFixed(0)}%)`,
-              );
-            });
+            const bvhCount = computeSceneBVH(world.scene.three);
+            const cov = getBVHCoverage(world.scene.three);
+            console.info(
+              `[BVH] Computed BVH for ${bvhCount} meshes. ` +
+              `Coverage: ${cov.bvhMeshes}/${cov.totalMeshes} (${cov.coveragePct.toFixed(0)}%)`,
+            );
           }, 500);
         }
 
@@ -3602,86 +4139,159 @@ export default function ViewerPanel({
           grid: grid as unknown as { three: THREE.Object3D },
         };
 
-        // Optional LOD swap renders a lighter model while the camera is moving.
-        {
-          const lodSwap = new LodSwapController();
+        const setupNavigationLodSwap = () => {
+          const lodSwap = new LodSwapController(() => requestViewerRender(180));
           lodSwap.setTargets(model.object, null);
           const lodControls = world.camera.controls;
           const onLodNav = () => lodSwap.onNavigate();
           const onLodRest = () => lodSwap.onRest();
           lodControls.addEventListener('wake', onLodNav);
           lodControls.addEventListener('controlstart', onLodNav);
-          // Continuous navigation signal for the LOD controller.
           lodControls.addEventListener('update', onLodNav);
           lodControls.addEventListener('rest', onLodRest);
           lodControls.addEventListener('sleep', onLodRest);
-          // Only swap when per-element visibility modes are inactive.
-          const unsubLod = useStore.subscribe(
-            (s) =>
-              s.largeModelLod
-              && s.isolatedIds.length === 0
-              && s.hiddenIds.length === 0
-              && !s.ghostModeOn,
-            (canSwap: boolean) => lodSwap.setEnabled(canSwap),
+
+          let lodAttached: AttachedLod | null = null;
+          let lodAbort: AbortController | null = null;
+          let lodLoadGeneration = 0;
+          let lodLoading = false;
+
+          const disposeAttached = () => {
+            lodLoadGeneration += 1;
+            lodLoading = false;
+            try { lodAbort?.abort(); } catch { /* best-effort */ }
+            lodAbort = null;
+            try { lodAttached?.dispose(); } catch { /* best-effort */ }
+            lodAttached = null;
+            lodSwap.setTargets(model.object, null);
+            if (import.meta.env.DEV) (window as any).__ifcLodAttached = false;
+          };
+
+          const startLodLoad = () => {
+            if (
+              disposed
+              || lodLoading
+              || lodAttached
+              || !useStore.getState().largeModelLod
+            ) return;
+            lodLoading = true;
+            const generation = ++lodLoadGeneration;
+            const abort = new AbortController();
+            lodAbort = abort;
+            void loadAndAttachLod({
+              fragmentsManager,
+              worldScene: world.scene.three as unknown as THREE.Object3D,
+              fullModelId: modelId,
+              lodModelId: `${modelId}__lod_${generation}`,
+              autoCoordinate: coordinateModel,
+              camera: world.camera.three as THREE.Camera,
+              fingerprint: useStore.getState().modelFingerprint,
+              profile: graphicsProfile,
+              signal: abort.signal,
+              allVisibleLodMode: FRAGS.LodMode.ALL_VISIBLE,
+            }).then((attached) => {
+              if (generation !== lodLoadGeneration || disposed || !useStore.getState().largeModelLod) {
+                attached?.dispose();
+                return;
+              }
+              lodLoading = false;
+              lodAbort = null;
+              if (!attached) return;
+              lodAttached = attached;
+              lodSwap.setTargets(model.object, attached.lodObject);
+              if (import.meta.env.DEV) (window as any).__ifcLodAttached = true;
+            });
+          };
+
+          // The decimated proxy does not carry per-element appearance state
+          // or the separately merged furnishing mesh. Keep the primary model
+          // visible whenever one of those overrides is active.
+          // Keep the subscription selector store-only. The lifecycle ref is
+          // refreshed explicitly below; including it in the selector would
+          // desynchronise Zustand's remembered value from LodSwapController
+          // and could miss the next store-driven gate closure.
+          const canSwapFromStore = (s: ReturnType<typeof useStore.getState>) => (
+            canUseNavigationLod({
+              enabled: s.largeModelLod,
+              isolatedCount: s.isolatedIds.length,
+              hiddenCount: s.hiddenIds.length,
+              ghostModeOn: s.ghostModeOn,
+              selectedElementId: s.selectedElementId,
+              selectedCount: s.selectedIds.length,
+              highlightedCount: s.highlightedIds.length,
+              colourBy: s.colourBy,
+              colourLayerCount: Object.keys(s.colourLayers).length,
+              // Actual/pending merge state is owned by the lifecycle ref and
+              // applied in refreshAppearanceGate below. The persisted request
+              // alone must not disable navigation LOD while merge is suspended
+              // for fragment interactions.
+              furnishingMerged: false,
+            })
+          );
+          const refreshAppearanceGate = () => {
+            lodSwap.setEnabled(
+              canSwapFromStore(useStore.getState())
+              && !furnishingMergeLifecycleRef.current?.blocksNavigationLod
+              && !exactPickLeaseRef.current?.active,
+            );
+          };
+          navigationLodAppearanceRefreshRef.current = refreshAppearanceGate;
+          const unsubAppearance = useStore.subscribe(
+            canSwapFromStore,
+            refreshAppearanceGate,
             { fireImmediately: true },
           );
-          const lodAbort = new AbortController();
-          let lodAttached: AttachedLod | null = null;
-          void loadAndAttachLod({
-            fragmentsManager,
-            worldScene: world.scene.three as unknown as THREE.Object3D,
-            fullModelId: modelId,
-            autoCoordinate: coordinateModel,
-            fingerprint: useStore.getState().modelFingerprint,
-            profile: graphicsProfile,
-            signal: lodAbort.signal,
-          }).then((attached) => {
-            if (disposed || !attached) { attached?.dispose(); return; }
-            lodAttached = attached;
-            lodSwap.setTargets(model.object, attached.lodObject);
-            if (import.meta.env.DEV) {
-              (window as any).__ifcLodAttached = true;
-            }
-          });
+          const unsubPreference = useStore.subscribe(
+            (s) => s.largeModelLod,
+            (enabled: boolean) => {
+              if (enabled) startLodLoad();
+              else disposeAttached();
+            },
+            { fireImmediately: true },
+          );
+
           lodCleanupRef.current = () => {
-            try { lodAbort.abort(); } catch { /* */ }
-            try { unsubLod(); } catch { /* */ }
+            if (navigationLodAppearanceRefreshRef.current === refreshAppearanceGate) {
+              navigationLodAppearanceRefreshRef.current = null;
+            }
+            try { unsubAppearance(); } catch { /* best-effort */ }
+            try { unsubPreference(); } catch { /* best-effort */ }
             try {
               lodControls.removeEventListener('wake', onLodNav);
               lodControls.removeEventListener('controlstart', onLodNav);
               lodControls.removeEventListener('update', onLodNav);
               lodControls.removeEventListener('rest', onLodRest);
               lodControls.removeEventListener('sleep', onLodRest);
-            } catch { /* */ }
-            try { lodSwap.dispose(); } catch { /* */ }
-            try { lodAttached?.dispose(); } catch { /* */ }
+            } catch { /* best-effort */ }
+            disposeAttached();
+            lodSwap.dispose();
           };
-        }
+        };
 
-        // Tiered LOD policy (lodTierPolicy.ts). Small models bypass the
-        // worker's view-time culling entirely. ALL_GEOMETRY was the wrong
-        // enum: in the worker's fetchLodLevel the screen-coverage INVISIBLE
-        // verdict runs BEFORE the ALL_GEOMETRY check, so small elements
-        // still hard-vanished while zooming - that mode
-        // only suppressed the wire tier. ALL_VISIBLE is the first branch of
-        // the classifier: no frustum cull, no screen-size cull - only
-        // explicit visibility (Hider/isolate/ghost) is honored, so nothing
-        // can disappear during camera motion - the whole model draws every
-        // frame. Tiles stay GPU-resident either way
-        // (they are only freed under memoryOverflow), so the cost is just
-        // drawing the sub-3 px band - negligible below the small-tier gate.
-        // DEFAULT stays for larger models where the LOD budget genuinely
-        // buys frame time; their tier feeds the per-model quality writes in
-        // applyPerModelGraphicsQuality (medium pins the idle level, large
-        // gets the real navigation degrade plus a resting cap).
+        // Small and medium models pin ALL_VISIBLE so no element ever pops in
+        // or out with camera distance; only large models keep the worker's
+        // coverage classifier (see lodTierPolicy.ts for the tier contract).
         void (async () => {
           try {
             const ids = await model.getLocalIds();
             if (disposed || ids.length === 0) return;
             const tier = resolveLodTier(ids.length);
             modelLodTiers.set(modelId, tier);
-            if (tier === 'small' && typeof model.setLodMode === 'function') {
-              await model.setLodMode(FRAGS.LodMode.ALL_VISIBLE);
+            if (typeof model.setLodMode === 'function') {
+              await model.setLodMode(
+                shouldPinAllVisible(tier)
+                  ? FRAGS.LodMode.ALL_VISIBLE
+                  : FRAGS.LodMode.DEFAULT,
+              );
+            }
+            if (disposed) return;
+            // A second fragments model is worthwhile only for genuinely large
+            // models. Medium fixtures use worker LOD and avoid duplicate GPU /
+            // worker memory entirely.
+            // Prepare the lazy preference subscription for large models; the
+            // proxy itself is fetched only while the preference is enabled.
+            if (shouldAttachNavigationLod(tier, true)) {
+              setupNavigationLodSwap();
             }
             // Re-apply the current ladder level now that the tier is known:
             // covers a ladder change racing the load and applies the
@@ -3786,8 +4396,11 @@ export default function ViewerPanel({
                 rotate: (az: number, polar: number, transition?: boolean) => void;
               };
               const totalMs = Math.max(500, seconds * 1000);
+              const minimumValidSamples = 6;
+              const maximumMs = Math.max(10_000, totalMs * 5);
               const azPerMs = (degrees * (Math.PI / 180)) / totalMs;
               const deltas: number[] = [];
+              let validPostFirstFrameSamples = 0;
               const t0 = performance.now();
               let last = t0;
               const step = () => {
@@ -3799,10 +4412,19 @@ export default function ViewerPanel({
                 const dt = now - last;
                 last = now;
                 deltas.push(dt);
+                if (deltas.length > 1 && Number.isFinite(dt) && dt > 0) {
+                  validPostFirstFrameSamples += 1;
+                }
                 try {
                   benchControls.rotate(azPerMs * dt, 0, false);
                 } catch { /* keep sampling even if the controls API shifts */ }
-                if (now - t0 < totalMs) {
+                if (shouldContinueFrameSampling({
+                  elapsedMs: now - t0,
+                  requestedDurationMs: totalMs,
+                  validSamples: validPostFirstFrameSamples,
+                  minimumSamples: minimumValidSamples,
+                  maximumDurationMs: maximumMs,
+                })) {
                   requestAnimationFrame(step);
                 } else {
                   // First delta spans the call-to-first-frame gap; drop it.
@@ -3875,6 +4497,26 @@ export default function ViewerPanel({
           let suppressNavStartUntil = 0;
 
           const isPanelResizing = () => panelResizing || document.body.classList.contains('is-resizing');
+          const getSpatialTileViewOptions = () => {
+            const state = useStore.getState();
+            const selectedExpressIds = new Set<number>([
+              ...state.selectedIds,
+              ...(state.selectedElementId == null ? [] : [state.selectedElementId]),
+            ]);
+            const pinnedLocalIds = new Set<number>();
+            for (const expressId of selectedExpressIds) {
+              const localId = expressToLocalCacheRef.current.get(expressId)
+                ?? modelService.getRememberedLocalId(expressId)
+                ?? undefined;
+              if (localId !== undefined) pinnedLocalIds.add(localId);
+            }
+            return {
+              pinnedLocalIds,
+              viewportHeightPx: world.renderer?.three.domElement.clientHeight
+                || containerRef.current?.clientHeight
+                || window.innerHeight,
+            };
+          };
 
           const onPanelResizeStart = () => {
             panelResizing = true;
@@ -3974,12 +4616,12 @@ export default function ViewerPanel({
             }, 180);
           };
 
-          window.addEventListener('ifc-panel-resize-start', onPanelResizeStart as EventListener);
-          window.addEventListener('ifc-panel-resize-end', onPanelResizeEnd as EventListener);
+          window.addEventListener(PANEL_RESIZE_START_EVENT, onPanelResizeStart as EventListener);
+          window.addEventListener(PANEL_RESIZE_END_EVENT, onPanelResizeEnd as EventListener);
           window.addEventListener('resize', onWindowResize);
           removePanelResizeHooks = () => {
-            window.removeEventListener('ifc-panel-resize-start', onPanelResizeStart as EventListener);
-            window.removeEventListener('ifc-panel-resize-end', onPanelResizeEnd as EventListener);
+            window.removeEventListener(PANEL_RESIZE_START_EVENT, onPanelResizeStart as EventListener);
+            window.removeEventListener(PANEL_RESIZE_END_EVENT, onPanelResizeEnd as EventListener);
             window.removeEventListener('resize', onWindowResize);
             if (windowResizeEndTimer !== null) {
               window.clearTimeout(windowResizeEndTimer);
@@ -4035,6 +4677,21 @@ export default function ViewerPanel({
               fragmentUpdateScheduler?.setNavigating(true);
               applyGhostPostproduction(true);
               hoverGenRef.current += 1;
+              hoveredLocalIdRef.current = null;
+              hoveredExpressIdRef.current = null;
+              void setCoordinatedHover('canvas', null).catch(() => {});
+              void setCoordinatedHover('tree', null).catch(() => {});
+              storeyFrustumCullerRef.current?.releaseOwnership();
+              elementFrustumCullerRef.current?.releaseOwnership();
+              void renderStateCoordinatorRef.current?.update({
+                visibility: [
+                  { layer: 'culler:storey', hiddenIds: null },
+                  { layer: 'culler:element', hiddenIds: null },
+                ],
+              }, {
+                urgency: 'visual',
+                reason: 'culler-show:navigation-start',
+              }).catch(() => {});
               if (hoverIntentTimer !== null) {
                 window.clearTimeout(hoverIntentTimer);
                 hoverIntentTimer = null;
@@ -4061,31 +4718,46 @@ export default function ViewerPanel({
                   if (state.isolatedIds.length === 0 && state.hiddenIds.length === 0) {
                     const storeyCuller = storeyFrustumCullerRef.current;
                     const elemCuller = elementFrustumCullerRef.current;
-                    if (storeyCuller?.isBuilt || elemCuller?.isBuilt) {
+                    const spatialTileCuller = spatialTileCullerRef.current;
+                    if (spatialTileCuller?.isBuilt || storeyCuller?.isBuilt || elemCuller?.isBuilt) {
                       showPassPending = true;
                       lastShowPassTs = now;
                       const cameraThree = world.camera.three as THREE.Camera;
                       const runShow = async () => {
                         let revealed = 0;
                         try {
-                          if (storeyCuller?.isBuilt) {
-                            revealed += await storeyCuller.showPass(cameraThree, model);
+                          if (spatialTileCuller?.isBuilt) {
+                            const result = await spatialTileCuller.showPass(
+                              cameraThree,
+                              spatialTileVisibilityRef.current ?? model,
+                              getSpatialTileViewOptions(),
+                            );
+                            revealed += result.revealedElementCount;
+                            useStore.getState().updatePerfMetrics({
+                              culledStoreys: 0,
+                              culledElements: result.hiddenElementCount,
+                            });
+                          } else if (storeyCuller?.isBuilt) {
+                            revealed += await storeyCuller.showPass(
+                              cameraThree,
+                              model,
+                              storeyCullerVisibilityRef.current ?? model,
+                            );
                           }
-                          if (elemCuller?.isBuilt) {
+                          if (!spatialTileCuller?.isBuilt && elemCuller?.isBuilt) {
                             const ownedByStorey = storeyCuller?.isBuilt
                               ? new Set(storeyCuller.getCulledMemberIds())
                               : undefined;
-                            revealed += await elemCuller.showPass(cameraThree, model, ownedByStorey);
+                            revealed += await elemCuller.showPass(
+                              cameraThree,
+                              model,
+                              ownedByStorey,
+                              elementCullerVisibilityRef.current ?? model,
+                            );
                           }
                         } catch { /* best-effort */ }
-                        // Paint newly visible elements immediately.
-                        if (revealed > 0 && !disposed) {
-                          fragmentUpdateScheduler?.request({
-                            priority: 'visual',
-                            force: true,
-                            reason: 'culler-show',
-                          });
-                        }
+                        // The coordinator's show target already awaited the
+                        // visual fragment refresh for every revealed ID.
                         showPassPending = false;
                       };
                       void runShow();
@@ -4178,6 +4850,25 @@ export default function ViewerPanel({
               // cullers had a verdict on. `decideCullerWork` + `runCullerPlan`
               // (cullerCoordinationHelpers.ts) sequence the writes so the
               // storey tick fully settles before the element tick starts.
+              const spatialTileCuller = spatialTileCullerRef.current;
+              if (spatialTileCuller?.isBuilt) {
+                const state = useStore.getState();
+                const tileWork = state.isolatedIds.length > 0 || state.hiddenIds.length > 0
+                  ? spatialTileCuller.clearCull(spatialTileVisibilityRef.current ?? model)
+                      .then(() => null)
+                  : spatialTileCuller.tick(
+                      world.camera.three as THREE.Camera,
+                      spatialTileVisibilityRef.current ?? model,
+                      getSpatialTileViewOptions(),
+                    );
+                void tileWork.then((result) => {
+                  useStore.getState().updatePerfMetrics({
+                    culledStoreys: 0,
+                    culledElements: result?.hiddenElementCount ?? 0,
+                  });
+                }).catch(() => {});
+                return;
+              }
               const cullerRef = storeyFrustumCullerRef.current;
               const elemCullerRef = elementFrustumCullerRef.current;
               const cameraThree = world.camera.three as THREE.Camera;
@@ -4193,19 +4884,32 @@ export default function ViewerPanel({
               // would be a second redundant forced flush per settle. Track it.
               const cullerPlanIsNoop = cullerPlan === 'noop';
               void runCullerPlan(cullerPlan, cullerSnapshot, {
-                runStoreyTick: () => cullerRef!.tick(cameraThree, model),
+                runStoreyTick: () => cullerRef!.tick(
+                  cameraThree,
+                  model,
+                  storeyCullerVisibilityRef.current ?? model,
+                ),
                 runElementTick: () => {
                   // Exclude storey-owned ids from element-level culling.
                   const ownedByStorey = cullerRef?.isBuilt
                     ? new Set(cullerRef.getCulledMemberIds())
                     : undefined;
-                  return elemCullerRef!.tick(cameraThree, model, ownedByStorey);
+                  return elemCullerRef!.tick(
+                    cameraThree,
+                    model,
+                    ownedByStorey,
+                    elementCullerVisibilityRef.current ?? model,
+                  );
                 },
                 runStoreyClear: async () => {
-                  if (cullerRef?.isBuilt) await cullerRef.clearCull(model);
+                  if (cullerRef?.isBuilt) {
+                    await cullerRef.clearCull(model, storeyCullerVisibilityRef.current ?? model);
+                  }
                 },
                 runElementClear: async () => {
-                  if (elemCullerRef?.isBuilt) await elemCullerRef.clearCull(model);
+                  if (elemCullerRef?.isBuilt) {
+                    await elemCullerRef.clearCull(model, elementCullerVisibilityRef.current ?? model);
+                  }
                 },
                 onStoreyCulled: (n) => {
                   useStore.getState().updatePerfMetrics({ culledStoreys: n });
@@ -4215,15 +4919,9 @@ export default function ViewerPanel({
                 },
                 isDisposed: () => disposed,
               })
-                // Fetch LOD tiles for newly visible culler results.
-                .then(() => {
-                  if (disposed || cullerPlanIsNoop) return;
-                  fragmentUpdateScheduler?.request({
-                    priority: 'idle',
-                    force: true,
-                    reason: 'culler-hide',
-                  });
-                })
+                // Coordinator targets already acknowledge the coalesced
+                // fragment refresh; no second forced update is required.
+                .then(() => undefined)
                 .catch(() => { /* tick/clearCull throws ignored, matches prior fire-and-forget */ });
           };
 
@@ -4293,65 +4991,254 @@ export default function ViewerPanel({
         // down/up so that drag-orbits don't clear the selection: a real
         // click is defined as <= 4 px movement between down and up.
         const canvas = world.renderer!.three.domElement;
+
+        /**
+         * Engine snap features around the cursor: a screen-space frustum cast
+         * against the model's real point/line primitives, so edges and corners
+         * resolve from anywhere on a large face. FACE is not requested; the
+         * plain raycast already supplies the surface point.
+         */
+        const snapRaycast = async (
+          camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
+          clientX: number,
+          clientY: number,
+        ): Promise<EngineSnapHit[]> => {
+          try {
+            const hits = await model.raycastWithSnapping({
+              camera,
+              mouse: new THREE.Vector2(clientX, clientY),
+              dom: canvas,
+              snappingClasses: [FRAGS.SnappingClass.POINT, FRAGS.SnappingClass.LINE],
+            });
+            if (!hits) return [];
+            return hits.flatMap((hit) => {
+              const cls = hit.snappingClass === FRAGS.SnappingClass.POINT
+                ? 'point' as const
+                : hit.snappingClass === FRAGS.SnappingClass.LINE
+                  ? 'line' as const
+                  : null;
+              if (!cls || !hit.point) return [];
+              return [{
+                snappingClass: cls,
+                point: new THREE.Vector3(hit.point.x, hit.point.y, hit.point.z),
+                ...(hit.snappedEdgeP1 ? { edgeStart: hit.snappedEdgeP1.clone() } : {}),
+                ...(hit.snappedEdgeP2 ? { edgeEnd: hit.snappedEdgeP2.clone() } : {}),
+              }];
+            });
+          } catch {
+            // Snapping is an enhancement - a failed cast must never block the
+            // measurement, it just falls back to the raw surface point.
+            return [];
+          }
+        };
+
+        /**
+         * Rank engine features and measurement endpoints in one pixel-space
+         * pool. The 8 px priority window makes corners sticky over the edge
+         * through them. thresholdPx mainly gates the endpoint anchors; the
+         * engine's own frustum is ~10 px (phase5-measure-snap.spec.ts).
+         */
+        const resolveSnapAt = (
+          engineHits: readonly EngineSnapHit[],
+          clientX: number,
+          clientY: number,
+          camera: THREE.Camera,
+          thresholdPx: number,
+        ): ConstructionSnapCandidate | null => {
+          const rect = canvas.getBoundingClientRect();
+          const cursorPx = new THREE.Vector2(clientX - rect.left, clientY - rect.top);
+          const width = canvas.clientWidth;
+          const height = canvas.clientHeight;
+          const anchors = measurementControllerRef.current?.getSnapAnchors() ?? [];
+          const candidates = [
+            ...engineSnapCandidates(engineHits, cursorPx, camera, width, height),
+            ...anchorSnapCandidates(anchors, cursorPx, camera, width, height),
+          ];
+          return selectBestSnapCandidate(candidates, thresholdPx, 8);
+        };
+
+        /** Snap resolved on the last hover, reused by the click that follows
+         *  so the committed point is the one the preview promised. Camera
+         *  matrices are stamped because a wheel-zoom moves the camera without
+         *  moving the pointer, which would stale the resolution. */
+        let lastSnapResolve: {
+          clientX: number;
+          clientY: number;
+          candidate: ConstructionSnapCandidate | null;
+          cameraWorld: THREE.Matrix4;
+          projection: THREE.Matrix4;
+        } | null = null;
+
+        // Cursor-following readout while measuring. Writes to the tip bridge,
+        // never React state, so per-move updates cost one leaf re-render.
+        const updateMeasureTip = (clientX: number, clientY: number) => {
+          const ctrl = measurementControllerRef.current;
+          if (!ctrl || ctrl.getMode() === 'off') {
+            setMeasurementTip(null);
+            return;
+          }
+          const content = buildMeasurementTip(
+            ctrl.liveReadout(),
+            useStore.getState().measurement.unit,
+          );
+          if (!content) {
+            setMeasurementTip(null);
+            return;
+          }
+          const rect = canvas.getBoundingClientRect();
+          const x = Math.min(Math.max(clientX - rect.left + 16, 4), rect.width - 170);
+          const y = Math.min(Math.max(clientY - rect.top + 22, 4), rect.height - 60);
+          setMeasurementTip({ x, y, ...content });
+        };
+
+        const hitTriangle = (hit: FragmentRaycastHit): Triangle3 | null => {
+          if (!hit.facePoints || hit.facePoints.length < 9) return null;
+          const points = facePointsToVec3(hit.facePoints);
+          if (points.length < 3) return null;
+          return [points[0], points[1], points[2]];
+        };
         let downX = 0;
         let downY = 0;
         let downTs = 0;
         let rightDownX = 0;
         let rightDownY = 0;
         type ClickPickResult = {
-          hitModelId: string | null;
           result: FragmentRaycastHit | null;
+          error: unknown | null;
         };
+        type ExactHoverPickCache = {
+          result: FragmentRaycastHit;
+          clientX: number;
+          clientY: number;
+          timestamp: number;
+          cameraWorld: THREE.Matrix4;
+          projection: THREE.Matrix4;
+          isolatedIds: number[];
+          hiddenIds: number[];
+          clipPlanes: ReturnType<typeof useStore.getState>['clipPlanes'];
+          sectionWorkspace: ReturnType<typeof useStore.getState>['sectionWorkspace'];
+          sectionBoxEnabled: boolean;
+        };
+        let exactHoverPickCache: ExactHoverPickCache | null = null;
         let clickPickGeneration = 0;
         let pendingClickPick: {
           generation: number;
           x: number;
           y: number;
+          cameraWorld: THREE.Matrix4;
+          projection: THREE.Matrix4;
+          isolatedIds: number[];
+          hiddenIds: number[];
+          clipPlanes: ReturnType<typeof useStore.getState>['clipPlanes'];
+          sectionWorkspace: ReturnType<typeof useStore.getState>['sectionWorkspace'];
+          sectionBoxEnabled: boolean;
           promise: Promise<ClickPickResult>;
         } | null = null;
-        // A2 + K - prefetch gating and pre-resolution state. The prefetch is
-        // deferred a beat so orbit-starts (which move within the first frames)
-        // never pay the FastPicker GPU readback; the pointer position is
-        // tracked so the pre-resolve can tell a held click from a drag.
+        // Prefetch worker raycasts after a short hold so most click work is
+        // complete before pointer-up, while real orbit drags avoid the pick.
         let prefetchTimer: number | null = null;
         let lastPointerClientX = 0;
         let lastPointerClientY = 0;
         const PREFETCH_DELAY_MS = 35;
         const CLICK_DRAG_THRESHOLD_PX = 4;
 
-        const pickElementAt = async (pt: { x: number; y: number }): Promise<ClickPickResult> => {
-          const pickerPoint = clientPointToNdc(pt, canvas);
-          const fastPicker = fastPickerRef.current;
-          const camera = world.camera.three as
-            | THREE.PerspectiveCamera
-            | THREE.OrthographicCamera;
-          const mouse = new THREE.Vector2(pt.x, pt.y);
-          // Run the FastPicker void-guard and the
-          // worker raycast CONCURRENTLY: pick latency becomes
-          // max(GPU readback, worker raycast) instead of their sum (the
-          // serial order cost fast clicks ~10-25 ms). The picker keeps its
-          // role as the void authority - a confident picker miss still wins
-          // and the in-flight raycast result is discarded (a wasted worker
-          // raycast on a void click is cheap and off the main thread).
-          const raycastPromise = model.raycast({ camera, mouse, dom: canvas });
-          let hitModelId: string | null = '__no_picker__';
-          if (fastPicker) {
-            hitModelId = await queryFastPicker(fastPicker, pickerPoint);
-            if (!hitModelId) {
-              void raycastPromise.catch(() => { /* discarded void-click raycast */ });
-              return { hitModelId, result: null };
-            }
-          }
-          const result = await raycastPromise;
-          return { hitModelId, result };
+        // The reuse guards compare camera/visibility/clip state but cannot
+        // see a fragment replacement that swaps geometry under an unchanged
+        // camera; the merge lifecycle invalidates all pick caches explicitly.
+        pointerPickCachesInvalidateRef.current = () => {
+          exactHoverPickCache = null;
+          pendingClickPick = null;
+          clickPickGeneration += 1;
         };
 
+        const suspendFurnishingMergeForExactPick = async (): Promise<void> => {
+          const lifecycle = furnishingMergeLifecycleRef.current;
+          if (!lifecycle?.blocksNavigationLod) return;
+          await lifecycle.setDesired(false);
+          // The lifecycle awaits visibility/highlight repair before settling,
+          // so this exact worker raycast sees the authoritative fragment state.
+        };
+
+        const pickElementAt = async (pt: { x: number; y: number }): Promise<ClickPickResult> => {
+          const releasePickLease = exactPickLease.acquire();
+          try {
+            await suspendFurnishingMergeForExactPick();
+            const camera = world.camera.three as
+              | THREE.PerspectiveCamera
+              | THREE.OrthographicCamera;
+            const mouse = new THREE.Vector2(pt.x, pt.y);
+            // The fragments worker raycast is authoritative. FastModelPicker's
+            // extra colour pass both stalled the GPU and sometimes reported a
+            // miss for a valid thin/stale tile, vetoing a real exact hit.
+            const result = await trackRaycast(model.raycast({ camera, mouse, dom: canvas }));
+            return { result, error: null };
+          } finally {
+            releasePickLease();
+          }
+        };
+
+        // Give the development regression harness an exact, awaited geometry
+        // probe. Using the same pick lease and normalization as a real click
+        // avoids racing a series of short-lived context-menu requests on slow
+        // software renderers. This hook is excluded from production builds.
+        if (import.meta.env.DEV) {
+          devPickAtHook = async (x: number, y: number) => {
+            const { result, error } = await pickElementAt({ x, y });
+            if (error) throw error;
+            if (!result) return null;
+            return {
+              expressId: modelService.resolveProductIdFromHitSync(
+                result.itemId,
+                result.localId,
+              ),
+              localId: result.localId,
+            };
+          };
+          (window as any).__ifcPickAt = devPickAtHook;
+          // Companion probe for the measurement-snap regression: reports what
+          // the engine's snapping raycast actually found at a pixel, plus the
+          // feature the screen-space resolver picked out of it.
+          devSnapAtHook = async (x: number, y: number, thresholdPx = 20) => {
+            const cam = world.camera.three as THREE.PerspectiveCamera | THREE.OrthographicCamera;
+            const hits = await snapRaycast(cam, x, y);
+            const best = resolveSnapAt(hits, x, y, cam, thresholdPx);
+            return {
+              hitClasses: hits.map((h) => h.snappingClass),
+              edgeHits: hits.filter((h) => h.edgeStart && h.edgeEnd).length,
+              snap: best
+                ? {
+                  kind: best.kind,
+                  source: best.source,
+                  exact: best.exact,
+                  distancePx: best.distancePx,
+                  point: { x: best.point.x, y: best.point.y, z: best.point.z },
+                }
+                : null,
+            };
+          };
+          (window as any).__ifcSnapAt = devSnapAtHook;
+        }
+
         const prefetchClickPick = (pt: { x: number; y: number }) => {
-          const generation = ++clickPickGeneration;
-          const promise = pickElementAt(pt).catch(() => {
-            return { hitModelId: '__picker_error__', result: null };
+          const generation = clickPickGeneration;
+          const camera = world.camera.three as THREE.Camera;
+          const state = useStore.getState();
+          const promise = pickElementAt(pt).catch((error: unknown) => {
+            return { result: null, error };
           });
-          pendingClickPick = { generation, x: pt.x, y: pt.y, promise };
+          pendingClickPick = {
+            generation,
+            x: pt.x,
+            y: pt.y,
+            cameraWorld: camera.matrixWorld.clone(),
+            projection: camera.projectionMatrix.clone(),
+            isolatedIds: state.isolatedIds,
+            hiddenIds: state.hiddenIds,
+            clipPlanes: state.clipPlanes,
+            sectionWorkspace: state.sectionWorkspace,
+            sectionBoxEnabled: state.sectionBoxEnabled,
+            promise,
+          };
           // Pre-resolve held clicks to warm id and property caches.
           void promise.then((res) => {
             if (disposed || generation !== clickPickGeneration) return;
@@ -4367,6 +5254,11 @@ export default function ViewerPanel({
         };
 
         const onPointerDown = (event: PointerEvent) => {
+          // Any newer canvas interaction supersedes a pending context pick.
+          // This also prevents a slow right-click raycast from opening after
+          // the user has already left-clicked or begun another gesture.
+          contextMenuPickGuard.invalidate();
+          setContextMenuStateRef.current(null);
           if (event.button === 2) {
             rightDownX = event.clientX;
             rightDownY = event.clientY;
@@ -4381,10 +5273,21 @@ export default function ViewerPanel({
           downX = event.clientX;
           downY = event.clientY;
           downTs = performance.now();
+          clickPickGeneration += 1;
           lastPointerClientX = event.clientX;
           lastPointerClientY = event.clientY;
-          // Defer prefetch briefly so orbit gestures avoid the GPU pick path.
+          // Defer prefetch briefly so orbit gestures avoid an unused worker raycast.
           if (prefetchTimer !== null) window.clearTimeout(prefetchTimer);
+          if (wallDrawControllerRef.current?.isArmed()) {
+            pendingClickPick = null;
+            return;
+          }
+          if (furnishingMergeLifecycleRef.current?.blocksNavigationLod) {
+            // Avoid an expensive speculative unmerge that may be wasted when
+            // this stationary press becomes an orbit. Confirm it on up.
+            pendingClickPick = null;
+            return;
+          }
           prefetchTimer = window.setTimeout(() => {
             prefetchTimer = null;
             if (disposed) return;
@@ -4407,9 +5310,13 @@ export default function ViewerPanel({
           const dy = event.clientY - downY;
           const dragDist = Math.hypot(dx, dy);
           const elapsed = performance.now() - downTs;
-          // Treat as a drag if the pointer moved meaningfully, OR the user
-          // held down for a while (orbit gesture).
-          if (dragDist > 4 || elapsed > 500) {
+          // Movement, not press duration, distinguishes navigation from a
+          // click. A deliberate long stationary click is still a selection.
+          if (!isClickGesture({
+            distancePx: dragDist,
+            elapsedMs: elapsed,
+            dragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
+          })) {
             pendingClickPick = null;
             clickPickGeneration += 1;
             if (import.meta.env.DEV) {
@@ -4418,38 +5325,84 @@ export default function ViewerPanel({
             return;
           }
 
+          // B5 mount point: an armed wall tool consumes non-drag left clicks
+          // ahead of picking/selection (mirrors the measurement hijack below).
+          if (wallDrawControllerRef.current?.isArmed()) {
+            pendingClickPick = null; // drop the prefetched raycast - unused
+            clickPickGeneration += 1;
+            wallDrawControllerRef.current.handleClick(event.clientX, event.clientY);
+            return;
+          }
+
           // Start click-to-highlight timing after drag detection.
           pendingClickStartRef.current = null;
           const tClickStart = performance.now();
 
           try {
+            const requestGeneration = clickPickGeneration;
             const pendingPick = pendingClickPick;
             pendingClickPick = null;
-            const canUsePrefetch =
-              pendingPick !== null
-              && pendingPick.generation === clickPickGeneration
-              && Math.hypot(pendingPick.x - downX, pendingPick.y - downY) <= 1;
+            const cameraAtRelease = world.camera.three as THREE.Camera;
+            const stateAtRelease = useStore.getState();
+            const canUsePrefetch = pendingPick !== null && canReusePrefetchedPick({
+              requestGeneration: pendingPick.generation,
+              currentGeneration: clickPickGeneration,
+              distancePx: Math.hypot(
+                pendingPick.x - event.clientX,
+                pendingPick.y - event.clientY,
+              ),
+              cameraUnchanged:
+                pendingPick.cameraWorld.equals(cameraAtRelease.matrixWorld)
+                && pendingPick.projection.equals(cameraAtRelease.projectionMatrix),
+              visibilityUnchanged:
+                pendingPick.isolatedIds === stateAtRelease.isolatedIds
+                && pendingPick.hiddenIds === stateAtRelease.hiddenIds
+                && pendingPick.clipPlanes === stateAtRelease.clipPlanes
+                && pendingPick.sectionWorkspace === stateAtRelease.sectionWorkspace
+                && pendingPick.sectionBoxEnabled === stateAtRelease.sectionBoxEnabled,
+              fragmentReplacementBlocked:
+                !!furnishingMergeLifecycleRef.current?.blocksNavigationLod,
+            });
             const tBeforeIO = import.meta.env.DEV ? performance.now() : 0;
-            const { hitModelId, result } = canUsePrefetch
+            const { result, error: pickError } = canUsePrefetch
               ? await pendingPick.promise
-              : await pickElementAt({ x: event.clientX, y: event.clientY });
+              : await (() => {
+                  const cached = exactHoverPickCache;
+                  const camera = world.camera.three as THREE.Camera;
+                  const state = useStore.getState();
+                  const canReuseHover = !!cached && canReuseExactHoverPick({
+                    exactHit: true,
+                    distancePx: Math.hypot(
+                      cached.clientX - event.clientX,
+                      cached.clientY - event.clientY,
+                    ),
+                    ageMs: performance.now() - cached.timestamp,
+                    cameraUnchanged:
+                      cached.cameraWorld.equals(camera.matrixWorld)
+                      && cached.projection.equals(camera.projectionMatrix),
+                    visibilityUnchanged:
+                      cached.isolatedIds === state.isolatedIds
+                      && cached.hiddenIds === state.hiddenIds
+                      && cached.clipPlanes === state.clipPlanes
+                      && cached.sectionWorkspace === state.sectionWorkspace
+                      && cached.sectionBoxEnabled === state.sectionBoxEnabled,
+                    fragmentReplacementBlocked:
+                      !!furnishingMergeLifecycleRef.current?.blocksNavigationLod,
+                  });
+                  return canReuseHover
+                    ? Promise.resolve<ClickPickResult>({ result: cached!.result, error: null })
+                    : pickElementAt({ x: event.clientX, y: event.clientY });
+                })();
+            if (disposed || requestGeneration !== clickPickGeneration) return;
+            if (pickError) throw pickError;
             if (import.meta.env.DEV) {
               console.debug('[viewer] raycast', {
                 client: { x: event.clientX, y: event.clientY },
                 prefetched: canUsePrefetch,
+                reusedExactHover: !canUsePrefetch && exactHoverPickCache?.result === result,
                 ioMs: +(performance.now() - tBeforeIO).toFixed(1),
-                pickerHit: !!hitModelId,
                 hit: result ? { itemId: result.itemId, localId: result.localId } : null,
               });
-            }
-            if (fastPickerRef.current && !hitModelId && !result) {
-              const state = useStore.getState();
-              if (!event.shiftKey && state.selectedElementId !== null) {
-                state.selectElement(null);
-                rebuildSchedulerRef.current?.cancel();
-                void rebuildNativeHighlightsRef.current?.();
-              }
-              return;
             }
             // Pick-plane mode: next click on a model surface creates a clip
             // plane at the hit point, aligned to the dominant face-normal axis.
@@ -4484,11 +5437,69 @@ export default function ViewerPanel({
             // predictable and mirrors most BIM viewers).
             const measurementController = measurementControllerRef.current;
             if (measurementController && measurementController.getMode() !== 'off') {
-              if (result?.point) {
-                measurementController.handleClick(
-                  result.point.clone(),
-                  result.normal ? result.normal.clone() : null,
+              const camera = world.camera.three as THREE.PerspectiveCamera | THREE.OrthographicCamera;
+              const thresholdPx = event.pointerType === 'touch' ? 28 : 20;
+              // Clearance solves between the two picked triangles, so it needs a
+              // real surface hit. A snap-only resolution (edge just off the
+              // silhouette, where the ray misses) carries no face: accepting it
+              // would record no first triangle and silently downgrade the
+              // clearance to a plain point-to-point line still labelled
+              // "clearance". Treat it as a void click instead.
+              if (measurementController.getMode() === 'clearance' && !result?.point) return;
+              // Reuse the hover-resolved snap when neither the pointer nor the
+              // camera has moved: it guarantees the committed point IS the
+              // previewed one, and costs no round-trip. Touch never hovers, so
+              // it resolves fresh.
+              const reusable = lastSnapResolve
+                && Math.abs(lastSnapResolve.clientX - event.clientX) <= 2
+                && Math.abs(lastSnapResolve.clientY - event.clientY) <= 2
+                && lastSnapResolve.cameraWorld.equals(camera.matrixWorld)
+                && lastSnapResolve.projection.equals(camera.projectionMatrix);
+              const candidate = reusable
+                ? lastSnapResolve!.candidate
+                : resolveSnapAt(
+                  await snapRaycast(camera, event.clientX, event.clientY),
+                  event.clientX,
+                  event.clientY,
+                  camera,
+                  thresholdPx,
                 );
+              if (disposed || requestGeneration !== clickPickGeneration) return;
+              if (result?.point || candidate) {
+                const normal = result?.normal ? result.normal.clone() : null;
+                const hitPoint = result?.point
+                  ? new THREE.Vector3(result.point.x, result.point.y, result.point.z)
+                  : candidate!.point.clone();
+                if (measurementController.getMode() === 'clearance') {
+                  const pendingBefore = measurementController.snapshot().pending.length;
+                  const triangle = result ? hitTriangle(result) : null;
+                  const firstTriangle = clearanceFirstTriangleRef.current;
+                  if (pendingBefore > 0 && firstTriangle && triangle) {
+                    const witness = shortestDistanceBetweenTriangles(firstTriangle, triangle);
+                    measurementController.cancel();
+                    measurementController.addWitnessMeasurement(
+                      'clearance',
+                      witness.pointA,
+                      witness.pointB,
+                      {
+                        exact: true,
+                        source: 'hit-triangle-pair',
+                        snapKind: 'face',
+                      },
+                    );
+                    clearanceFirstTriangleRef.current = null;
+                  } else {
+                    measurementController.handleClick(hitPoint, normal, candidate);
+                    const pendingAfter = measurementController.snapshot().pending.length;
+                    clearanceFirstTriangleRef.current = pendingAfter > 0
+                      ? (firstTriangle ?? triangle)
+                      : null;
+                  }
+                } else {
+                  measurementController.handleClick(hitPoint, normal, candidate);
+                }
+                updateMeasureTip(event.clientX, event.clientY);
+                requestViewerRender(80);
               }
               return;
             }
@@ -4497,6 +5508,12 @@ export default function ViewerPanel({
               // Normalize raycast hits to the owning IfcProduct express id.
               const rawHitId = result.itemId;
               const productId = modelService.resolveProductIdFromHitSync(rawHitId, result.localId);
+              // Always refresh both mappings from the authoritative click hit.
+              // This must happen before the same-element repair branch: a
+              // streamed residency swap can preserve the Express ID while
+              // changing the local fragment that needs the amber paint.
+              expressToLocalCacheRef.current.set(rawHitId, result.localId);
+              expressToLocalCacheRef.current.set(productId, result.localId);
               const stateBeforeSelect = useStore.getState();
               if (isNoopSameElementClick({
                 clickedExpressId: productId,
@@ -4504,21 +5521,33 @@ export default function ViewerPanel({
                 selectedIds: stateBeforeSelect.selectedIds,
                 shiftKey: event.shiftKey,
               })) {
+                // A same-id click is a cheap visual repair opportunity after
+                // a streamed tile swap or structural edit. Force a full
+                // repaint instead of assuming the cached snapshot is visible.
+                pendingClickStartRef.current = tClickStart;
+                void renderStateCoordinatorRef.current?.invalidateAppearance(
+                  [result.localId],
+                  { urgency: 'visual', reason: 'highlight:tile-repair' },
+                ).catch(() => {});
+                rebuildSchedulerRef.current?.cancel();
+                rebuildSchedulerRef.current?.schedule();
                 if (event.detail >= 2) {
                   stateBeforeSelect.zoomToElement(productId);
                 }
                 return;
               }
 
-              // Cache raw-hit and product-id mappings under the same local id.
-              expressToLocalCacheRef.current.set(rawHitId, result.localId);
-              expressToLocalCacheRef.current.set(productId, result.localId);
-
               // Hover state is wiped - the rebuild will paint the click
               // highlight; we don't want the lingering soft-amber tint.
               hoveredLocalIdRef.current = null;
               hoveredExpressIdRef.current = null;
+              void setCoordinatedHover('canvas', null).catch(() => {});
 
+              // Arm the paint acknowledgement before mutating selection.
+              // Zustand subscribers schedule synchronously; keeping this
+              // ordering makes the latency sample belong to that exact state
+              // transition even if the scheduler implementation changes.
+              pendingClickStartRef.current = tClickStart;
               if (event.shiftKey) {
                 // Shift+click: toggle into multi-select set
                 useStore.getState().toggleSelectId(productId);
@@ -4530,7 +5559,7 @@ export default function ViewerPanel({
               }
               // Start highlight rebuild in the same task as the click.
               rebuildSchedulerRef.current?.cancel();
-              void rebuildNativeHighlightsRef.current?.();
+              rebuildSchedulerRef.current?.schedule();
 
               // Warm the properties cache for the selected element.
               void modelService.getElement(productId).catch(() => {});
@@ -4545,14 +5574,14 @@ export default function ViewerPanel({
                   summary: activitySummary,
                 });
               }, 0);
-
-              // Stop the click-to-highlight timer after the highlight flush completes.
-              pendingClickStartRef.current = tClickStart;
-            } else if (!event.shiftKey) {
+            } else if (
+              !event.shiftKey
+              && isConfirmedVoidPick({ exactHit: false, error: pickError })
+            ) {
               // Click on empty scene clears selection (but Shift+click on void is a no-op)
               useStore.getState().selectElement(null);
               rebuildSchedulerRef.current?.cancel();
-              void rebuildNativeHighlightsRef.current?.();
+              rebuildSchedulerRef.current?.schedule();
             }
           } catch (err) {
             console.warn('Raycast failed:', err);
@@ -4560,7 +5589,7 @@ export default function ViewerPanel({
         };
 
         // Pointer-move preview feeds measurement and hover from one rAF-throttled raycast.
-        let pendingMovePoint: { x: number; y: number } | null = null;
+        let pendingMovePoint: { x: number; y: number; isTouch: boolean } | null = null;
         let moveRafHandle = 0;
         let moveInFlight = false;
         let replayMoveAfterFlight = false;
@@ -4652,45 +5681,37 @@ export default function ViewerPanel({
           // the highlight back to a stale element.
           const myGen = hoverGenRef.current;
 
-          const pickerPoint = clientPointToNdc(pt, canvas);
           const mouse2 = new THREE.Vector2(pt.x, pt.y);
           try {
-            // Fast miss-guard: GPU color-coded pass (O(1)). Avoids raycast on void.
-            const fastPicker = fastPickerRef.current;
-            if (fastPicker) {
-              const hitModelId = await queryFastPicker(fastPicker, pickerPoint);
-              if (myGen !== hoverGenRef.current) return;
-              if (!hitModelId) {
-                const prevHoverLocal = hoveredLocalIdRef.current;
-                const prevHoverExpress = hoveredExpressIdRef.current;
-                if (prevHoverLocal !== null) {
-                  hoveredLocalIdRef.current = null;
-                  hoveredExpressIdRef.current = null;
-                  const st = useStore.getState();
-                  if (!isExpressIdSelected(prevHoverExpress, st.selectedElementId, st.selectedIds)) {
-                    model.resetHighlight([prevHoverLocal]).catch(() => {});
-                  }
-                  // Schedule a render so the un-highlight
-                  // is visible on the next frame instead of waiting for the
-                  // next orbit tick. update(true) is required - highlight
-                  // resets don't change LOD-tile structure, so update(false)
-                  // is a no-op for the render flush.
-                  fragmentUpdateScheduler?.request({
-                    priority: 'visual',
-                    force: true,
-                    reason: 'hover-highlight',
-                  });
-                }
-                clearHoverTooltip();
-                if (ctrl && measuring) ctrl.handleMove(null);
-                return;
-              }
-            }
-
             const cam = world.camera.three as THREE.PerspectiveCamera | THREE.OrthographicCamera;
-            const result = await model.raycast({ camera: cam, mouse: mouse2, dom: canvas });
+            // While measuring, resolve snap features alongside the surface hit.
+            // Issued in parallel so snapping costs no extra round-trip, and only
+            // while the ruler is armed - normal navigation is untouched.
+            const [result, engineHits] = await Promise.all([
+              trackRaycast(model.raycast({ camera: cam, mouse: mouse2, dom: canvas })),
+              measuring ? snapRaycast(cam, pt.x, pt.y) : Promise.resolve([] as EngineSnapHit[]),
+            ]);
             // Stale: a newer pointermove fired while we were awaiting.
             if (myGen !== hoverGenRef.current) return;
+
+            if (result) {
+              const state = useStore.getState();
+              exactHoverPickCache = {
+                result,
+                clientX: pt.x,
+                clientY: pt.y,
+                timestamp: performance.now(),
+                cameraWorld: cam.matrixWorld.clone(),
+                projection: cam.projectionMatrix.clone(),
+                isolatedIds: state.isolatedIds,
+                hiddenIds: state.hiddenIds,
+                clipPlanes: state.clipPlanes,
+                sectionWorkspace: state.sectionWorkspace,
+                sectionBoxEnabled: state.sectionBoxEnabled,
+              };
+            } else {
+              exactHoverPickCache = null;
+            }
 
             // Cache id mappings from hover hits for later click highlights.
             if (result) {
@@ -4700,26 +5721,32 @@ export default function ViewerPanel({
             }
 
             if (ctrl && measuring) {
+              // Match the click tolerance per pointer type (28 px touch,
+              // 20 px mouse) so the preview never promises a snap the
+              // committed point cannot reproduce - and vice versa.
+              const thresholdPx = pt.isTouch ? 28 : 20;
+              const snap = resolveSnapAt(engineHits, pt.x, pt.y, cam, thresholdPx);
+              lastSnapResolve = {
+                clientX: pt.x,
+                clientY: pt.y,
+                candidate: snap,
+                cameraWorld: cam.matrixWorld.clone(),
+                projection: cam.projectionMatrix.clone(),
+              };
               if (result?.point) {
                 const worldPt = new THREE.Vector3(result.point.x, result.point.y, result.point.z);
-                // Screen-space vertex snap: project face vertices and snap within 20px.
-                const canvasRect = canvas.getBoundingClientRect();
-                const cursorPx = new THREE.Vector2(
-                  pt.x - canvasRect.left,
-                  pt.y - canvasRect.top,
-                );
-                const vertSnap = snapToFaceVertex(
-                  result.facePoints,
-                  cursorPx,
-                  cam,
-                  canvas.clientWidth,
-                  canvas.clientHeight,
-                  20,
-                );
-                ctrl.handleMove(worldPt, vertSnap);
+                ctrl.handleMove(worldPt, snap);
+              } else if (snap) {
+                // Snapping casts a frustum, not a ray, so an edge just off the
+                // silhouette still resolves when the surface raycast misses.
+                ctrl.handleMove(snap.point.clone(), snap);
               } else {
                 ctrl.handleMove(null);
               }
+              updateMeasureTip(pt.x, pt.y);
+              // Preview geometry changed: on-demand rendering needs a kick, and
+              // hovering holds no pointer button so the input kick never fires.
+              requestViewerRender(80);
             }
 
             if (hoverOn && !measuring) {
@@ -4749,28 +5776,10 @@ export default function ViewerPanel({
               hoveredLocalIdRef.current = newHoverLocal;
               hoveredExpressIdRef.current = newHoverExpress;
 
-              // Fire reset + highlight WITHOUT awaiting - they don't depend
-              // on each other for the visible result, and awaiting adds
-              // ~10 ms of stall per pointermove tick. The render kick at
-              // the bottom is also fire-and-forget.
-              if (decision.toReset !== null) {
-                if (!isExpressIdSelected(prevHoverExpress, st.selectedElementId, st.selectedIds)) {
-                  model.resetHighlight([decision.toReset]).catch(() => {});
-                }
-              }
-              if (decision.toHighlight !== null) {
-                model.highlight([decision.toHighlight], HOVER_HIGHLIGHT_MATERIAL).catch(() => {});
-              }
-              // Schedule a render so the new hover state is visible without
-              // waiting for the next orbit tick. Fire-and-forget - we don't
-              // need to wait for it to finish before starting the next
-              // pointermove raycast. update(true) required: highlight changes
-              // alone don't trigger a render flush via update(false).
-              fragmentUpdateScheduler?.request({
-                priority: 'visual',
-                force: true,
-                reason: 'hover-highlight',
-              });
+              // Publish one named hover layer. The coordinator restores the
+              // durable winner (selection, AI result, or colour layer) when
+              // this temporary layer moves or clears.
+              void setCoordinatedHover('canvas', decision.toHighlight).catch(() => {});
             }
           } catch {
             /* preview raycast misses are non-fatal */
@@ -4790,6 +5799,11 @@ export default function ViewerPanel({
           // BEFORE any policy short-circuit below.
           lastPointerClientX = event.clientX;
           lastPointerClientY = event.clientY;
+          // Wall preview shares this single pointer hub. Ignore button drags
+          // so orbit/pan never churns editor geometry or React state.
+          if (event.buttons === 0) {
+            wallDrawControllerRef.current?.handlePointerMove(event.clientX, event.clientY);
+          }
           // Feed the shared move-preview as long as either consumer is
           // interested (measurement mode on OR hover highlight enabled).
           const ctrl = measurementControllerRef.current;
@@ -4803,7 +5817,11 @@ export default function ViewerPanel({
               getRuntimeQualitySettings(interactionQualityRef.current.active).hoverRaycastEnabled,
           };
           if (!shouldRunHoverRaycast(policy)) return;
-          pendingMovePoint = { x: event.clientX, y: event.clientY };
+          pendingMovePoint = {
+            x: event.clientX,
+            y: event.clientY,
+            isTouch: event.pointerType === 'touch',
+          };
           hoverGenRef.current += 1;
           if (shouldDelayHoverRaycast(policy)) {
             if (hoverIntentTimer !== null) {
@@ -4836,24 +5854,13 @@ export default function ViewerPanel({
             moveRafHandle = 0;
           }
           clearHoverTooltip();
+          setMeasurementTip(null);
           const prevHoverLocal = hoveredLocalIdRef.current;
           const prevHoverExpress = hoveredExpressIdRef.current;
           if (prevHoverLocal === null) return;
           hoveredLocalIdRef.current = null;
           hoveredExpressIdRef.current = null;
-          try {
-            const st = useStore.getState();
-            if (!isExpressIdSelected(prevHoverExpress, st.selectedElementId, st.selectedIds)) {
-              await model.resetHighlight([prevHoverLocal]);
-            }
-            // Forced update: highlight reset doesn't change LOD-tile
-            // structure, so update(false) would skip the render flush.
-            fragmentUpdateScheduler?.request({
-              priority: 'visual',
-              force: true,
-              reason: 'hover-highlight',
-            });
-          } catch { /* noop */ }
+          try { await setCoordinatedHover('canvas', null); } catch { /* noop */ }
         };
 
         // Right-click context menu. Raycasts under the cursor; if it hits an
@@ -4864,11 +5871,15 @@ export default function ViewerPanel({
           if (disposed) return;
           event.preventDefault();
           event.stopPropagation();
+          const generation = contextMenuPickGuard.begin();
+          const anchorX = event.clientX;
+          const anchorY = event.clientY;
+          setContextMenuStateRef.current(null);
 
           // Suppress menu when the right button was dragged (orbit/pan gesture).
           // A movement of >5 px between right-pointerdown and the contextmenu
           // event means the user was rotating the model, not requesting a menu.
-          const rightDragDist = Math.hypot(event.clientX - rightDownX, event.clientY - rightDownY);
+          const rightDragDist = Math.hypot(anchorX - rightDownX, anchorY - rightDownY);
           if (rightDragDist > 5) return;
 
           // Skip while measuring - right-click cancels the in-flight ruler
@@ -4880,47 +5891,72 @@ export default function ViewerPanel({
             return;
           }
 
-          const pointerPoint = { x: event.clientX, y: event.clientY };
-          const pickerPoint = clientPointToNdc(pointerPoint, canvas);
-          const mouseVec = new THREE.Vector2(event.clientX, event.clientY);
-          let expressId: number | null = null;
-          let ifcType: string | null = null;
+          let outcome: ContextMenuPickOutcome<FragmentRaycastHit>;
           try {
-            // Fast miss-guard for context menu: skip raycast when cursor is over void.
-            const fastPicker = fastPickerRef.current;
-            if (fastPicker) {
-              const hitModelId = await queryFastPicker(fastPicker, pickerPoint);
-              if (!hitModelId) {
-                setContextMenuStateRef.current({ x: event.clientX, y: event.clientY, expressId: null, ifcType: null });
-                return;
-              }
-            }
-
-            const camera = world.camera.three as
-              | THREE.PerspectiveCamera
-              | THREE.OrthographicCamera;
-            const raycastData: FRAGS.RaycastData = { camera, mouse: mouseVec, dom: canvas };
-            const result = await model.raycast(raycastData);
-            if (result) {
-              // Normalize representation/geometry-item hits to the owning
-              // IfcProduct so the context menu acts on the same element the
-              // user thinks they clicked, not on a sub-entity.
-              expressId = modelService.resolveProductIdFromHitSync(result.itemId, result.localId);
-              // Look up the element's ifc_type from the in-memory spatial
-              // tree. Avoids a round-trip to the backend; falls back to
-              // null if the tree hasn't been populated yet.
-              ifcType = findIfcTypeForId(useStore.getState().spatialTree, expressId);
-            }
+            const { result, error } = await pickElementAt({
+              x: anchorX,
+              y: anchorY,
+            });
+            outcome = error
+              ? { status: 'failure', error }
+              : { status: 'success', hit: result };
           } catch (err) {
-            console.warn('Context-menu raycast failed:', err);
+            outcome = { status: 'failure', error: err };
+          }
+
+          const decision = contextMenuPickGuard.resolve(generation, outcome);
+          if (decision.kind === 'ignore') {
+            // Stale/disposed failures are intentionally silent. Only the
+            // current request should surface a worker problem.
+            if (decision.reason === 'failed') {
+              console.warn('Context-menu raycast failed:', decision.error);
+            }
+            return;
+          }
+
+          if (decision.kind === 'empty') {
+            // A successful `null` raycast is the only condition that opens
+            // the generic empty-space menu. Worker failures never land here.
+            setContextMenuStateRef.current({
+              x: anchorX,
+              y: anchorY,
+              expressId: null,
+              ifcType: null,
+            });
+            return;
+          }
+
+          let expressId: number;
+          let ifcType: string | null;
+          try {
+            // Normalize representation/geometry-item hits to the owning
+            // IfcProduct so the context menu acts on the same element the
+            // user thinks they clicked, not on a sub-entity.
+            expressId = modelService.resolveProductIdFromHitSync(
+              decision.hit.itemId,
+              decision.hit.localId,
+            );
+            // Look up the element's ifc_type from the in-memory spatial tree.
+            ifcType = findIfcTypeForId(useStore.getState().spatialTree, expressId);
+          } catch (err) {
+            console.warn('Context-menu hit normalization failed:', err);
+            return;
           }
 
           setContextMenuStateRef.current({
-            x: event.clientX,
-            y: event.clientY,
+            x: anchorX,
+            y: anchorY,
             expressId,
             ifcType,
           });
+        };
+
+        // Double-click closes an area polygon. The second click of the pair is
+        // absorbed by the duplicate-click guard, so this only commits.
+        const onDoubleClick = () => {
+          const ctrl = measurementControllerRef.current;
+          if (!ctrl || ctrl.getMode() !== 'area') return;
+          if (ctrl.snapshot().pending.length >= 3) ctrl.commit();
         };
 
         canvas.addEventListener('pointerdown', onPointerDown);
@@ -4928,6 +5964,7 @@ export default function ViewerPanel({
         canvas.addEventListener('pointermove', onPointerMove);
         canvas.addEventListener('pointerleave', onPointerLeave);
         canvas.addEventListener('contextmenu', onCanvasContextMenu);
+        canvas.addEventListener('dblclick', onDoubleClick);
         canvas.style.cursor = 'default';
 
         // Dispose the storey[0] sub-model now that the full model is loaded.
@@ -4939,6 +5976,7 @@ export default function ViewerPanel({
           }
           storeySubModel = null;
         }
+        if (disposed) return;
 
         updateLoadProgress({
           title: 'Viewport ready',
@@ -4950,12 +5988,43 @@ export default function ViewerPanel({
         // Flush one final render then wait for at least 3 rendered frames
         // before signalling ready. A forced tile rebuild here can make the
         // model visibly blink after it is already mounted.
-        try { await fragmentsManager.core.update(false); } catch { /* best-effort */ }
-        await new Promise<void>((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
-        );
+        try {
+          if (fragmentUpdateScheduler) {
+            await fragmentUpdateScheduler.requestAndWait({
+              priority: 'visual',
+              force: false,
+              reason: 'manual',
+            });
+          } else {
+            await fragmentsManager.core.update(false);
+          }
+        } catch { /* teardown or best-effort final flush */ }
+        if (disposed) return;
+        await new Promise<void>((resolve) => {
+          let remaining = 3;
+          let frame = 0;
+          let timeout = 0;
+          const finish = () => {
+            if (frame) cancelAnimationFrame(frame);
+            window.clearTimeout(timeout);
+            resolve();
+          };
+          const next = () => {
+            if (disposed || --remaining <= 0) {
+              finish();
+              return;
+            }
+            frame = requestAnimationFrame(next);
+          };
+          timeout = window.setTimeout(finish, 500);
+          frame = requestAnimationFrame(next);
+        });
+        if (disposed) return;
         // Signal readiness after the first frames paint; fade the overlay independently.
-        window.clearTimeout(globalSlowTimer);
+        if (globalSlowTimer !== null) {
+          window.clearTimeout(globalSlowTimer);
+          globalSlowTimer = null;
+        }
         setLoadingSlow(false);
         setLoadingFading(true);
         setViewerReady(true);
@@ -5014,15 +6083,21 @@ export default function ViewerPanel({
           console.info(`[ViewerPanel] Stage timings (${modelLoadSource}): ${timingDetail}`);
         }
 
-        // Fire-and-forget post-fit render so ready state is not blocked.
-        void fragmentsManager.core.update(false).catch(() => {
-          /* ignore */
+        // Queue the post-fit refresh through the serialized scheduler. It is
+        // canceled/awaited with every other model-bound update on teardown.
+        fragmentUpdateScheduler?.request({
+          priority: 'camera',
+          force: false,
+          reason: 'manual',
         });
 
         // Kick off performance sampling loop (FPS, memory, draw calls)
         startPerfSampling();
       } catch (err: any) {
-        window.clearTimeout(globalSlowTimer);
+        if (globalSlowTimer !== null) {
+          window.clearTimeout(globalSlowTimer);
+          globalSlowTimer = null;
+        }
         if (!disposed) {
           // Surface the full stack so we can tell whether the error is
           // coming from the live IFC parse, cached-fragment inflate, post-
@@ -5128,10 +6203,58 @@ export default function ViewerPanel({
       };
     }
 
-    init();
+    const initPromise = init();
 
     return () => {
       disposed = true;
+      contextMenuPickGuard.dispose();
+      if (import.meta.env.DEV && (window as any).__ifcPickAt === devPickAtHook) {
+        delete (window as any).__ifcPickAt;
+      }
+      if (import.meta.env.DEV && (window as any).__ifcSnapAt === devSnapAtHook) {
+        delete (window as any).__ifcSnapAt;
+      }
+      const coordinatorShutdown = renderStateCoordinatorRef.current?.shutdown()
+        ?? renderStateShutdownRef.current
+        ?? Promise.resolve();
+      const deferredTeardown: Array<Promise<unknown>> = [
+        coordinatorShutdown,
+        initPromise,
+        storeyCullerTransitionRef.current.catch(() => {}),
+        elementCullerTransitionRef.current.catch(() => {}),
+        spatialTileCullerTransitionRef.current.catch(() => {}),
+      ];
+      for (const scheduler of latestAsyncSchedulersRef.current) {
+        deferredTeardown.push(scheduler.shutdown());
+      }
+      if (pendingRaycasts.size > 0) {
+        const outstanding = [...pendingRaycasts];
+        deferredTeardown.push(new Promise<void>((resolve) => {
+          let settled = false;
+          let timeout = 0;
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timeout);
+            resolve();
+          };
+          // Let normal worker reads finish before killing FragmentsManager.
+          // A wedged worker must not leak the whole viewer forever; disposal
+          // after this bound is what finally terminates that operation.
+          timeout = window.setTimeout(finish, 750);
+          void Promise.allSettled(outstanding).then(finish);
+        }));
+      }
+      const pendingFurnishingShutdown = furnishingMergeShutdownRef.current;
+      if (pendingFurnishingShutdown) deferredTeardown.push(pendingFurnishingShutdown);
+      if (exactPickLeaseRef.current === exactPickLease) {
+        exactPickLeaseRef.current = null;
+      }
+      renderKickRef.current = null;
+      if (globalSlowTimer !== null) {
+        window.clearTimeout(globalSlowTimer);
+        globalSlowTimer = null;
+      }
       // Abort any in-flight native geometry request and dispose preview meshes.
       nativePreviewAbort.abort();
       if (nativePreview) {
@@ -5141,7 +6264,15 @@ export default function ViewerPanel({
       }
       removePanelResizeHooks?.();
       zFightingCleanup?.();
+      // Stop queued camera/idle work now, but keep the scheduler alive until
+      // the coordinator has settled any already-posted worker mutation. Then
+      // wait for a consumed update before disposing FragmentsManager.
       fragmentUpdateScheduler?.cancel();
+      if (fragmentUpdateScheduler) {
+        deferredTeardown.push(
+          coordinatorShutdown.catch(() => {}).then(() => fragmentUpdateScheduler.shutdown()),
+        );
+      }
       fragmentUpdateSchedulerRef.current = null;
       if (hoverIntentTimer !== null) {
         window.clearTimeout(hoverIntentTimer);
@@ -5153,36 +6284,40 @@ export default function ViewerPanel({
       perfSamplingCleanup?.();
       perfSamplingCleanup = null;
       setHoverTooltipData(null);
-      // Reset native highlights/opacity (fire-and-forget; model may already be disposed)
-      if (viewerRef.current) {
-        void viewerRef.current.model.resetHighlight(undefined).catch(() => {});
-        void viewerRef.current.model.resetOpacity(undefined).catch(() => {});
-      }
       viewHelperCleanup?.();
       pixelRatioCleanup?.();
       renderOnDemandCleanup?.();
+      contextRecoveryCleanup?.();
       // Dispose storey frustum culler (restores any auto-culled visibility)
       if (storeyFrustumCullerRef.current) {
-        const cullerModel = viewerRef.current?.model;
-        void storeyFrustumCullerRef.current.dispose(cullerModel).catch(() => {});
+        deferredTeardown.push(storeyFrustumCullerRef.current.dispose());
         storeyFrustumCullerRef.current = null;
       }
       // Dispose element frustum culler
       if (elementFrustumCullerRef.current) {
-        const cullerModel = viewerRef.current?.model;
-        void elementFrustumCullerRef.current.dispose(cullerModel).catch(() => {});
+        deferredTeardown.push(elementFrustumCullerRef.current.dispose());
         elementFrustumCullerRef.current = null;
       }
+      if (spatialTileCullerRef.current) {
+        deferredTeardown.push(spatialTileCullerRef.current.dispose());
+        spatialTileCullerRef.current = null;
+      }
       useStore.getState().updatePerfMetrics({ culledStoreys: 0, culledElements: 0 });
-      // FastModelPicker is disposed by components.dispose(); just clear the ref.
-      fastPickerRef.current = null;
       // Reset clip edges before the model is torn down so stale ClipEdges
       // instances don't reference a disposed model on the next load.
       clipEdgesServiceRef.current?.reset();
       // Dispose furnishing merge before tearing down the model
-      if (furnishingMergeRef.current) {
-        void furnishingMergeRef.current.dispose().catch(() => {});
-        furnishingMergeRef.current = null;
+      if (furnishingMergeLifecycleRef.current) {
+        const lifecycle = furnishingMergeLifecycleRef.current;
+        furnishingMergeLifecycleRef.current = null;
+        const shutdown = lifecycle.shutdown().catch(() => {});
+        furnishingMergeShutdownRef.current = shutdown;
+        if (shutdown !== pendingFurnishingShutdown) deferredTeardown.push(shutdown);
+        void shutdown.then(() => {
+          if (furnishingMergeShutdownRef.current === shutdown) {
+            furnishingMergeShutdownRef.current = null;
+          }
+        });
       }
       useStore.getState().setFurnishingMerged(false);
       // Dispose storey[0] preview sub-model if component unmounts mid-stream.
@@ -5191,19 +6326,45 @@ export default function ViewerPanel({
         storeySubModel = null;
       }
       modelService.dispose();
-      components.dispose();
-      // Revoke the FragmentsManager worker blob URL only after the manager
-      // is fully torn down - premature revocation breaks subsequent
-      // `core.load()` calls. See note at the init site.
-      if (workerBlobUrlRef.current) {
-        try { URL.revokeObjectURL(workerBlobUrlRef.current); } catch { /* best-effort */ }
-        workerBlobUrlRef.current = null;
-      }
+      const workerBlobUrl = workerBlobUrlRef.current;
       viewerRef.current = null;
       sceneThemeTargetsRef.current = null;
       useStore.getState().setModelHalfExtents(null);
+      // React cleanup cannot itself be async. Keep the fragments components
+      // alive until the coordinator's current worker mutation and the two
+      // replacement/culler lifecycles have settled, then dispose exactly once.
+      const teardownBarrier = new Promise<void>((resolve) => {
+        let settled = false;
+        let timeout = 0;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timeout);
+          resolve();
+        };
+        timeout = window.setTimeout(finish, 3_000);
+        void Promise.allSettled(deferredTeardown).then(finish);
+      });
+      void teardownBarrier.finally(() => {
+        try {
+          components.dispose();
+        } finally {
+          // Revoke only after FragmentsManager is fully torn down.
+          if (workerBlobUrl) {
+            try { URL.revokeObjectURL(workerBlobUrl); } catch { /* best-effort */ }
+            if (workerBlobUrlRef.current === workerBlobUrl) workerBlobUrlRef.current = null;
+          }
+        }
+      });
     };
-  }, [computeFitDistance, applyTheme, updateLoadProgress, applyGhostPostproduction]);
+  }, [
+    computeFitDistance,
+    applyTheme,
+    updateLoadProgress,
+    applyGhostPostproduction,
+    requestViewerRender,
+    setCoordinatedHover,
+  ]);
 
   // Toggle EdgeDetectionPass.xray on PostproductionRenderer for true ghost
   // edges. Fragment visibility/opacity is owned by the coalesced visibility
@@ -5364,34 +6525,56 @@ export default function ViewerPanel({
     };
   }, [viewerReady, frameElements]);
 
-  // Fit the section box to a single element's AABB (10 % padding on each axis).
-  const clipToElement = useCallback(async (expressId: number) => {
+  // Fit one stable section box to an arbitrary selection. Geometry remains in
+  // the scene; only the six persistent clipping equations are updated.
+  const clipToElements = useCallback(async (expressIds: number[], label?: string) => {
     if (!viewerRef.current) return;
+    const uniqueIds = Array.from(new Set(expressIds.filter(Number.isFinite)));
+    if (uniqueIds.length === 0) return;
     const { model } = viewerRef.current;
     try {
-      const [localId] = await expressToLocalIds(model, [expressId]);
-      if (localId == null) return;
-      const raw = await model.getMergedBox([localId]);
+      const localIds = (await expressToLocalIds(model, uniqueIds))
+        .filter((id): id is number => id != null);
+      if (localIds.length === 0) return;
+      const raw = await model.getMergedBox(localIds);
       if (!raw) return;
-      const box = padBox(raw, 0.1);
-      const ctrl = sectionBoxControllerRef.current;
-      if (!ctrl) return;
-      ctrl.enable(box);
-      setSectionBoxEnabled(true);
-      useStore.getState().logActivity({ kind: 'view', summary: `Section box clipped to element #${expressId}` });
+      const bounds: SectionBounds = [
+        raw.min.x, raw.min.y, raw.min.z,
+        raw.max.x, raw.max.y, raw.max.z,
+      ];
+      const name = label ?? (uniqueIds.length === 1
+        ? `Element #${uniqueIds[0]}`
+        : `${uniqueIds.length} selected elements`);
+      setSectionWorkspace(createSelectionSectionPreset({
+        id: `selection:${uniqueIds.length}:${uniqueIds.slice(0, 8).join('-')}`,
+        name: `Section: ${name}`,
+        bounds,
+        paddingFraction: 0.1,
+        minimumPadding: 0.01,
+      }));
+      useStore.getState().logActivity({
+        kind: 'view',
+        summary: `Section box fitted to ${name}`,
+      });
     } catch (e) {
-      console.warn('clipToElement failed:', e);
+      console.warn('clipToElements failed:', e);
     }
-  }, [expressToLocalIds, setSectionBoxEnabled]);
+  }, [expressToLocalIds, setSectionWorkspace]);
+
+  const clipToElement = useCallback((expressId: number) => {
+    void clipToElements([expressId], `element #${expressId}`);
+  }, [clipToElements]);
 
   // Register clipToElement with the store (same pattern as zoomToElement).
   useEffect(() => {
     if (!viewerReady) return;
-    useStore.getState().setClipToElementFn((id) => { void clipToElement(id); });
+    useStore.getState().setClipToElementFn(clipToElement);
+    useStore.getState().setClipToElementsFn((ids, label) => { void clipToElements(ids, label); });
     return () => {
       useStore.getState().setClipToElementFn(null);
+      useStore.getState().setClipToElementsFn(null);
     };
-  }, [viewerReady, clipToElement]);
+  }, [viewerReady, clipToElement, clipToElements]);
 
   // Soft amber preview highlight driven by sidebar tree-row hover.
   // Reuses HOVER_HIGHLIGHT_MATERIAL semantics (amber + transparent) so the
@@ -5419,14 +6602,7 @@ export default function ViewerPanel({
       if (prevLocal == null) return;
       treeHoverPaintedLocalRef.current = null;
       treeHoverStateRef.current = onTreeHoverPainted(treeHoverStateRef.current, null);
-      const st = useStore.getState();
-      if (!shouldSkipResetForSelection(prevExpress, st.selectedElementId, st.selectedIds)) {
-        await model.resetHighlight([prevLocal]).catch(() => {});
-        // resetHighlight alone doesn't dirty LOD tiles under the manual-render
-        // renderer, so kick one coalesced frame - otherwise the un-paint may
-        // linger until the next camera/visibility event (Appendix B picking #6).
-        requestFragmentUpdate('hover-highlight');
-      }
+      await setCoordinatedHover('tree', null).catch(() => {});
       return;
     }
 
@@ -5454,19 +6630,13 @@ export default function ViewerPanel({
       const st = useStore.getState();
       if (shouldSkipResetForSelection(expressId, st.selectedElementId, st.selectedIds)) {
         if (prevLocal != null && !shouldSkipResetForSelection(prevExpress, st.selectedElementId, st.selectedIds)) {
-          await model.resetHighlight([prevLocal]).catch(() => {});
+          await setCoordinatedHover('tree', null).catch(() => {});
         }
         treeHoverPaintedLocalRef.current = null;
         treeHoverStateRef.current = onTreeHoverPainted(treeHoverStateRef.current, null);
         return;
       }
       if (prevLocal === localId) return;  // already painted; nothing to do
-
-      if (prevLocal != null) {
-        if (!shouldSkipResetForSelection(prevExpress, st.selectedElementId, st.selectedIds)) {
-          await model.resetHighlight([prevLocal]).catch(() => {});
-        }
-      }
 
       if (isResolutionStale(treeHoverStateRef.current, myGen)) return;
       treeHoverPaintedLocalRef.current = localId;
@@ -5476,11 +6646,11 @@ export default function ViewerPanel({
       // fast tree sweep used to leak one of each per row (Appendix B picking
       // #2). HOVER_HIGHLIGHT_MATERIAL already encodes the same amber / 0.45 /
       // transparent / RenderedFaces.ONE the canvas hover path uses.
-      model.highlight([localId], HOVER_HIGHLIGHT_MATERIAL).catch(() => {});
+      await setCoordinatedHover('tree', localId);
     } catch {
       // Resolution failure is non-fatal - just leave the previous paint alone.
     }
-  }, [expressToLocalIds, requestFragmentUpdate]);
+  }, [expressToLocalIds, setCoordinatedHover]);
 
   useEffect(() => {
     if (!viewerReady) return;
@@ -5489,13 +6659,14 @@ export default function ViewerPanel({
       useStore.getState().setTreeHoverPreviewFn(null);
       // Clear any leftover paint on unmount / model swap.
       const prevLocal = treeHoverPaintedLocalRef.current;
+      const prevExpress = treeHoverStateRef.current.paintedId;
       treeHoverPaintedLocalRef.current = null;
       treeHoverStateRef.current = INITIAL_TREE_HOVER_STATE;
       if (prevLocal != null && viewerRef.current) {
-        viewerRef.current.model.resetHighlight([prevLocal]).catch(() => {});
+        void setCoordinatedHover('tree', null).catch(() => {});
       }
     };
-  }, [viewerReady, treeHoverPreview]);
+  }, [viewerReady, treeHoverPreview, setCoordinatedHover]);
 
   // Keyboard zoom: + / = zoom in, - zoom out, 0 fit to model.
   // Only fires when no text input is focused (avoids hijacking form fields).
@@ -5679,6 +6850,8 @@ export default function ViewerPanel({
       hiddenIds: [...state.hiddenIds],
       selectedId: state.selectedElementId,
       highlightedIds: [...state.highlightedIds],
+      sectionWorkspace: state.sectionWorkspace,
+      sectionBoxEnabled: state.sectionBoxEnabled,
       thumbnail: captureThumbnail(),
     };
 
@@ -5713,6 +6886,20 @@ export default function ViewerPanel({
 
     state.setHighlightedIds(vp.highlightedIds);
     state.selectElement(vp.selectedId);
+
+    // Viewpoints saved before the section workspace existed lack these fields
+    // and must leave the current section state untouched.
+    if (vp.sectionWorkspace !== undefined || vp.sectionBoxEnabled !== undefined) {
+      // Persisted payloads are untrusted; parse validates and returns null on
+      // schema drift so a corrupt workspace clears instead of throwing.
+      const workspace = vp.sectionWorkspace ? parseSectionWorkspace(vp.sectionWorkspace) : null;
+      state.setSectionWorkspace(workspace);
+      // setSectionWorkspace derives enabled from the box; a workspace kept
+      // while temporarily disabled needs the saved flag re-applied after it.
+      if (typeof vp.sectionBoxEnabled === 'boolean') {
+        state.setSectionBoxEnabled(vp.sectionBoxEnabled);
+      }
+    }
 
     state.logActivity({
       kind: 'view',
@@ -6026,6 +7213,21 @@ export default function ViewerPanel({
         </div>
       )}
       {viewerReady && !BROWSER_ONLY && <FloatingChatDock />}
+      {/* Bottom-right row. The applied-filters control needs the measurement
+          controller (it lives in a ref here, not the store), so it mounts from
+          ViewerPanel rather than App. */}
+      {viewerReady && (
+        <div className="viewer-br-row">
+          <ViewerResetControl
+            measurementCount={measurementSnapshot?.committed.length ?? 0}
+            onClearMeasurements={() => {
+              clearanceFirstTriangleRef.current = null;
+              measurementControllerRef.current?.clear();
+            }}
+          />
+          {!BROWSER_ONLY && <FloatingChatPill />}
+        </div>
+      )}
       <HighlightBadge />
       {viewerReady && <SelectionSummaryChip />}
       {/* Bottom-center tool row: nav/visibility pill + ghost-mode toggle
@@ -6085,6 +7287,7 @@ export default function ViewerPanel({
       )}
       {/* Element name tooltip on hover - leaf component fed by hoverTooltipBridge */}
       <ViewerHoverTooltip />
+      <MeasurementCursorTip />
       {/* Touch-friendly zoom controls (+/- buttons) */}
       {viewerReady && (
         <div className="viewer-zoom-controls" aria-label="Zoom controls">
@@ -6113,12 +7316,19 @@ export default function ViewerPanel({
           >-</button>
         </div>
       )}
+      {/* B5 mount point: edit-mode drawing toolbar (gates itself on editMode). */}
+      {wallDrawController && <EditToolbar controller={wallDrawController} />}
       <MeasurementControls
         snapshot={measurementSnapshot}
         onFinish={() => measurementControllerRef.current?.commit()}
-        onCancel={() => measurementControllerRef.current?.cancel()}
-        onClear={() => measurementControllerRef.current?.clear()}
-        onRemove={(id) => measurementControllerRef.current?.remove(id)}
+        onCancel={() => {
+          clearanceFirstTriangleRef.current = null;
+          measurementControllerRef.current?.cancel();
+        }}
+        onClear={() => {
+          clearanceFirstTriangleRef.current = null;
+          measurementControllerRef.current?.clear();
+        }}
       />
       <MeasurementLabels
         snapshot={measurementSnapshot}
@@ -6129,7 +7339,10 @@ export default function ViewerPanel({
         measurements={measurementSnapshot?.committed ?? []}
         unit={measurementUnit}
         onRemove={(id) => measurementControllerRef.current?.remove(id)}
-        onClearAll={() => measurementControllerRef.current?.clear()}
+        onClearAll={() => {
+          clearanceFirstTriangleRef.current = null;
+          measurementControllerRef.current?.clear();
+        }}
       />
       <ErrorBoundary label="ViewerContextMenu" fallback={null}>
         <ViewerContextMenu

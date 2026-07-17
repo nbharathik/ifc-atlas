@@ -73,6 +73,32 @@ jobs:
         run: |
           python -m pytest -q -m "not requires_ifc_load and not subprocess_sandbox" --tb=short
 
+  docs:
+    name: Docs - generated-file drift + strict mkdocs build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements-docs.txt
+
+      - name: Install docs deps
+        run: pip install -r requirements-docs.txt -r backend/requirements.txt
+
+      # The generators import the live tool/route registries; --check fails
+      # the build when TOOLS_REFERENCE/REST/WEBSOCKET drifted from the code.
+      - name: Generated docs drift check
+        run: |
+          python scripts/generate_tools_doc.py --check
+          python scripts/generate_api_doc.py --check
+
+      - name: Strict mkdocs build
+        run: python -m mkdocs build --strict
+
   backend-full:
     name: Backend - full pytest suite (Linux, IfcOpenShell safe)
     runs-on: ubuntu-latest

@@ -1,4 +1,5 @@
 import { useStore } from '../../store/useStore';
+import { STRUCTURAL_EDIT_ENABLED } from '../../config/featureFlags';
 import Icon from '../ui/Icon';
 import type { IconName } from '../ui/Icon';
 
@@ -52,15 +53,24 @@ export default function Topbar({
 
   const selectionFocusMode = useStore((s) => s.selectionFocusMode);
   const setSelectionFocusMode = useStore((s) => s.setSelectionFocusMode);
+  const editModeAvailable = useStore((s) => s.editModeAvailable);
+  const editMode = useStore((s) => s.editMode);
+  const editScope = useStore((s) => s.editScope);
+  const setEditScope = useStore((s) => s.setEditScope);
+  const toggleEditMode = useStore((s) => s.toggleEditMode);
+  const isUndoing = useStore((s) => s.isUndoing);
+  const canRedo = useStore((s) => s.canRedo);
+  const undoLastEdit = useStore((s) => s.undoLastEdit);
+  const redoLastEdit = useStore((s) => s.redoLastEdit);
   const ghostOn = selectionFocusMode === 'ghost';
 
   const hasHidden = isolatedIds.length > 0 || hiddenIds.length > 0;
   const isMultiSelect = selectedIds.length > 1;
 
-  const cycleMeasure = () => {
-    if (measurementMode === 'off') setMeasurementMode('linear');
-    else if (measurementMode === 'linear') setMeasurementMode('area');
-    else setMeasurementMode('off');
+  // Arm / disarm only. Tool choice belongs to the measurement toolbar's rail,
+  // which shows all seven; cycling here could only ever reach two of them.
+  const toggleMeasure = () => {
+    setMeasurementMode(measurementMode === 'off' ? 'linear' : 'off');
   };
 
   const actions: ActionSpec[] = [
@@ -92,9 +102,9 @@ export default function Topbar({
       id: 'measure',
       icon: 'ruler',
       tip: measurementMode === 'off'
-        ? 'Measure: click to start (line → area → off)'
-        : `Measure: ${measurementMode} (click to cycle)`,
-      onClick: cycleMeasure,
+        ? 'Measure (R) - pick a tool from the toolbar once armed'
+        : `Measure: ${measurementMode} - click to turn off`,
+      onClick: toggleMeasure,
       disabled: !modelLoaded,
       active: measurementMode !== 'off',
     },
@@ -184,6 +194,74 @@ export default function Topbar({
           );
         })}
       </div>
+
+      {/* View/Edit mode toggle + undo/redo (B2/C2): the primary edit-mode
+          entry point, kept together at the top for discoverability. Rendered
+          only when the backend reports editing enabled. */}
+      {editModeAvailable && modelLoaded && (
+        <div className="topbar-group" role="toolbar" aria-label="Editor mode">
+          <button
+            className={`topbar-btn${editMode ? ' active' : ''}`}
+            onClick={() => {
+              toggleEditMode();
+              logActivity({
+                kind: 'edit',
+                summary: editMode ? 'Left Edit mode' : 'Entered Edit mode - click a property value to edit it',
+              });
+            }}
+            title={editMode
+              ? 'Edit mode is ON - properties are editable, Ctrl+Z/Ctrl+Y undo/redo. Click to return to View mode.'
+              : 'Switch to Edit mode to edit element properties'}
+            style={editMode ? { background: 'var(--accent, #4a7)', color: '#fff' } : undefined}
+          >
+            <Icon name="pencil" size={12} /> {editMode ? 'Editing' : 'Edit'}
+          </button>
+          {editMode && (
+            <>
+              <button
+                className="topbar-icon-btn"
+                onClick={() => { void undoLastEdit(); }}
+                disabled={isUndoing}
+                title="Undo last edit (Ctrl+Z)"
+                aria-label="Undo last edit"
+              >
+                <Icon name="undo" size={14} />
+              </button>
+              <button
+                className="topbar-icon-btn"
+                onClick={() => { void redoLastEdit(); }}
+                disabled={isUndoing || !canRedo}
+                title={canRedo ? 'Redo (Ctrl+Y)' : 'Nothing to redo'}
+                aria-label="Redo"
+              >
+                <Icon name="redo" size={14} />
+              </button>
+              {/* Edit scope: semantic (no reload) vs structural (reloads).
+                  Hidden while STRUCTURAL_EDIT_ENABLED is off - the scope is
+                  pinned to semantic, so a toggle would have nothing to switch. */}
+              {STRUCTURAL_EDIT_ENABLED && (
+                <div className="edit-scope-seg" role="group" aria-label="Edit scope">
+                  <button
+                    className={`edit-scope-opt${editScope === 'semantic' ? ' active' : ''}`}
+                    onClick={() => setEditScope('semantic')}
+                    title="Semantic edits: names, properties, classifications. Updates the viewer in place - no reload."
+                  >
+                    Semantic
+                  </button>
+                  <button
+                    className={`edit-scope-opt${editScope === 'structural' ? ' active' : ''}`}
+                    onClick={() => setEditScope('structural')}
+                    title="Structural edits (beta): create walls / slabs, delete elements. Reloads the 3D viewer."
+                  >
+                    Structural
+                    <span className="edit-scope-beta">beta</span>
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       <div className="topbar-spacer" />
 

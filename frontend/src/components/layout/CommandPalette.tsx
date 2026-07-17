@@ -11,6 +11,7 @@ import {
   spatialNodeToClipboardNode,
   type ClipboardFormat,
 } from '../../services/viewer/selectionClipboardHelpers';
+import { resolveViewerActionTargets } from '../../services/viewer/viewerActionTargetHelpers';
 
 // Commands whose surfaces need the backend - filtered out of the static
 // viewer-only build (chat, edits, checkpoints, budget, health, property
@@ -102,7 +103,9 @@ export default function CommandPalette({
   const setIsolatedIds = useStore((s) => s.setIsolatedIds);
   const addHiddenIds = useStore((s) => s.addHiddenIds);
   const selectedElementId = useStore((s) => s.selectedElementId);
+  const selectedIds = useStore((s) => s.selectedIds);
   const highlightedIds = useStore((s) => s.highlightedIds);
+  const frameElements = useStore((s) => s.frameElements);
   const clearChat = useStore((s) => s.clearChat);
   const clearActivity = useStore((s) => s.clearActivity);
   const pendingEdits = useStore((s) => s.pendingEdits);
@@ -117,6 +120,8 @@ export default function CommandPalette({
   const toggleSectionBox = useStore((s) => s.toggleSectionBox);
   const clipToElement = useStore((s) => s.clipToElement);
   const clipToElementFn = useStore((s) => s.clipToElementFn);
+  const clipToElements = useStore((s) => s.clipToElements);
+  const clipToElementsFn = useStore((s) => s.clipToElementsFn);
   const ghostModeOn = useStore((s) => s.ghostModeOn);
   const setGhostModeOn = useStore((s) => s.setGhostModeOn);
   const isolatedIds = useStore((s) => s.isolatedIds);
@@ -131,7 +136,11 @@ export default function CommandPalette({
   const listRef = useRef<HTMLDivElement>(null);
 
   const commands: Command[] = useMemo(() => {
-    const target = selectedElementId != null ? [selectedElementId] : highlightedIds;
+    const target = resolveViewerActionTargets({
+      selectedIds,
+      selectedElementId,
+      highlightedIds,
+    });
     const canVis = target.length > 0;
     // Copy commands work on whichever element is "current" - selected first,
     // single-highlighted as fallback. The two-state surface keeps parity with
@@ -161,7 +170,14 @@ export default function CommandPalette({
       { id: 'view.right',  label: 'View: Right',      section: 'Camera', shortcut: '4', disabled: !modelLoaded, run: () => onCameraView?.('right') },
       { id: 'view.top',    label: 'View: Top',        section: 'Camera', shortcut: '5', disabled: !modelLoaded, run: () => onCameraView?.('top') },
       { id: 'view.iso',    label: 'View: Isometric',  section: 'Camera', shortcut: '6', disabled: !modelLoaded, run: () => onCameraView?.('iso') },
-      { id: 'view.fit',    label: 'Fit model to view',section: 'Camera', shortcut: 'F', disabled: !modelLoaded, run: () => onFitModel?.() },
+      {
+        id: 'view.fit',
+        label: canVis ? 'Frame selected/highlighted elements' : 'Fit model to view',
+        section: 'Camera',
+        shortcut: 'F',
+        disabled: !modelLoaded,
+        run: () => canVis ? frameElements(target) : onFitModel?.(),
+      },
 
       // Visibility
       { id: 'vis.isolate', label: 'Isolate selected/highlighted', section: 'Visibility', shortcut: 'I', disabled: !canVis, run: () => setIsolatedIds(target) },
@@ -175,7 +191,26 @@ export default function CommandPalette({
       { id: 'selection.history.back',    label: 'Previous selection (back through history)', keywords: 'selection history back previous undo', section: 'Selection', shortcut: 'Alt+[', disabled: !modelLoaded || !historyCanGoBack(selectionHistory),    run: () => { navigateSelectionHistory('back');    setOpen(false); } },
       { id: 'selection.history.forward', label: 'Next selection (forward through history)',  keywords: 'selection history forward next redo',    section: 'Selection', shortcut: 'Alt+]', disabled: !modelLoaded || !historyCanGoForward(selectionHistory), run: () => { navigateSelectionHistory('forward'); setOpen(false); } },
       { id: 'viewer.sectionbox', label: sectionBoxEnabled ? 'Disable section box' : 'Enable section box (AABB crop)', keywords: 'section box clip crop cut aabb bounding', section: 'Visibility', shortcut: 'Alt+B', disabled: !modelLoaded, run: () => { toggleSectionBox(); setOpen(false); } },
-      { id: 'view.clip.element', label: 'Clip section box to selected element', keywords: 'section box clip crop element zoom cut aabb', section: 'Visibility', shortcut: 'Alt+X', disabled: !clipToElementFn || selectedElementId == null, run: () => { if (selectedElementId != null) { clipToElement(selectedElementId); setOpen(false); } } },
+      {
+        id: 'view.clip.element',
+        label: selectedIds.length > 1
+          ? `Clip section box to ${selectedIds.length} selected elements`
+          : 'Clip section box to selection',
+        keywords: 'section box clip crop element selection zoom cut aabb',
+        section: 'Visibility',
+        shortcut: 'Alt+X',
+        disabled: selectedIds.length > 0
+          ? !clipToElementsFn
+          : !clipToElementFn || selectedElementId == null,
+        run: () => {
+          if (selectedIds.length > 0) {
+            clipToElements(selectedIds, `${selectedIds.length} selected elements`);
+          } else if (selectedElementId != null) {
+            clipToElement(selectedElementId);
+          }
+          setOpen(false);
+        },
+      },
 
       // Clipboard - round-trip element IDs into Solibri / Navisworks / BCF /
       // Revit / spreadsheets. Mirror of the right-click viewer context menu
@@ -243,7 +278,7 @@ export default function CommandPalette({
       { id: 'ui.perf',     label: perfHudVisible ? 'Hide performance HUD' : 'Show performance HUD', section: 'Appearance', shortcut: 'M', run: () => setPerfHudVisible(!perfHudVisible) },
       { id: 'ui.perfhist', label: perfDashOpen ? 'Close load-time history' : 'Show load-time history', keywords: 'performance history load time ttfr ttfg dashboard', section: 'Appearance', shortcut: 'Shift+M', run: () => setPerfDashOpen(!perfDashOpen) },
       { id: 'ui.health', label: healthPanelOpen ? 'Close model health check' : 'Open model health check', keywords: 'health quality check audit QA QC bim issues errors warnings', section: 'Model', shortcut: 'Shift+Q', disabled: !modelLoaded, run: () => toggleTool('health') },
-      { id: 'ui.checkpoints', label: checkpointPanelOpen ? 'Close edit checkpoints' : 'Open edit checkpoints', keywords: 'checkpoints git history rollback restore undo snapshot version control ifc', section: 'Model', shortcut: 'Shift+H', disabled: !modelLoaded, run: () => setCheckpointPanelOpen(!checkpointPanelOpen) },
+      { id: 'ui.checkpoints', label: checkpointPanelOpen ? 'Close timeline' : 'Open timeline', keywords: 'timeline checkpoints git history rollback restore undo snapshot version control operations diff ifc', section: 'Model', shortcut: 'Shift+H', disabled: !modelLoaded, run: () => setCheckpointPanelOpen(!checkpointPanelOpen) },
       { id: 'ui.budget', label: budgetPanelOpen ? 'Close budget dashboard' : 'Open budget dashboard', keywords: 'budget cost spend usage llm tokens money cap limit agent', section: 'Model', shortcut: 'Shift+B', run: () => setBudgetPanelOpen(!budgetPanelOpen) },
       { id: 'ui.filter', label: filterPanelOpen ? 'Close property filter' : 'Open property filter', keywords: 'filter property search element ifc query condition equals contains value pset', section: 'Model', shortcut: 'Shift+F', disabled: !modelLoaded, run: () => toggleTool('filter') },
       { id: 'ui.snippets', label: 'Open Skills (Chat Manager)', keywords: 'skills snippets prompts templates reusable chat message quick insert library', section: 'AI', shortcut: 'Shift+P', run: () => {
@@ -323,10 +358,10 @@ export default function CommandPalette({
     ];
     return BROWSER_ONLY ? all.filter((c) => !BACKEND_ONLY_COMMAND_IDS.has(c.id)) : all;
   }, [
-    modelLoaded, theme, perfHudVisible, selectedElementId, highlightedIds,
+    modelLoaded, theme, perfHudVisible, selectedElementId, selectedIds, highlightedIds,
     onCameraView, onFitModel, onScreenshot, onSaveViewpoint, onRestoreViewpoint,
     viewpoints, deleteViewpoint,
-    setIsolatedIds, addHiddenIds, clearVisibility, selectElement, setHighlightedIds,
+    setIsolatedIds, addHiddenIds, clearVisibility, selectElement, setHighlightedIds, frameElements,
     toggleTree, toggleProps, toggleChat, toggleActivity, toggleViewpoints, setSettingsOpen,
     setTheme, setPerfHudVisible, reset, clearChat, clearActivity,
     rightSidebarMode, setRightSidebarMode, focusRightTab, focusLeftPane,
@@ -344,6 +379,7 @@ export default function CommandPalette({
     measurementPanelOpen, setMeasurementPanelOpen,
     copyShareLink,
     sectionBoxEnabled, toggleSectionBox, clipToElement, clipToElementFn,
+    clipToElements, clipToElementsFn,
     measurementLabelsVisible, setMeasurementLabelsVisible, measurement,
     ghostModeOn, setGhostModeOn, isolatedIds,
     selectionHistory, navigateSelectionHistory,

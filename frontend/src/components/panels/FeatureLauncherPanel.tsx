@@ -247,13 +247,19 @@ export default function FeatureLauncherPanel() {
             Tools
           </button>
           <Icon name="chevron-right" size={12} className="tool-crumb-sep" aria-hidden="true" />
-          <span className="tool-crumb tool-crumb--current">
+          <span className="tool-crumb tool-crumb--current" aria-current="page">
             {meta && <Icon name={meta.icon} size={12} />}
             {meta?.title ?? 'Tool'}
           </span>
         </nav>
         <div className="tool-embed-body">
-          <Suspense fallback={<div className="tool-embed-loading">Loading...</div>}>
+          <Suspense
+            fallback={(
+              <div className="tool-embed-loading" role="status" aria-live="polite">
+                Loading {meta?.title ?? 'tool'}...
+              </div>
+            )}
+          >
             {renderTool(activeTool, closeTool)}
           </Suspense>
         </div>

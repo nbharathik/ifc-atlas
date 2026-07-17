@@ -1,6 +1,6 @@
 {
   "name": "ifc-atlas-sidecar",
-  "version": "1.0.0",
+  "version": "0.1.1",
   "license": "MPL-2.0",
   "private": true,
   "description": "Node fragment-conversion sidecar for the IFC Atlas native parse engine.",
@@ -10,11 +10,12 @@
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
     "build": "node build.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test \"test/*.test.ts\""
   },
   "dependencies": {
     "@thatopen/components": "^3.4.0",
-    "@thatopen/fragments": "^3.4.0",
+    "@thatopen/fragments": "3.4.3",
     "earcut": "3.0.2",
     "meshoptimizer": "^1.2.0",
     "three": "^0.182.0",

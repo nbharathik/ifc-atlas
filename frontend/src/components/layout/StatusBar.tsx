@@ -15,6 +15,8 @@ export default function StatusBar() {
   const highlightedIds = useStore((s) => s.highlightedIds);
   const isolatedIds = useStore((s) => s.isolatedIds);
   const nativeIndex = useStore((s) => s.nativeIndexReady);
+  const editModeAvailable = useStore((s) => s.editModeAvailable);
+  const modelDirty = useStore((s) => s.modelDirty);
 
   const dotClass = loading ? 'warn' : modelLoaded ? '' : 'off';
   const statusLabel = loading ? 'Loading...' : modelLoaded ? 'Ready' : 'No model';
@@ -23,11 +25,28 @@ export default function StatusBar() {
 
   return (
     <div className="stats-bar">
-      <span className="status-item">
-        <span className={`status-dot-live ${dotClass}`} />
+      <span className="status-item" role="status" aria-live="polite" aria-atomic="true">
+        <span className={`status-dot-live ${dotClass}`} aria-hidden="true" />
         {statusLabel}
       </span>
       <span className="stats-separator" />
+
+      {/* Unsaved-changes badge (B7): File → Save clears it. */}
+      {editModeAvailable && modelDirty && modelLoaded && (
+        <>
+          <span
+            className="status-item"
+            title="The model has unsaved edits - use File → Save (or Save as IFC…)"
+            style={{ color: 'var(--warn, #ca3)' }}
+          >
+            ● Unsaved changes
+          </span>
+          <span className="stats-separator" />
+        </>
+      )}
+
+      {/* Undo/redo live in the Topbar next to the Edit toggle (C2) for
+          discoverability - not duplicated here at the bottom. */}
 
       {/* Show native index status when geometry is still loading */}
       {nativeIndex && !modelLoaded && (

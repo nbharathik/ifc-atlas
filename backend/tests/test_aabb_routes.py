@@ -8,7 +8,8 @@ backing service that the routes touch is monkeypatched.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -333,3 +334,65 @@ def test_tile_manifest_warm_cache_stays_cached():
     m2 = splitter.get_manifest(model, MagicMock(), sha=_SHA, grid_resolution=2, aabb_lookup=cache)
     assert m1 is m2
     assert splitter.aabb_source(_SHA, 2) == "real"
+
+
+def test_tile_fragment_route_serves_verified_binary_subset(tmp_path):
+    tile = SimpleNamespace(
+        tile_id="0-0-0",
+        storey_idx=0,
+        cell_x=0,
+        cell_y=0,
+        aabb_min=(0.0, 0.0, 0.0),
+        aabb_max=(1.0, 1.0, 1.0),
+        element_ids=[12, 14],
+        element_count=2,
+    )
+    manifest = SimpleNamespace(tiles=[tile])
+    splitter = MagicMock()
+    splitter.get_manifest.return_value = manifest
+    splitter.aabb_source.return_value = "real"
+    builder = AsyncMock(return_value=(b"TILE-FRAGMENT", "sidecar"))
+    aabb = MagicMock()
+    aabb.get_all_aabbs.return_value = {
+        12: ((0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
+    }
+
+    with (
+        patch("app.api.ifc_routes.ifc_service", _loaded_svc()),
+        patch("app.api.ifc_routes.storey_splitter") as storeys,
+        patch("app.api.ifc_routes.spatial_tile_splitter", splitter),
+        patch("app.api.ifc_routes.aabb_service", aabb),
+        patch("app.api.ifc_routes.get_or_build_spatial_fragment", builder),
+        patch("app.api.ifc_routes.FRAGMENT_CACHE_DIR", tmp_path),
+    ):
+        storeys.get_manifest.return_value = MagicMock()
+        response = _client().get(
+            f"/api/ifc/fragments/tile?sha={_SHA}&grid=2&tile_id=0-0-0"
+        )
+
+    assert response.status_code == 200
+    assert response.content == b"TILE-FRAGMENT"
+    assert response.headers["X-Fragment-Source"] == "tile-sidecar"
+    assert response.headers["X-Fragment-Tile-Id"] == "0-0-0"
+    assert response.headers["X-Fragment-AABB-Source"] == "real"
+    assert builder.await_args.kwargs["element_ids"] == [12, 14]
+
+
+def test_tile_fragment_route_rejects_unknown_tile():
+    splitter = MagicMock()
+    splitter.get_manifest.return_value = SimpleNamespace(tiles=[])
+    aabb = MagicMock()
+    aabb.get_all_aabbs.return_value = {}
+    with (
+        patch("app.api.ifc_routes.ifc_service", _loaded_svc()),
+        patch("app.api.ifc_routes.storey_splitter") as storeys,
+        patch("app.api.ifc_routes.spatial_tile_splitter", splitter),
+        patch("app.api.ifc_routes.aabb_service", aabb),
+    ):
+        storeys.get_manifest.return_value = MagicMock()
+        response = _client().get(
+            f"/api/ifc/fragments/tile?sha={_SHA}&grid=2&tile_id=9-9-9"
+        )
+
+    assert response.status_code == 404
+    assert "not present" in response.json()["detail"]

@@ -33,9 +33,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import shlex
 import shutil
+import struct
 import subprocess
 import threading
 import time
@@ -58,9 +60,58 @@ _SPAWN_TIMEOUT_S = float(os.environ.get("SIDECAR_SPAWN_TIMEOUT_S", "15"))
 _HEALTH_URL = f"http://{_DEFAULT_HOST}:{_DEFAULT_PORT}/health"
 _CONVERT_URL = f"http://{_DEFAULT_HOST}:{_DEFAULT_PORT}/convert"
 _DECIMATE_URL = f"http://{_DEFAULT_HOST}:{_DEFAULT_PORT}/decimate"
+_SUBSET_URL = f"http://{_DEFAULT_HOST}:{_DEFAULT_PORT}/subset"
 _PARSE_URL = f"http://{_DEFAULT_HOST}:{_DEFAULT_PORT}/parse"
 _GEOMETRY_URL = f"http://{_DEFAULT_HOST}:{_DEFAULT_PORT}/geometry"
 _GEOMETRY_STREAM_URL = f"http://{_DEFAULT_HOST}:{_DEFAULT_PORT}/geometry/stream"
+
+
+def _optional_int_header(headers: httpx.Headers, name: str) -> Optional[int]:
+    raw = headers.get(name)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float_header(headers: httpx.Headers, name: str) -> Optional[float]:
+    raw = headers.get(name)
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _encode_subset_request(
+    frag_bytes: bytes,
+    items: list[tuple[int, Optional[str]]],
+) -> bytes:
+    """Encode the sidecar subset protocol without base64-copying the fragment."""
+
+    if not frag_bytes:
+        raise ValueError("subset source fragment is empty")
+    if not items:
+        raise ValueError("subset item list is empty")
+    normalized_items: list[dict[str, Any]] = []
+    for source_id, guid in items:
+        item_id = int(source_id)
+        if item_id < 0 or item_id > (2**53 - 1):
+            raise ValueError(f"invalid subset source ID: {source_id}")
+        if guid is not None and not isinstance(guid, str):
+            raise ValueError(f"invalid subset GUID for source ID {source_id}")
+        normalized_items.append({"sourceId": item_id, "guid": guid})
+    metadata = json.dumps(
+        {"schemaVersion": 1, "items": normalized_items},
+        ensure_ascii=True,
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return b"IFCSUB01" + struct.pack("<I", len(metadata)) + metadata + bytes(frag_bytes)
 
 
 def _is_recoverable_sidecar_reason(reason: str | None) -> bool:
@@ -577,12 +628,52 @@ class SidecarManager:
                 raise RuntimeError(
                     f"sidecar /decimate returned {resp.status_code}: {resp.text[:200]}"
                 )
+            identity_verified_raw = resp.headers.get(
+                "X-Sidecar-Identity-Verified"
+            )
+            identity_verified: Optional[bool]
+            if identity_verified_raw is None:
+                identity_verified = None
+            elif identity_verified_raw.lower() == "true":
+                identity_verified = True
+            elif identity_verified_raw.lower() == "false":
+                identity_verified = False
+            else:
+                identity_verified = None
+            identity_sha256 = resp.headers.get("X-Sidecar-Identity-Sha256")
+            if identity_sha256 is not None:
+                try:
+                    valid_identity_hash = (
+                        len(identity_sha256) == 64
+                        and len(bytes.fromhex(identity_sha256)) == 32
+                    )
+                except ValueError:
+                    valid_identity_hash = False
+                if not valid_identity_hash:
+                    identity_sha256 = None
             meta = {
                 "inputBytes": int(resp.headers.get("X-Sidecar-Input-Bytes", "0")),
                 "outputBytes": int(resp.headers.get("X-Sidecar-Output-Bytes", "0")),
                 "trisBefore": int(resp.headers.get("X-Sidecar-Tris-Before", "0")),
                 "trisAfter": int(resp.headers.get("X-Sidecar-Tris-After", "0")),
                 "elapsedMs": int(resp.headers.get("X-Sidecar-Elapsed-Ms", "0")),
+                "targetRatio": _optional_float_header(
+                    resp.headers, "X-Sidecar-Lod-Target-Ratio"
+                ),
+                "targetError": _optional_float_header(
+                    resp.headers, "X-Sidecar-Lod-Target-Error"
+                ),
+                "achievedMaxError": _optional_float_header(
+                    resp.headers, "X-Sidecar-Lod-Max-Error"
+                ),
+                "achievedWeightedMeanError": _optional_float_header(
+                    resp.headers, "X-Sidecar-Lod-Mean-Error"
+                ),
+                "identityCount": _optional_int_header(
+                    resp.headers, "X-Sidecar-Identity-Count"
+                ),
+                "identitySha256": identity_sha256,
+                "identityVerified": identity_verified,
             }
             logger.info(
                 "sidecar decimate POST done model_id=%s status=%s output=%.2fMB tris=%s->%s wall_ms=%.1f",
@@ -596,6 +687,76 @@ class SidecarManager:
             return resp.content, meta
 
     # ────────────────────────────────────────────────────────────────────
+    async def subset(
+        self,
+        frag_bytes: bytes,
+        items: list[tuple[int, Optional[str]]],
+        model_id: str = "subset-model",
+        timeout_s: Optional[float] = None,
+    ) -> tuple[bytes, dict[str, Any]]:
+        """Create an ID/GUID/material-verified subset of a full fragment."""
+
+        health = await self.health()
+        if not health.get("ok"):
+            raise RuntimeError(health.get("reason") or "sidecar unavailable")
+        payload = _encode_subset_request(frag_bytes, items)
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            resp = await client.post(
+                _SUBSET_URL,
+                content=payload,
+                params={"modelId": model_id},
+                headers={"Content-Type": "application/octet-stream"},
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"sidecar /subset returned {resp.status_code}: {resp.text[:200]}"
+                )
+
+            identity_verified = (
+                resp.headers.get("X-Sidecar-Identity-Verified", "").lower()
+                == "true"
+            )
+            content_verified = (
+                resp.headers.get("X-Sidecar-Content-Verified", "").lower()
+                == "true"
+            )
+            identity_sha256 = resp.headers.get("X-Sidecar-Identity-Sha256", "")
+            content_sha256 = resp.headers.get("X-Sidecar-Content-Sha256", "")
+            try:
+                hashes_valid = (
+                    len(bytes.fromhex(identity_sha256)) == 32
+                    and len(identity_sha256) == 64
+                    and len(bytes.fromhex(content_sha256)) == 32
+                    and len(content_sha256) == 64
+                )
+            except ValueError:
+                hashes_valid = False
+            if not identity_verified or not content_verified or not hashes_valid:
+                raise RuntimeError("sidecar subset did not return a complete parity proof")
+
+            meta = {
+                "inputBytes": int(resp.headers.get("X-Sidecar-Input-Bytes", "0")),
+                "outputBytes": int(resp.headers.get("X-Sidecar-Output-Bytes", "0")),
+                "requestedCount": int(
+                    resp.headers.get("X-Sidecar-Subset-Requested", "0")
+                ),
+                "resolvedCount": int(
+                    resp.headers.get("X-Sidecar-Subset-Resolved", "0")
+                ),
+                "guidRemapCount": int(
+                    resp.headers.get("X-Sidecar-Subset-Guid-Remaps", "0")
+                ),
+                "identityCount": int(
+                    resp.headers.get("X-Sidecar-Identity-Count", "0")
+                ),
+                "identitySha256": identity_sha256,
+                "identityVerified": True,
+                "contentSha256": content_sha256,
+                "contentVerified": True,
+                "elapsedMs": int(resp.headers.get("X-Sidecar-Elapsed-Ms", "0")),
+            }
+            return resp.content, meta
+
     # Parse (native metadata extraction)
     # ────────────────────────────────────────────────────────────────────
 

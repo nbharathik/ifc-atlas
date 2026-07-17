@@ -14,13 +14,13 @@ entries are evicted in FIFO order. Stale fetches against an evicted
 edit_id return ``None`` and the frontend falls back to the existing
 ``rebuild_started`` full-reload path (Invariant 5 fallback).
 
-**v1.0 scope** - this module stores the metadata + the endpoint serves
+**v0.1.1 scope** - this module stores the metadata + the endpoint serves
 ``{representations: {}}``. The representation bytes themselves are a
-v1.1 follow-up that needs a @thatopen/fragments-compatible
+future hot-replacement work that needs a @thatopen/fragments-compatible
 ``RawRepresentation`` serializer built against IfcOpenShell geometry.
 With empty representations, ``fragmentDeltaLoader`` returns
 ``updatedCount=0`` and the legacy full-reload path continues to work,
-so v1.0 is wire-compatible without behaviour change.
+so v0.1.1 is wire-compatible without risking partial geometry updates.
 """
 
 from __future__ import annotations

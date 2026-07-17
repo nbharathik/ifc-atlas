@@ -30,7 +30,12 @@ from app.services.prompt_library import prompt_library
 from app.services.snippet_service import snippet_service
 from app.services.sandbox_service import sandbox_service
 from app.services.tool_sets import tool_set_registry
-from app.services.tools import execute_tool, tool_tier, tool_where, get_tool_catalog
+from app.services.tools import (
+    get_tool_catalog,
+    tool_activity_kind,
+    tool_tier,
+    tool_where,
+)
 from app.services.tool_settings_service import tool_settings_service
 from app.services.session_memory import SessionMemory
 
@@ -324,6 +329,10 @@ class ModelRequest(BaseModel):
     supports_structured_output: bool = True
     cost_tier: str = "medium"         # free | low | medium | high
     speed_tier: str = "medium"        # slow | medium | fast
+    # Approximate USD per 1M tokens; drives cost telemetry + budget caps.
+    # None = unknown (cost omitted from usage events).
+    input_cost_per_1m: float | None = None
+    output_cost_per_1m: float | None = None
     notes: str = ""
     enabled: bool = True
 
@@ -485,6 +494,40 @@ async def set_tool_settings(payload: ToolSettingsPayload):
     return {"disabled_tools": sorted(updated)}
 
 
+def _selection_context_block(selected_ids: list[int], cap: int = 20) -> str:
+    """Markdown block describing the user's CURRENT viewer selection (D6).
+
+    Client-authoritative ids enriched with type/name from the loaded model
+    when available. Empty string when nothing is selected. Never raises -
+    selection context is a convenience, not a dependency.
+    """
+    if not selected_ids:
+        return ""
+    lines: list[str] = []
+    try:
+        model = ifc_service.model if ifc_service.is_loaded else None
+    except Exception:  # noqa: BLE001
+        model = None
+    for eid in selected_ids[:cap]:
+        try:
+            entity = model.by_id(int(eid)) if model is not None else None
+        except (RuntimeError, ValueError, TypeError):
+            entity = None
+        if entity is None:
+            lines.append(f"- #{eid}")
+            continue
+        name = getattr(entity, "Name", None) or "Unnamed"
+        lines.append(f"- #{eid} {entity.is_a()} '{name}'")
+    suffix = ""
+    if len(selected_ids) > cap:
+        suffix = f"\n(+{len(selected_ids) - cap} more selected)"
+    return (
+        "## Current selection (3D viewer)\n"
+        "The user has these elements selected right now; \"the selected "
+        "element/wall/etc.\" refers to them:\n" + "\n".join(lines) + suffix
+    )
+
+
 @router.get("/context")
 async def get_model_context():
     """Return the context block currently injected into agent system prompts.
@@ -621,6 +664,38 @@ async def doc_semantic_status():
     return document_index_service.semantic_status()
 
 
+@router.get("/reference-docs/status")
+async def reference_docs_status():
+    """Status of the AI reference-docs index (IfcOpenShell API, IFC schema).
+
+    Drives the Chat Manager "Knowledge" tab: how many reference documents are
+    indexed and whether semantic search is active. Distinct from ``/docs`` which
+    manages the *user's* uploaded documents; reference docs are the API/schema
+    knowledge the ``get_docs`` tool consults.
+    """
+    from app.services.reference_docs_service import reference_docs_service
+    return reference_docs_service.status()
+
+
+@router.post("/reference-docs/fetch")
+async def reference_docs_fetch(source: str = "ifcopenshell"):
+    """(Re)build the reference-docs index from installed sources.
+
+    Currently indexes the installed IfcOpenShell Python API docstrings (grouped
+    per API domain). Runs off the event loop - importing and walking the package
+    takes a few seconds - so the chat WebSocket stays responsive. Returns the
+    index result (indexed domain count, ifcopenshell version). Idempotent: a
+    re-fetch clears and rebuilds.
+    """
+    import asyncio
+
+    from app.services.reference_docs_service import reference_docs_service
+
+    if source not in ("ifcopenshell", "all"):
+        return {"ok": False, "error": f"unknown source '{source}'. Use 'ifcopenshell' or 'all'."}
+    return await asyncio.to_thread(reference_docs_service.index_ifcopenshell_api)
+
+
 # How long a single client-executed tool call may take before the
 # router gives up and injects an error into the LLM loop. Keeps a slow
 # or frozen browser from stalling the whole chat turn.
@@ -647,7 +722,8 @@ CLIENT_TOOL_TIMEOUT_SECONDS = 30.0
 
 # WS_EVENT: tool_call
 # Server -> client. The agent is invoking a tool.
-# Schema: {"type": "tool_call", "name": "search_elements", "arguments": {"query": "wall"}}
+# `tier` is the permission boundary; `activity_kind` describes the visible effect so the UI can distinguish read-only work, validation, viewer actions, semantic edits, geometry edits and code execution before the result arrives.
+# Schema: {"type": "tool_call", "name": "search_elements", "arguments": {"query": "wall"}, "tier": "read_model", "tier_label": "Read - Model", "activity_kind": "read_only"}
 
 # WS_EVENT: tool_result
 # Server -> client. The result of a tool call. "executed_on" is "server" or "client".
@@ -863,7 +939,12 @@ async def chat_websocket(websocket: WebSocket):
                 # "hybrid" leaves `target` at whatever the tool declared.
                 if target == "client":
                     return await call_client_tool(name, arguments)
-                result = execute_tool(name, arguments)
+                # Off-loop so slow tools (bSDD WAN calls, sandbox runs) don't
+                # freeze the chat WebSocket; write tools serialize on the
+                # shared edit lock inside the wrapper.
+                from app.services.tools import execute_tool_off_loop
+
+                result = await execute_tool_off_loop(name, arguments)
 
                 # Sandbox-first edit contract: when a write tool stages a sandboxed diff,
                 # fan a `pending_edit` event out on the model-sync WS so
@@ -900,6 +981,16 @@ async def chat_websocket(websocket: WebSocket):
                         if _context_block
                         else _mem_block
                     )
+                # Current viewer selection (D6): per-turn, client-authoritative,
+                # NOT cached with the per-model context (selection changes
+                # every click).
+                _sel_block = _selection_context_block(request.selected_ids)
+                if _sel_block:
+                    _context_block = (
+                        _context_block + "\n\n" + _sel_block
+                        if _context_block
+                        else _sel_block
+                    )
                 async for event in stream_chat(
                     message=request.message,
                     history=request.history,
@@ -913,6 +1004,7 @@ async def chat_websocket(websocket: WebSocket):
                     tool_set_id=request.tool_set_id,
                     prompt_id=request.prompt_id,
                     model_registry_id=request.model_registry_id,
+                    edit_scope=request.edit_scope,
                 ):
                     event_type = event.get("type")
 
@@ -923,10 +1015,14 @@ async def chat_websocket(websocket: WebSocket):
                             "content": event["content"],
                         })
                     elif event_type == "tool_call":
+                        tier_id, tier_label = tool_tier(event["name"])
                         await websocket.send_json({
                             "type": "tool_call",
                             "name": event["name"],
                             "arguments": event["arguments"],
+                            "tier": tier_id,
+                            "tier_label": tier_label,
+                            "activity_kind": tool_activity_kind(event["name"]),
                         })
                     elif event_type == "tool_result":
                         result_data = event.get("result")
@@ -1056,5 +1152,3 @@ async def chat_websocket(websocket: WebSocket):
             await receive_task
         except (asyncio.CancelledError, Exception):
             pass
-
-

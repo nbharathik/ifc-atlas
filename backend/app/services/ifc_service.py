@@ -118,13 +118,44 @@ class IfcService:
         return self._original_path.name if self._original_path else None
 
     @property
+    def original_fingerprint(self) -> str:
+        """SHA of the upload at load time. Stable across edits (which
+        re-fingerprint the working file), so it keys the per-model operation
+        log (see :mod:`app.services.operation_service`)."""
+        return self._original_fingerprint
+
+    @property
     def dirty(self) -> bool:
         """True if any edit has been persisted to the working file since load."""
         return self._dirty
 
+    def _recompute_dirty(self) -> None:
+        """Dirty = working content diverges from the SAVE baseline (the
+        original upload until the first Save, then whatever was last saved)."""
+        baseline = getattr(self, "_saved_fingerprint", "") or self._original_fingerprint
+        self._dirty = bool(baseline and self._model_fingerprint != baseline)
+
     def mark_clean(self) -> None:
-        """Reset the dirty flag - called after Save As exports the edits."""
+        """Reset the dirty flag - called after Save As exports the edits.
+
+        Also moves the dirty baseline to the current content so subsequent
+        no-op persists don't immediately re-flag the model as dirty."""
         self._dirty = False
+        if self._model_fingerprint:
+            self._saved_fingerprint = self._model_fingerprint
+
+    def save_to_original(self) -> Path:
+        """Write the working copy back to the original upload path (A7 Save).
+
+        Same serializer as Save As (ID contract preserved). Resets the dirty
+        baseline WITHOUT touching original_fingerprint - the load-time
+        identity that keys this model's operation log and checkpoint repo.
+        """
+        if self._original_path is None:
+            raise RuntimeError("No original path to save to (model not loaded from a file)")
+        self.save_as(self._original_path)
+        self.mark_clean()
+        return self._original_path
 
     def get_model_contract(self) -> dict[str, Any]:
         return {
@@ -166,6 +197,11 @@ class IfcService:
         self._model = ifcopenshell.open(str(working_path))
         self._original_path = path
         self._original_fingerprint = fingerprint
+        # Dirty baseline: separate from original_fingerprint because Save
+        # updates it while the original fingerprint must stay the LOAD-TIME
+        # identity (it keys the op log + checkpoint repo; re-keying on save
+        # would divorce the model from its own history).
+        self._saved_fingerprint = fingerprint
         self._file_path = working_path
         self._dirty = False
         self._model_fingerprint = fingerprint
@@ -177,6 +213,8 @@ class IfcService:
         self._project_cache = None
         self._stats_cache = None
         self._owner_product_cache = {}
+        for stale in self._undo_stack:
+            self._drop_undo_snapshots(stale)
         self._undo_stack = []
 
         # Any in-flight sandboxed edit proposals become invalid the
@@ -192,6 +230,17 @@ class IfcService:
         try:
             from app.services.element_index_service import element_index
             element_index.invalidate()
+        except ImportError:
+            pass
+
+        # The reusable property-filter index can be substantially larger than
+        # the lightweight semantic index. Its revision guard prevents stale
+        # query results, but eagerly dropping the previous snapshot here also
+        # releases its interned property/value tables as soon as another IFC is
+        # opened instead of retaining both models until the next filter query.
+        try:
+            from app.services.property_filter_index import property_filter_index
+            property_filter_index.invalidate()
         except ImportError:
             pass
 
@@ -968,6 +1017,11 @@ class IfcService:
             "element_ids": [m["id"] for m in matches],
         }
 
+    def resolve_storey_name(self, entity: Any) -> Optional[str]:
+        """Public read-only storey lookup for revision-scoped query indexes."""
+
+        return self._get_storey(entity)
+
     # ------------------------------------------------------------------
     # Structured write tools (rename, property edit, undo)
     # ------------------------------------------------------------------
@@ -1093,6 +1147,70 @@ class IfcService:
             "ifc_type": entity.is_a(),
             "old_name": old_name,
             "new_name": new_name,
+            "edit_id": edit_id,
+            "description": description,
+            "action": "metadata_changed",
+            "changed_ids": [element_id],
+        }
+
+    def update_text_attribute(
+        self,
+        element_id: int,
+        attribute: str,
+        new_value: Optional[str],
+    ) -> dict[str, Any]:
+        """Update a safe, non-relational IFC text attribute.
+
+        Relationship and enum fields are intentionally excluded: assigning
+        those as strings can invalidate an IFC graph. Spatial/type changes go
+        through their dedicated operations instead.
+        """
+        allowed = {"Description", "ObjectType", "Tag", "LongName"}
+        if attribute not in allowed:
+            raise ValueError(
+                f"attribute must be one of {', '.join(sorted(allowed))}"
+            )
+        entity = self._require_entity(element_id)
+        if not hasattr(entity, attribute):
+            raise ValueError(
+                f"Element {element_id} ({entity.is_a()}) has no {attribute} attribute"
+            )
+
+        old_value = getattr(entity, attribute, None)
+        value = None if new_value is None or not str(new_value).strip() else str(new_value).strip()
+        if old_value == value:
+            return {
+                "changed": False,
+                "reason": f"{attribute} is already that value",
+                "element_id": element_id,
+            }
+
+        setattr(entity, attribute, value)
+        self._persist_model()
+        self._model_version += 1
+        edit_id = uuid.uuid4().hex
+        self._last_edit_id = edit_id
+        self._project_cache = None
+        self._stats_cache = None
+
+        description = (
+            f"Set {attribute} on #{element_id} ({entity.is_a()}) "
+            f"from {old_value!r} to {value!r}"
+        )
+        self._push_undo(edit_id, description, [{
+            "op": "set_attribute",
+            "express_id": element_id,
+            "attribute": attribute,
+            "value": old_value,
+        }])
+        self._cache_meta_snapshot()
+        return {
+            "changed": True,
+            "element_id": element_id,
+            "ifc_type": entity.is_a(),
+            "attribute": attribute,
+            "old_value": old_value,
+            "new_value": value,
             "edit_id": edit_id,
             "description": description,
             "action": "metadata_changed",
@@ -1356,26 +1474,287 @@ class IfcService:
             "changed_ids": changed_ids,
         }
 
+    # ------------------------------------------------------------------
+    # Structural write methods (plan A2): creation / deletion / spatial ops.
+    # Same bookkeeping contract as the metadata writers above. Geometry- or
+    # tree-affecting results return action="model_refresh" (PatchTier.BULK →
+    # rebuild_started → viewers reload; correct-first per the master plan,
+    # incremental frag deltas come with A5). All authoring goes through the
+    # shared element_factory recipes - the exact code path AI sandbox edits
+    # use - so every surface produces identical IFC.
+    # ------------------------------------------------------------------
+
+    def create_wall(
+        self,
+        *,
+        start: list[float],
+        end: list[float],
+        height: Optional[float] = None,
+        thickness: Optional[float] = None,
+        storey_name: Optional[str] = None,
+        name: str = "Wall",
+    ) -> dict[str, Any]:
+        """Create a wall between two XY points (metres). Undoable (removes
+        the created product)."""
+        from app.services import element_factory
+
+        wall = element_factory.create_wall(
+            self.model,
+            start=start,
+            end=end,
+            height=height if height is not None else element_factory.DEFAULT_WALL_HEIGHT_M,
+            thickness=thickness if thickness is not None else element_factory.DEFAULT_WALL_THICKNESS_M,
+            storey_name=storey_name,
+            name=name or "Wall",
+        )
+        wall_id = wall.id()
+        return self._commit_structural_edit(
+            description=f"Created wall '{wall.Name}' (#{wall_id})",
+            changed_ids=[wall_id],
+            inverse_ops=[{"op": "remove_products", "express_ids": [wall_id]}],
+            extra={"element_id": wall_id, "ifc_type": wall.is_a(), "name": wall.Name},
+        )
+
+    def create_slab(
+        self,
+        *,
+        outline: list[list[float]],
+        depth: Optional[float] = None,
+        storey_name: Optional[str] = None,
+        name: str = "Slab",
+    ) -> dict[str, Any]:
+        """Create a slab from a closed XY polygon (metres). Undoable."""
+        from app.services import element_factory
+
+        slab = element_factory.create_slab(
+            self.model,
+            outline=outline,
+            depth=depth if depth is not None else element_factory.DEFAULT_SLAB_DEPTH_M,
+            storey_name=storey_name,
+            name=name or "Slab",
+        )
+        slab_id = slab.id()
+        return self._commit_structural_edit(
+            description=f"Created slab '{slab.Name}' (#{slab_id})",
+            changed_ids=[slab_id],
+            inverse_ops=[{"op": "remove_products", "express_ids": [slab_id]}],
+            extra={"element_id": slab_id, "ifc_type": slab.is_a(), "name": slab.Name},
+        )
+
+    def create_storey(self, *, name: str, elevation: float = 0.0) -> dict[str, Any]:
+        """Create a building storey at *elevation* (metres). Undoable."""
+        from app.services import element_factory
+
+        storey = element_factory.create_storey(self.model, name=name, elevation=elevation)
+        storey_id = storey.id()
+        return self._commit_structural_edit(
+            description=f"Created storey '{storey.Name}' at {float(elevation):.2f} m (#{storey_id})",
+            changed_ids=[storey_id],
+            inverse_ops=[{"op": "remove_products", "express_ids": [storey_id]}],
+            extra={"element_id": storey_id, "ifc_type": storey.is_a(), "name": storey.Name},
+        )
+
+    def assign_to_storey(self, element_id: int, storey_id: int) -> dict[str, Any]:
+        """Move an element to another storey. Undoable (restores the previous
+        container when there was one)."""
+        from app.services import element_factory
+
+        entity = self._require_entity(int(element_id))
+        storey = self._require_entity(int(storey_id))
+        old_container = element_factory.get_container_id(entity)
+        if old_container == int(storey_id):
+            return {
+                "changed": False,
+                "reason": "Element is already contained in that storey",
+                "element_id": int(element_id),
+            }
+        element_factory.assign_to_storey(self.model, entity, storey)
+        inverse: list[dict[str, Any]] = []
+        if old_container is not None:
+            inverse.append({
+                "op": "assign_container",
+                "express_id": int(element_id),
+                "container_id": old_container,
+            })
+        storey_label = getattr(storey, "Name", None) or f"#{storey_id}"
+        return self._commit_structural_edit(
+            description=(
+                f"Moved #{element_id} ({entity.is_a()}) to storey '{storey_label}'"
+            ),
+            changed_ids=[int(element_id)],
+            inverse_ops=inverse,
+            extra={"element_id": int(element_id), "storey_id": int(storey_id)},
+        )
+
+    def set_storey_elevation(self, storey_id: int, elevation: float) -> dict[str, Any]:
+        """Set a storey's Elevation attribute (metres). Undoable."""
+        entity = self._require_entity(int(storey_id))
+        if not entity.is_a("IfcBuildingStorey"):
+            raise ValueError(
+                f"Element {storey_id} is {entity.is_a()}, not an IfcBuildingStorey"
+            )
+        try:
+            old = float(entity.Elevation) if entity.Elevation is not None else None
+        except (TypeError, ValueError):
+            old = None
+        new = float(elevation)
+        if old is not None and abs(old - new) < 1e-9:
+            return {
+                "changed": False,
+                "reason": "Elevation is already that value",
+                "element_id": int(storey_id),
+            }
+        entity.Elevation = new
+        return self._commit_structural_edit(
+            description=f"Set storey '{entity.Name or storey_id}' elevation to {new:.2f} m",
+            changed_ids=[int(storey_id)],
+            inverse_ops=[{"op": "set_elevation", "express_id": int(storey_id), "value": old}],
+            extra={"element_id": int(storey_id), "old_elevation": old, "new_elevation": new},
+            action="metadata_changed",
+        )
+
+    def delete_element(self, element_id: int) -> dict[str, Any]:
+        """Delete an IfcProduct. Undoable via a pre-delete working-file
+        snapshot (a deletion's op-by-op inverse is not expressible; restoring
+        the exact prior bytes also preserves every express id)."""
+        from app.services import element_factory
+
+        entity = self._require_entity(int(element_id))
+        entity_name = getattr(entity, "Name", None) or f"#{element_id}"
+        ifc_type = entity.is_a()
+
+        snapshot = self._snapshot_for_undo()
+        element_factory.delete_product(self.model, entity)
+        inverse: list[dict[str, Any]] = []
+        if snapshot is not None:
+            inverse.append({"op": "restore_file", "snapshot_path": str(snapshot)})
+        return self._commit_structural_edit(
+            description=f"Deleted {ifc_type} '{entity_name}' (#{element_id})",
+            changed_ids=[int(element_id)],
+            inverse_ops=inverse,
+            extra={"deleted_id": int(element_id), "ifc_type": ifc_type},
+        )
+
+    def _snapshot_for_undo(self) -> Optional[Path]:
+        """Copy the (persisted, pre-mutation) working file for snapshot undo.
+
+        Every write method persists before returning, so the on-disk working
+        file always equals the in-memory model at the START of the next edit.
+        Returns None when there is no backing file (undo simply unavailable).
+        """
+        if self._file_path is None or not self._file_path.exists():
+            return None
+        try:
+            snap_dir = self._file_path.parent / ".undo_snapshots"
+            snap_dir.mkdir(parents=True, exist_ok=True)
+            snap = snap_dir / f"{uuid.uuid4().hex}.ifc"
+            shutil.copy2(self._file_path, snap)
+            return snap
+        except OSError:
+            logger.warning("undo snapshot failed; delete will not be undoable", exc_info=True)
+            return None
+
+    def _commit_structural_edit(
+        self,
+        *,
+        description: str,
+        changed_ids: list[int],
+        inverse_ops: list[dict[str, Any]],
+        extra: Optional[dict[str, Any]] = None,
+        action: str = "model_refresh",
+    ) -> dict[str, Any]:
+        """Persist + version-bump + undo-push shared by the structural writers."""
+        self._persist_model()
+        self._model_version += 1
+        edit_id = uuid.uuid4().hex
+        self._last_edit_id = edit_id
+        self._project_cache = None
+        self._stats_cache = None
+        if action == "model_refresh":
+            # Structure changed: the cached spatial tree is stale.
+            self._spatial_cache = None
+        self._push_undo(
+            edit_id, description, inverse_ops, action=action, changed_ids=changed_ids
+        )
+        self._cache_meta_snapshot()
+        out: dict[str, Any] = {
+            "changed": True,
+            "edit_id": edit_id,
+            "description": description,
+            "action": action,
+            "changed_ids": changed_ids,
+        }
+        if extra:
+            out.update(extra)
+        return out
+
     def undo_last_edit(self) -> dict[str, Any]:
-        """Pop the top entry off the undo stack and apply its inverse ops."""
+        """Pop the top entry off the undo stack and apply its inverse ops.
+
+        Three inverse families:
+        * attribute/property restores (``set_name``/``set_property``/
+          ``set_elevation``) - cheap in-place edits;
+        * structural reversals (``remove_products`` for creations,
+          ``assign_container`` for spatial moves);
+        * ``restore_file`` - a full working-file snapshot taken before an
+          operation whose inverse is not expressible op-by-op (deletions).
+          Snapshot restore preserves express ids exactly (the bytes ARE the
+          prior state), honouring the native-IFC ID contract.
+        """
         if not self._undo_stack:
             return {"undone": False, "reason": "Undo stack is empty"}
 
         entry = self._undo_stack.pop()
         issues: list[str] = []
 
+        # Whole-file snapshot restore (single-op entries by construction).
+        first = entry["inverse_ops"][0] if entry["inverse_ops"] else None
+        if first is not None and first.get("op") == "restore_file":
+            return self._undo_restore_file(entry, first)
+
+        changed_ids: list[int] = list(entry.get("changed_ids") or [])
         for inv_op in entry["inverse_ops"]:
+            kind = inv_op.get("op")
+
+            if kind == "remove_products":
+                # Inverse of a creation: remove the minted product(s).
+                from app.services import element_factory
+
+                for eid in inv_op.get("express_ids", []):
+                    try:
+                        created = self.model.by_id(int(eid))
+                    except RuntimeError:
+                        created = None
+                    if created is None:
+                        issues.append(f"Created element {eid} no longer exists; skipped")
+                        continue
+                    try:
+                        element_factory.delete_product(self.model, created)
+                        changed_ids.append(int(eid))
+                    except Exception as exc:
+                        issues.append(f"Could not remove created element {eid}: {exc}")
+                continue
+
             expr_id = inv_op["express_id"]
             entity = self.model.by_id(expr_id)
             if entity is None:
                 issues.append(f"Element {expr_id} no longer exists; skipped")
                 continue
+            changed_ids.append(expr_id)
 
-            if inv_op["op"] == "set_name":
+            if kind == "set_name":
                 entity.Name = inv_op["value"]
                 self._patch_cached_tree_name(expr_id, inv_op["value"] or "", entity.is_a())
 
-            elif inv_op["op"] == "set_property":
+            elif kind == "set_attribute":
+                try:
+                    setattr(entity, inv_op["attribute"], inv_op.get("value"))
+                except Exception as exc:
+                    issues.append(
+                        f"Could not restore {inv_op.get('attribute')} on {expr_id}: {exc}"
+                    )
+
+            elif kind == "set_property":
                 op = EditOperation(
                     op="set_property",
                     express_id=expr_id,
@@ -1387,22 +1766,78 @@ class IfcService:
                 if not ok:
                     issues.append(msg or f"Could not restore property on {expr_id}")
 
+            elif kind == "set_elevation":
+                try:
+                    entity.Elevation = inv_op["value"]
+                except Exception as exc:
+                    issues.append(f"Could not restore elevation on {expr_id}: {exc}")
+
+            elif kind == "assign_container":
+                from app.services import element_factory
+
+                container_id = inv_op.get("container_id")
+                container = self.model.by_id(int(container_id)) if container_id else None
+                if container is None:
+                    issues.append(
+                        f"Previous container for {expr_id} no longer exists; skipped"
+                    )
+                    continue
+                try:
+                    element_factory.assign_to_storey(self.model, entity, container)
+                except Exception as exc:
+                    issues.append(f"Could not restore container of {expr_id}: {exc}")
+
         self._persist_model()
         self._model_version += 1
         undo_edit_id = uuid.uuid4().hex
         self._last_edit_id = undo_edit_id
         self._project_cache = None
         self._stats_cache = None
+        if entry.get("action") == "model_refresh":
+            self._spatial_cache = None
         self._cache_meta_snapshot()
 
-        changed_ids = [op["express_id"] for op in entry["inverse_ops"]]
+        # De-dupe while preserving order.
+        changed_ids = list(dict.fromkeys(changed_ids))
         return {
             "undone": True,
             "reverted_edit_id": entry["edit_id"],
             "description": entry["description"],
             "issues": issues,
-            "action": "metadata_changed",
+            "action": entry.get("action", "metadata_changed"),
             "changed_ids": changed_ids,
+        }
+
+    def _undo_restore_file(self, entry: dict[str, Any], inv_op: dict[str, Any]) -> dict[str, Any]:
+        """Restore the working file from a pre-edit snapshot (delete undo)."""
+        snap = Path(str(inv_op.get("snapshot_path") or ""))
+        if not snap.exists():
+            return {
+                "undone": False,
+                "reason": "The undo snapshot for this edit no longer exists",
+            }
+        if self._file_path is None:
+            return {"undone": False, "reason": "No working file to restore into"}
+
+        shutil.copy2(snap, self._file_path)
+        self._model = ifcopenshell.open(str(self._file_path))
+        self._model_fingerprint = self._fingerprint_file(self._file_path)
+        self._model_version += 1
+        undo_edit_id = uuid.uuid4().hex
+        self._last_edit_id = undo_edit_id
+        self._spatial_cache = None
+        self._project_cache = None
+        self._stats_cache = None
+        self._recompute_dirty()
+        self._cache_meta_snapshot()
+        snap.unlink(missing_ok=True)
+        return {
+            "undone": True,
+            "reverted_edit_id": entry["edit_id"],
+            "description": entry["description"],
+            "issues": [],
+            "action": "model_refresh",
+            "changed_ids": list(entry.get("changed_ids") or []),
         }
 
     def get_edit_history(self) -> list[dict[str, Any]]:
@@ -1435,6 +1870,8 @@ class IfcService:
         # Sandbox edits are atomic commits - the inverse-delta undo stack
         # doesn't cover them. Clear it so a mixed rename+sandbox flow
         # can't walk into a half-reverted state.
+        for stale in self._undo_stack:
+            self._drop_undo_snapshots(stale)
         self._undo_stack = []
         # Sandbox swap and rollback both reach this reload entry. The
         # bounded-ops path runs through _persist_model() and sets _dirty
@@ -1443,24 +1880,41 @@ class IfcService:
         # reports dirty=False even when the working file diverges from
         # the upload. Compare fingerprints so a rollback to the baseline
         # correctly resets dirty.
-        self._dirty = bool(
-            self._original_fingerprint
-            and self._model_fingerprint != self._original_fingerprint
-        )
+        self._recompute_dirty()
 
     # ------------------------------------------------------------------
     # Undo stack helpers
     # ------------------------------------------------------------------
 
-    def _push_undo(self, edit_id: str, description: str, inverse_ops: list[dict]) -> None:
+    def _push_undo(
+        self,
+        edit_id: str,
+        description: str,
+        inverse_ops: list[dict],
+        *,
+        action: str = "metadata_changed",
+        changed_ids: Optional[list[int]] = None,
+    ) -> None:
         self._undo_stack.append({
             "edit_id": edit_id,
             "description": description,
             "timestamp": time.time(),
             "inverse_ops": inverse_ops,
+            # The sync action undoing this entry requires ("model_refresh"
+            # for structural edits → viewers reload; default cheap metadata).
+            "action": action,
+            "changed_ids": list(changed_ids or []),
         })
         if len(self._undo_stack) > self._undo_max:
-            self._undo_stack.pop(0)
+            evicted = self._undo_stack.pop(0)
+            self._drop_undo_snapshots(evicted)
+
+    @staticmethod
+    def _drop_undo_snapshots(entry: dict[str, Any]) -> None:
+        """Delete snapshot files owned by an evicted/cleared undo entry."""
+        for op in entry.get("inverse_ops", []):
+            if op.get("op") == "restore_file":
+                Path(str(op.get("snapshot_path") or "")).unlink(missing_ok=True)
 
     def _read_property_value(
         self, entity, property_name: str, pset_name: Optional[str]
@@ -1733,10 +2187,7 @@ class IfcService:
         # round-trip that canonicalises back to the original bytes - or
         # the fallback load path where working == upload - doesn't falsely
         # claim unsaved changes.
-        self._dirty = bool(
-            self._original_fingerprint
-            and self._model_fingerprint != self._original_fingerprint
-        )
+        self._recompute_dirty()
 
     @staticmethod
     def _derive_working_path(upload_path: Path) -> Path:

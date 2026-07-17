@@ -462,6 +462,42 @@ Delete Prompt
 
 ---
 
+### `POST` `/api/chat/reference-docs/fetch`
+
+Reference Docs Fetch
+
+(Re)build the reference-docs index from installed sources.
+
+Currently indexes the installed IfcOpenShell Python API docstrings (grouped
+per API domain). Runs off the event loop - importing and walking the package
+takes a few seconds - so the chat WebSocket stays responsive. Returns the
+index result (indexed domain count, ifcopenshell version). Idempotent: a
+re-fetch clears and rebuilds.
+
+**Query parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `source` | string |  |  |
+**Response:** Successful Response
+
+---
+
+### `GET` `/api/chat/reference-docs/status`
+
+Reference Docs Status
+
+Status of the AI reference-docs index (IfcOpenShell API, IFC schema).
+
+Drives the Chat Manager "Knowledge" tab: how many reference documents are
+indexed and whether semantic search is active. Distinct from ``/docs`` which
+manages the *user's* uploaded documents; reference docs are the API/schema
+knowledge the ``get_docs`` tool consults.
+
+**Response:** Successful Response
+
+---
+
 ### `GET` `/api/chat/snippets`
 
 Get Snippets
@@ -970,6 +1006,7 @@ Response headers:
   - `X-Fragment-Profile`: resolved profile
   - `X-Fragment-Elapsed-Ms`: sidecar conversion time (only when fresh)
   - `X-Fragment-Source-Sha256`: sha256 of the input IFC
+  - `X-Fragments-Format-Version`: producing @thatopen/fragments version
 
 **Query parameters:**
 
@@ -1064,7 +1101,10 @@ Get Edit State
 Return safe-edit state: dirty flag + original/working filenames.
 
 Used by the Save As menu item to decide whether to show the unsaved
-badge and the post-save "Close model?" prompt.
+badge and the post-save "Close model?" prompt. Also the runtime carrier
+of the backend's EDIT_MODE_ENABLED flag: the frontend gates its whole
+edit surface on this response instead of a compile-time constant, so the
+two sides can never disagree (ADR 003 phased flip).
 
 **Response:** Successful Response
 
@@ -1147,6 +1187,22 @@ Get Elements
 |---|---|---|---|
 | `ifc_type` | string |  |  |
 | `storey_id` | string |  |  |
+**Response:** Successful Response
+
+---
+
+### `POST` `/api/ifc/elements/filter`
+
+Evaluate an indexed, reusable BIM property filter
+
+Evaluate a typed AND/OR filter against the current model revision.
+
+The first request builds a compact property index. Later requests reuse it
+until ``model_version`` changes. ``count`` is exact; ``elements`` is only a
+bounded preview while ``element_ids`` carries the viewer action set.
+
+**Request body:** `IndexedPropertyFilterRequest` (JSON)
+
 **Response:** Successful Response
 
 ---
@@ -1283,16 +1339,15 @@ the elements touched by the named applied edit. The frontend's
 ``fragmentDeltaLoader`` consumes this to apply per-element geometry
 updates via ``Editor.edit()`` instead of triggering a full reload.
 
-**v1.0 scope** - the route returns the correct shape but with an
+**v0.1.1 scope** - the route returns the correct shape but with an
 empty ``representations`` map. The frontend loader iterates, finds
 no matching repData per express id, and returns ``updatedCount=0``;
 the existing ``rebuild_started`` full-reload path then takes over.
 
-**v1.1** will populate the ``representations`` map with
-@thatopen/fragments-compatible ``RawRepresentation`` blobs built
-from the live IfcOpenShell geometry - at which point edits update
-in-place under 100 ms instead of triggering the multi-second
-reload.
+A future release will populate the ``representations`` map with
+@thatopen/fragments-compatible ``RawRepresentation`` blobs built from the
+live IfcOpenShell geometry. Until then, structural edits use the
+camera-preserving full refresh for correctness.
 
 **Path parameters:**
 
@@ -1357,15 +1412,18 @@ Get Storey Fragment
 Return binary fragment bytes for one IfcBuildingStorey.
 
 Workflow (fastest first):
-1. **Disk cache hit** - returns cached ``.frag`` bytes instantly (<20 ms).
-2. **Sidecar convert** - serializes the storey to a sub-IFC via
+1. **ID-preserving subset** - copies the storey's elements out of the
+   validated full fragment through the sidecar subset path (identity and
+   content parity proofs, original local-ID/GUID bridge preserved).
+2. **Disk cache hit** - returns cached reconstruction ``.frag`` bytes.
+3. **Sidecar convert** - serializes the storey to a sub-IFC via
    ``copy_deep``, sends to the Node sidecar, caches result, returns binary.
-3. **Sub-IFC fallback** - when the sidecar is unavailable, returns raw
+4. **Sub-IFC fallback** - when the sidecar is unavailable, returns raw
    sub-IFC bytes so the frontend can convert via ``IfcConvertWorker``.
 
 Response codes:
 
-- ``200`` - binary bytes (check ``X-Fragment-Source`` for cache/sidecar/sub-ifc)
+- ``200`` - binary bytes (check ``X-Fragment-Source`` for the source)
 - ``204`` - storey has no elements (no bytes to send)
 - ``400`` - no model loaded
 - ``404`` - SHA mismatch or storey index out of range
@@ -1373,10 +1431,11 @@ Response codes:
 
 Response headers:
 
-- ``X-Fragment-Source`` - ``cache`` | ``sidecar`` | ``sub-ifc``
+- ``X-Fragment-Source`` - ``storey-subset-cache`` |
+  ``storey-subset-sidecar`` | ``cache`` | ``sidecar`` | ``sub-ifc``
 - ``X-Fragment-Storey-Idx`` - storey index (mirrors ``idx``)
 - ``X-Fragment-Storey-Name`` - IfcBuildingStorey.Name
-- ``X-Fragment-Elapsed-Ms`` - sidecar convert time (sidecar path only)
+- ``X-Fragment-Elapsed-Ms`` - sidecar convert time (sub-IFC sidecar path only)
 
 **Query parameters:**
 
@@ -1384,6 +1443,29 @@ Response headers:
 |---|---|---|---|
 | `sha` | string | ✓ | SHA-256 fingerprint of the loaded IFC model |
 | `idx` | integer | ✓ | Zero-based storey index (elevation-sorted) |
+**Response:** Successful Response
+
+---
+
+### `GET` `/api/ifc/fragments/tile`
+
+Get Spatial Tile Fragment
+
+Return an independently loadable, ID-preserving spatial tile fragment.
+
+Tiles are copied from the validated full fragment with the fragments
+library's dependency-aware subset authoring path.  The sidecar reloads the
+result and proves local-ID/GUID plus geometry/material parity before the
+backend publishes it to the versioned cache.
+
+**Query parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `sha` | string | ✓ | SHA-256 fingerprint of the loaded IFC model |
+| `tile_id` | string | ✓ |  |
+| `grid` | integer |  | NxN grid resolution per storey |
+| `profile` | string |  |  |
 **Response:** Successful Response
 
 ---
@@ -1480,6 +1562,28 @@ Rules checked:
 
 ---
 
+### `GET` `/api/ifc/history/diff`
+
+History Diff
+
+Semantic diff between two history points using ifcdiff (plan C3).
+
+Element-level added/deleted/changed INCLUDING property/pset changes (the
+legacy per-checkpoint diff only compared Name/Description/ObjectType).
+Feeds the Timeline panel's two-point compare. CPU-bound work runs off the
+event loop; results are LRU-cached by content identity.
+
+**Query parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `from_sha` | string | ✓ | Older checkpoint SHA (the diff base). |
+| `to_sha` | string |  | Newer checkpoint SHA; omit to compare against the CURRENT working model. |
+| `limit` | integer |  |  |
+**Response:** Successful Response
+
+---
+
 ### `POST` `/api/ifc/ids-info`
 
 Ids Info Endpoint
@@ -1520,11 +1624,10 @@ Get Lod Fragment
 
 Serve a decimated (LOD) fragment for a previously-converted model.
 
-Reuses the full ``.frag`` the convert path already cached
-(``{sha}-{profile}.frag``), decimates it via the Node sidecar's
-``/decimate`` endpoint, and caches the result as
-``{sha}-{profile}-lod.frag``. The first call builds + caches (a few
-seconds); subsequent calls serve from disk (<20 ms).
+Reuses the full, validated ``.frag`` artifact the convert path already
+cached, decimates it via the Node sidecar's ``/decimate`` endpoint, and
+atomically publishes a versioned LOD artifact. The first call builds and
+caches; subsequent calls serve from disk.
 
 The decimated frag preserves element identity (localIds + GUIDs + spatial
 structure), so the frontend can swap it in during camera motion and swap the
@@ -1550,7 +1653,7 @@ Response headers:
 | `fingerprint` | string | ✓ | SHA-256 of the IFC file (from the model contract) |
 | `profile` | string |  |  |
 | `ratio` | string |  | Target fraction of each shell's original triangle count. Lower = fewer triangles + faster navigation. Omit for the sidecar default (0.35). |
-| `error` | string |  | Relative error ceiling for the sloppy simplifier. Omit for the default (0.1). |
+| `error` | string |  | Relative error ceiling for the sloppy simplifier. Omit for the default (0.05). |
 **Response:** Successful Response
 
 ---
@@ -1641,6 +1744,90 @@ by SHA-256 so re-uploads are instant.
 
 ---
 
+### `POST` `/api/ifc/new`
+
+New Project
+
+Create a fresh IFC project from a template and return its bytes (plan A3).
+
+The "create a new IFC file in the viewer" path. A pure generator: it does
+NOT touch the currently-loaded model. The frontend loads the returned bytes
+through the normal upload pipeline, which then makes the new project the
+active model. Runs off the event loop (IfcOpenShell build is CPU-bound).
+
+**Query parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `template` | string |  |  |
+**Response:** Successful Response
+
+---
+
+### `GET` `/api/ifc/operations/catalogue`
+
+Operations Catalogue
+
+List the registered model operations (name, params, tier). Read-only, so
+ungated - lets the editor UI discover what it can do.
+
+**Response:** Successful Response
+
+---
+
+### `POST` `/api/ifc/operations/execute`
+
+Operations Execute
+
+Execute one model operation from the editor UI (a human direct edit).
+
+Routes through the operation layer with actor=USER, then emits the
+classified sync event so open viewers update live. Serialized against
+/edits/apply via the shared edit lock; the mutation runs on the event loop
+(not a thread) to preserve IfcOpenShell's single-writer invariant.
+
+**Request body:** `OperationRequest` (JSON)
+
+**Response:** Successful Response
+
+---
+
+### `GET` `/api/ifc/operations/history`
+
+Operations History
+
+Newest-first, actor-attributed operation log for the current model. Feeds
+the history timeline ('what did the AI change vs what did I change').
+
+**Query parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `limit` | integer |  |  |
+**Response:** Successful Response
+
+---
+
+### `POST` `/api/ifc/operations/redo`
+
+Operations Redo
+
+Redo the most recently undone operation (editor UI). Emits a sync event.
+
+**Response:** Successful Response
+
+---
+
+### `POST` `/api/ifc/operations/undo`
+
+Operations Undo
+
+Undo the most recent operation (editor UI). Emits a sync event.
+
+**Response:** Successful Response
+
+---
+
 ### `GET` `/api/ifc/project`
 
 Get Project
@@ -1663,6 +1850,23 @@ Return warm-up state of the two AI backends.
 
 Available for polling until ``ifcopenshell === "ready"``; transitions
 are also pushed as ``readiness_changed`` WS events.
+
+**Response:** Successful Response
+
+---
+
+### `POST` `/api/ifc/save`
+
+Save Model
+
+Persist working-copy edits back to the ORIGINAL upload path (plan A7).
+
+The counterpart to Save As: instead of downloading a copy, the loaded
+file itself is updated - a warm reload of the same file then opens the
+edited state. Serialized on the edit lock (a save mid-mutation would
+persist a torn state); the ID contract holds (same serializer as Save As,
+covered by test_id_stability_contract). Also snapshots a checkpoint so
+the save is a visible point on the timeline.
 
 **Response:** Successful Response
 
@@ -1803,11 +2007,13 @@ Get Spatial Tree
 
 Undo Last Edit
 
-Revert the most recently applied committed edit.
+Revert the most recently applied committed edit (legacy endpoint).
 
-Pops the top entry off the service undo stack and emits a
-``metadata_changed`` sync event so open viewer sessions update live.
-Returns ``{"undone": false}`` (200) when the stack is already empty.
+Delegates to the operation layer so the undo is serialized on the edit
+lock, recorded in the op log, arms redo, and emits the classified sync
+events - the legacy response shape (``{"undone": ...}``) is preserved
+for existing callers. Returns ``{"undone": false}`` (200) when the stack
+is already empty.
 
 **Response:** Successful Response
 
@@ -2189,4 +2395,4 @@ Upload Snapshot
 
 ---
 
-_Last regenerated: 2026-07-07. Run `python scripts/generate_api_doc.py` to refresh._
+_Last regenerated: 2026-07-16. Run `python scripts/generate_api_doc.py` to refresh._

@@ -1,13 +1,13 @@
 import { useEffect, useCallback } from 'react';
 import { useStore, activeToolOf } from '../../store/useStore';
-import { findNodeById } from '../../services/viewer/spatialTreeHelpers';
+import { collectLeavesUnder, findNodeById } from '../../services/viewer/spatialTreeHelpers';
 import {
   copyNodeToClipboard,
   spatialNodeToClipboardNode,
   type ClipboardNodeLike,
 } from '../../services/viewer/selectionClipboardHelpers';
 import { SHORTCUTS } from './shortcutsList';
-import { chooseFrameTargets } from '../../services/viewer/selectionFrameHelpers';
+import { resolveViewerActionTargets } from '../../services/viewer/viewerActionTargetHelpers';
 import { BROWSER_ONLY } from '../../config/featureFlags';
 
 const VIEW_MAP: Record<string, string> = {
@@ -63,9 +63,8 @@ export default function KeyboardShortcuts({
   const floatingChatMinimized = useStore((s) => s.floatingChatMinimized);
   const rightActiveTab = useStore((s) => s.rightActiveTab);
   const setFloatingChatMinimized = useStore((s) => s.setFloatingChatMinimized);
-  const measurementPanelOpen = useStore((s) => s.measurementPanelOpen);
-  const setMeasurementPanelOpen = useStore((s) => s.setMeasurementPanelOpen);
   const undoLastEdit = useStore((s) => s.undoLastEdit);
+  const redoLastEdit = useStore((s) => s.redoLastEdit);
   const isUndoing = useStore((s) => s.isUndoing);
   const navigateSelectionHistory = useStore((s) => s.navigateSelectionHistory);
 
@@ -102,9 +101,21 @@ export default function KeyboardShortcuts({
 
       // Ctrl+Z - undo last committed edit (guard: not already in-flight).
       // Edits only exist with a backend; skip in the viewer-only build.
+      // Routes through the operation layer when the backend reports editing
+      // enabled (arming redo), else the legacy inverse-delta undo.
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z') && !BROWSER_ONLY) {
         e.preventDefault();
         if (modelLoaded && !isUndoing) void undoLastEdit();
+        return;
+      }
+
+      // Ctrl+Y / Ctrl+Shift+Z - redo the most recently undone operation.
+      if (
+        (e.ctrlKey || e.metaKey) && !BROWSER_ONLY &&
+        ((e.key === 'y' || e.key === 'Y') || (e.shiftKey && (e.key === 'z' || e.key === 'Z')))
+      ) {
+        e.preventDefault();
+        if (modelLoaded && !isUndoing) void redoLastEdit();
         return;
       }
 
@@ -291,17 +302,17 @@ export default function KeyboardShortcuts({
           }
           break;
         case 'r':
-        case 'R':
+        case 'R': {
           e.preventDefault();
-          setMeasurementPanelOpen(!measurementPanelOpen);
+          const cur = useStore.getState().measurement.mode;
+          useStore.getState().setMeasurementMode(cur === 'off' ? 'linear' : 'off');
           break;
+        }
         case 'n':
         case 'N': {
           e.preventDefault();
           const curMode = useStore.getState().measurement.mode;
-          const nextMode = curMode === 'angle' ? 'off' : 'angle';
-          useStore.getState().setMeasurementMode(nextMode);
-          if (nextMode === 'angle') useStore.getState().setMeasurementPanelOpen(true);
+          useStore.getState().setMeasurementMode(curMode === 'angle' ? 'off' : 'angle');
           break;
         }
         case 'b':
@@ -358,10 +369,8 @@ export default function KeyboardShortcuts({
           if (e.shiftKey) {
             useStore.getState().setCheckpointPanelOpen(!useStore.getState().checkpointPanelOpen);
           } else {
-            const selH = useStore.getState().selectedElementId;
-            const hlH = useStore.getState().highlightedIds;
-            const tgtH = selH != null ? [selH] : hlH;
-            if (tgtH.length > 0) addHiddenIds(tgtH);
+            const targets = resolveViewerActionTargets(useStore.getState());
+            if (targets.length > 0) addHiddenIds(targets);
           }
           break;
         case 'f':
@@ -376,11 +385,10 @@ export default function KeyboardShortcuts({
             // Frame the active selection if there is one (matches
             // H / I priority). Empty target list falls through to fit-model so
             // a fresh model with no selection still frames the whole scene.
-            const sFrame = useStore.getState().selectedElementId;
-            const hFrame = useStore.getState().highlightedIds;
-            const frameFn = useStore.getState().frameElementsFn;
-            const targets = chooseFrameTargets(sFrame, hFrame);
-            if (targets && frameFn) {
+            const state = useStore.getState();
+            const targets = resolveViewerActionTargets(state);
+            const frameFn = state.frameElementsFn;
+            if (targets.length > 0 && frameFn) {
               frameFn(targets);
             } else {
               onFitModel?.();
@@ -399,10 +407,8 @@ export default function KeyboardShortcuts({
         case 'i':
         case 'I': {
           e.preventDefault();
-          const sel = useStore.getState().selectedElementId;
-          const hl = useStore.getState().highlightedIds;
-          const target = sel != null ? [sel] : hl;
-          if (target.length > 0) setIsolatedIds(target);
+          const targets = resolveViewerActionTargets(useStore.getState());
+          if (targets.length > 0) setIsolatedIds(targets);
           break;
         }
         case 'a':
@@ -456,12 +462,9 @@ export default function KeyboardShortcuts({
             };
             storeyNode = find(tree);
             if (!storeyNode) break;
-            const collectIds = (n: typeof tree): number[] => {
-              const ids = [n.id];
-              for (const c of n.children) ids.push(...collectIds(c));
-              return ids;
-            };
-            const subtreeIds = collectIds(storeyNode);
+            // Isolate the same leaf-element set as the Viewer Tools storey
+            // chips so the matching chip lights up.
+            const subtreeIds = collectLeavesUnder(storeyNode);
             // Toggle: if this storey is already isolated, clear; else isolate.
             const cur = state.isolatedIds;
             const sameSet = cur.length === subtreeIds.length && new Set(cur).size === new Set(subtreeIds).size &&
@@ -490,8 +493,7 @@ export default function KeyboardShortcuts({
       setIsolatedIds, addHiddenIds, clearVisibility,
       setCommandPaletteOpen, setSettingsOpen, setPerfHudVisible,
       toggleClipPlane,
-      measurementPanelOpen, setMeasurementPanelOpen,
-      undoLastEdit, isUndoing,
+      undoLastEdit, redoLastEdit, isUndoing,
       navigateSelectionHistory,
       onCameraView, onFitModel, onScreenshot, onSaveViewpoint,
     ],

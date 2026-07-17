@@ -17,6 +17,7 @@ import {
   fetchBackendMetadataIndex,
 } from './backendMetadataIndex';
 import { composeIdBridge } from './composeIdBridge';
+import { registerElementDetailInvalidator } from './elementDetailInvalidation';
 import { getClientIfcFlag } from './featureFlags';
 import { MetadataWorkerClient } from './metadataWorker';
 import { resolveHitProductId } from './resolveHitProductId';
@@ -171,7 +172,25 @@ class ModelServiceImpl {
     } else if (this.metadataWorkerInit) {
       this.releaseRawBytesAfterWorkerReady(modelRef);
     } else if (this.rawBytes && !this.metadataWorker.failed) {
-      this.startMetadataWorker(this.rawBytes, 'init', modelRef);
+      if (eagerStartup) {
+        this.startMetadataWorker(this.rawBytes, 'init', modelRef);
+      } else {
+        // The viewer conversion worker just finished parsing the same IFC.
+        // Starting a second web-ifc pass (and copying the entire source buffer)
+        // before first paint competes for CPU and memory at exactly the wrong
+        // time. Property access still starts this worker immediately on demand;
+        // otherwise wait for browser idle after the viewport is interactive.
+        queueWhenIdle(() => {
+          if (
+            this.fragmentsModel !== modelRef
+            || this.metadataWorkerInit
+            || this.metadataWorker.ready
+            || this.metadataWorker.failed
+            || !this.rawBytes
+          ) return;
+          this.startMetadataWorker(this.rawBytes, 'init', modelRef);
+        }, 2_500);
+      }
     }
 
     this._readyResolve?.();
@@ -1466,4 +1485,10 @@ function ifcTypeDisplayName(raw: string): string {
 }
 
 export const modelService = new ModelServiceImpl();
+
+// Keep the store/viewer bundle boundary intact while making post-edit cache
+// invalidation synchronous once ModelService is loaded.
+registerElementDetailInvalidator((expressIds) => {
+  modelService.invalidateElementDetails([...expressIds]);
+});
 export type ModelService = ModelServiceImpl;

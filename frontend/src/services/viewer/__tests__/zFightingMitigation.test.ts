@@ -142,6 +142,49 @@ describe('applyFragmentZFightingMitigation', () => {
     expect(material.customProgramCacheKey()).toContain('ifc-atlas-fragment-depth-v1');
   });
 
+  it('keeps single-item id meshes on standard depth writes', () => {
+    const root = new THREE.Group();
+    const material = new THREE.MeshLambertMaterial();
+    root.add(elementMesh(material, [101]));
+
+    const stats = applyFragmentZFightingMitigation(root);
+    const shader: ShaderPatchTarget = {
+      vertexShader: THREE.ShaderLib.lambert.vertexShader,
+      fragmentShader: THREE.ShaderLib.lambert.fragmentShader,
+      uniforms: {},
+    };
+    const compile = material.onBeforeCompile as unknown as (
+      shader: ShaderPatchTarget,
+      renderer: THREE.WebGLRenderer,
+    ) => void;
+    compile(shader, {} as THREE.WebGLRenderer);
+
+    expect(stats.idAttributeMeshes).toBe(1);
+    expect(stats.multiElementMeshes).toBe(0);
+    expect(stats.elementDepthBiasMaterialSlots).toBe(0);
+    expect(shader.vertexShader).not.toContain('vIfcAtlasElementId');
+    expect(shader.fragmentShader).not.toContain('ifc-atlas-element-depth-bias');
+    expect(material.customProgramCacheKey()).not.toContain('ifc-atlas-fragment-depth-v1');
+  });
+
+  it('re-processes a single-item mesh when it becomes positively multi-item', () => {
+    const root = new THREE.Group();
+    const material = new THREE.MeshLambertMaterial();
+    const m = elementMesh(material, [101]);
+    root.add(m);
+
+    applyFragmentZFightingMitigation(root);
+    expect(hasPendingFragmentZFightingMitigation(root)).toBe(false);
+
+    m.userData.itemIds = new Set([101, 202]);
+    expect(hasPendingFragmentZFightingMitigation(root)).toBe(true);
+    const stats = applyFragmentZFightingMitigation(root);
+
+    expect(stats.multiElementMeshes).toBe(1);
+    expect(stats.elementDepthBiasMaterialSlots).toBe(1);
+    expect(hasPendingFragmentZFightingMitigation(root)).toBe(false);
+  });
+
   it('reports pending mitigation when an id mesh has polygon offset but no element depth bias', () => {
     const root = new THREE.Group();
     const material = new THREE.MeshLambertMaterial();

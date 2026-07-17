@@ -3,9 +3,11 @@ import react from '@vitejs/plugin-react'
 
 // Cross-origin isolation headers (COOP + COEP). When both headers
 // are present, `self.crossOriginIsolated` flips to `true`, which unlocks
-// SharedArrayBuffer. web-ifc then picks its multi-threaded WASM variant
-// (`web-ifc-mt.wasm`) automatically, roughly halving IFC parse time on
-// medium/large models. `COEP: credentialless` is used instead of
+// SharedArrayBuffer for worker-capable dependencies and future web-ifc MT
+// support. The current browser conversion path deliberately forces web-ifc
+// single-thread mode because its nested classic workers are incompatible with
+// Vite's module-worker output; see webIfcRuntime.ts. `COEP: credentialless` is
+// used instead of
 // `require-corp` so cross-origin resources (Google Fonts, etc.) still
 // load without explicit CORP headers - they are just served without
 // credentials, which is what we want for public assets anyway.

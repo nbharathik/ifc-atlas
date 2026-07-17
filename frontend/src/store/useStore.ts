@@ -2,9 +2,10 @@ import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 import type {
   ProjectInfo, SpatialNode, ElementDetail, ModelStats, ChatMessage, ToolCall, Viewpoint,
-  AgentPreset, ChatAttachment, PendingEditEnvelope,
+  AgentPreset, ChatAttachment, PendingEditEnvelope, OperationResult,
 } from '../types/ifc';
 import type { ServerConvertCapabilities } from '../services/ifc/serverConvert';
+import { invalidateModelElementDetails } from '../services/ifc/elementDetailInvalidation';
 import {
   DEFAULT_PREBUILD_WAIT_PREFS,
   PREBUILD_POLL_MAX_MS,
@@ -21,7 +22,14 @@ import {
   writeMutedKindsToStorage,
   type ActivityKind,
 } from '../components/panels/activityFilterHelpers';
-import { undoLastEdit as apiUndoLastEdit } from '../services/api';
+import {
+  undoLastEdit as apiUndoLastEdit,
+  executeOperation as apiExecuteOperation,
+  undoOperation as apiUndoOperation,
+  redoOperation as apiRedoOperation,
+  applyPendingEditWithRetry as apiApplyPendingEdit,
+  discardPendingEdit as apiDiscardPendingEdit,
+} from '../services/api';
 import type { ReadinessStatusDto } from '../services/api';
 import {
   EMPTY_HISTORY,
@@ -32,6 +40,12 @@ import {
   resetHistory,
   type SelectionHistoryState,
 } from '../services/viewer/selectionHistoryHelpers';
+import {
+  reconcileWorkspaceClipPlanes,
+  type RelativeClipPlaneState,
+  type SectionWorkspaceDefinition,
+} from '../services/viewer/sectionWorkspace';
+import { STRUCTURAL_EDIT_ENABLED } from '../config/featureFlags';
 
 /**
  * Snapshot of AI backend warm-up state held in the store.
@@ -164,7 +178,15 @@ export type ClipAxis = 'x' | 'y' | 'z';
 /** Measurement tool mode - see services/viewer/measurementController.ts.
  *  `off` is the default and leaves pointer events to selection.
  *  `box` is a 2-click axis-aligned rectangle on the face plane of corner A. */
-export type MeasurementMode = 'off' | 'linear' | 'area' | 'box' | 'angle';
+export type MeasurementMode =
+  | 'off'
+  | 'linear'
+  | 'area'
+  | 'box'
+  | 'angle'
+  | 'height'
+  | 'clearance'
+  | 'position';
 /** Display unit for measurement readouts. Length units square for area. */
 export type MeasurementUnit = 'm' | 'mm' | 'ft';
 
@@ -245,7 +267,18 @@ export interface ClipPlaneState {
   axis: ClipAxis;
   offset: number;
   inverted: boolean;
+  /** Workspace plane id when this plane is owned by the active section
+   * workspace. Reconciliation may update/remove such planes; planes without
+   * it are user-created and are never touched by workspace application. */
+  workspacePlaneId?: string;
 }
+
+/** A persisted viewpoint. Section fields are optional so viewpoints saved
+ * before the section workspace existed restore exactly as before. */
+export type SavedViewpoint = Viewpoint & {
+  sectionWorkspace?: SectionWorkspaceDefinition | null;
+  sectionBoxEnabled?: boolean;
+};
 
 /** Maximum number of simultaneous clip planes. */
 export const MAX_CLIP_PLANES = 3;
@@ -321,7 +354,7 @@ interface AppState {
   leftActivePane: LeftPane;               // which pane (tree/search) is expanded; null = icon rail only
 
   // Viewpoints (saved camera + visibility state) for current project
-  viewpoints: Viewpoint[];
+  viewpoints: SavedViewpoint[];
 
   // Chat
   chatMessages: ChatMessage[];
@@ -352,8 +385,20 @@ interface AppState {
   // newest-first.  Cleared when a model is reloaded.
   pendingEdits: PendingEditEnvelope[];
   /** Id of the pending edit currently being reviewed (opens the modal);
-   *  null = panel dismissed / nothing to review. */
+   *  null = panel dismissed / nothing to review. Legacy modal path; the chat
+   *  now approves edits inline (see resolvePendingEdit). */
   activePendingEditId: string | null;
+  /** Approval mode for AI edits (persisted). 'ask' = the chat shows an inline
+   *  Approve/Discard below the tool call; 'auto' = staged edits are applied
+   *  automatically. Selected from the icon next to the model dropdown. */
+  editApprovalMode: 'ask' | 'auto';
+  setEditApprovalMode: (mode: 'ask' | 'auto') => void;
+  /** Resolution per pending edit id, so an inline approval widget can show the
+   *  outcome even after the edit leaves `pendingEdits`. */
+  pendingEditOutcomes: Record<string, 'applied' | 'discarded' | 'error'>;
+  /** Apply or discard a pending edit inline (no modal). Shared by the inline
+   *  Approve/Discard buttons and the auto-approve path. Idempotent per id. */
+  resolvePendingEdit: (editId: string, action: 'apply' | 'discard') => Promise<void>;
 
   // UI
   settingsOpen: boolean;
@@ -371,6 +416,9 @@ interface AppState {
   measurementLabelsVisible: boolean;
   /** Section box (AABB crop). Toggled via Alt+B. Planes managed by SectionBoxController in ViewerPanel. */
   sectionBoxEnabled: boolean;
+  /** Durable absolute section state. Kept while temporarily disabled so a
+   *  selection/storey crop can be toggled without reverting to model bounds. */
+  sectionWorkspace: SectionWorkspaceDefinition | null;
   /** Floating chat dock: true = collapsed pill, false = expanded panel. */
   floatingChatMinimized: boolean;
   /** True once the WASM service worker has control of the page (WASM served from cache). */
@@ -499,12 +547,10 @@ interface AppState {
   resetPrebuildWaitPrefs: () => void;
   selectionFocusMode: SelectionFocusMode;
   selectionGhostOpacity: number;
-  /** Whether the AABB frustum cullers (storey + element) are allowed to run.
-   *  OFF by default: when off, no geometry is ever `setVisible(false)` for
-   *  being out-of-frustum, so objects always stay in the scene and never
-   *  "pop in late" when zooming back out. Mixed/large-model users can opt in
-   *  via Settings > Performance; even when on, `decideCullerPolicy` keeps the
-   *  cullers off for small models. Persists across sessions. */
+  /** Whether stable spatial visibility culling is allowed to run. Geometry is
+   *  never destroyed: a backend-preprocessed tile mask is preferred and the
+   *  client storey/element AABB cullers remain the warm-up fallback. OFF by
+   *  default until hardware-qualified renderer baselines pass. */
   frustumCullingEnabled: boolean;
   /** Whether the ground grid is visible in the 3D viewport. Persists across
    *  sessions. On by default (most users prefer a ground reference). */
@@ -564,6 +610,8 @@ interface AppState {
   frameElementsFn: ((expressIds: number[]) => void) | null;
   /** Registered by ViewerPanel; enables the section box fitted to a single element's AABB. */
   clipToElementFn: ((expressId: number) => void) | null;
+  /** Registered by ViewerPanel; fits one stable section box around N elements. */
+  clipToElementsFn: ((expressIds: number[], label?: string) => void) | null;
   /** Soft amber preview highlight driven by sidebar tree-row hover.
    *  `null` clears the current preview.  Registered by ViewerPanel. */
   treeHoverPreviewFn: ((expressId: number | null) => void) | null;
@@ -608,6 +656,7 @@ interface AppState {
    */
   setSelectedIds: (ids: number[]) => void;
   setIsolatedIds: (ids: number[]) => void;
+  /** Replace the hidden set and leave isolate mode (visibility modes are exclusive). */
   setHiddenIds: (ids: number[]) => void;
   addHiddenIds: (ids: number[]) => void;
   clearVisibility: () => void;
@@ -635,7 +684,7 @@ interface AppState {
 
   // Viewpoints actions
   loadViewpointsForProject: (projectKey: string) => void;
-  saveViewpoint: (vp: Viewpoint) => void;
+  saveViewpoint: (vp: SavedViewpoint) => void;
   deleteViewpoint: (id: string) => void;
   renameViewpoint: (id: string, name: string) => void;
   /** Appends a chat message; the store mints a stable `id` so callers
@@ -683,6 +732,8 @@ interface AppState {
   setMeasurementLabelsVisible: (v: boolean) => void;
   setSectionBoxEnabled: (enabled: boolean) => void;
   toggleSectionBox: () => void;
+  /** Install an absolute section workspace and synchronise its box enabled state. */
+  setSectionWorkspace: (workspace: SectionWorkspaceDefinition | null) => void;
   setFloatingChatMinimized: (v: boolean) => void;
   /** Whether the viewer tools tray (floating, left of viewport) is expanded into the full panel. */
   viewerToolsOpen: boolean;
@@ -740,11 +791,17 @@ interface AppState {
   addClipPlane: () => void;
   /** Add a clip plane positioned at a specific axis + offset (from surface pick). */
   addClipPlaneAt: (axis: ClipAxis, offset: number) => void;
+  /** Reconcile workspace-owned clip planes with the active section workspace
+   *  definition. User-created planes are never modified or removed. */
+  applyWorkspaceClipPlanes: (desired: readonly RelativeClipPlaneState[]) => void;
   /** Enter / exit pick-plane mode. In pick mode the next click on the model
    *  surface places a clip plane at the hit point. */
   setPickPlaneMode: (enabled: boolean) => void;
   /** Remove a clip plane by id. */
   removeClipPlane: (id: string) => void;
+  /** Drop every clip plane (and leave pick-plane mode). Clears the persisted
+   *  pref, unlike `reset()`, which keeps planes across model unloads. */
+  clearClipPlanes: () => void;
   /** Partial merge patch for a plane by id. Switching axis resets offset to 0. */
   updateClipPlane: (id: string, patch: Partial<Omit<ClipPlaneState, 'id'>>) => void;
   /** Compat shim - patches the first (primary) plane. */
@@ -776,6 +833,10 @@ interface AppState {
   setClipToElementFn: (fn: ((expressId: number) => void) | null) => void;
   /** Thin wrapper: calls the registered fn if present. */
   clipToElement: (expressId: number) => void;
+  /** Registered multi-element section bridge; used by multi-selection/storeys. */
+  setClipToElementsFn: (fn: ((expressIds: number[], label?: string) => void) | null) => void;
+  /** Thin wrapper: no-op for an empty set or when the viewer is unavailable. */
+  clipToElements: (expressIds: number[], label?: string) => void;
   /** Registered by ViewerPanel; paints / clears the soft amber preview. */
   setTreeHoverPreviewFn: (fn: ((expressId: number | null) => void) | null) => void;
   /** Thin wrapper for tree-row hover handlers; pass `null` to clear. */
@@ -787,6 +848,44 @@ interface AppState {
   setIsUndoing: (v: boolean) => void;
   /** Invoke backend undo, show a toast, and emit metadata_changed to update tree/props. */
   undoLastEdit: () => Promise<void>;
+
+  // Editor (operation layer) - human direct edits (ADR 003, Invariant 12).
+  // Gated by the BACKEND's EDIT_MODE_ENABLED flag, probed at runtime via
+  // /api/ifc/edit-state into editModeAvailable, so the two sides can never
+  // disagree (the old compile-time frontend constant could).
+  /** Backend EDIT_MODE_ENABLED (runtime probe). False until the probe lands;
+   *  always false in BROWSER_ONLY builds (no backend to probe). */
+  editModeAvailable: boolean;
+  setEditModeAvailable: (v: boolean) => void;
+  /** True when the working copy has unsaved edits (backend dirty flag,
+   *  refreshed after every mutation). Drives the Save badge + close guards. */
+  modelDirty: boolean;
+  /** Debounced re-probe of /api/ifc/edit-state → editModeAvailable +
+   *  modelDirty. Call after anything that may change the dirty flag. */
+  refreshEditState: () => void;
+  /** True when the editor is in Edit mode (editable fields, gizmos). */
+  editMode: boolean;
+  setEditMode: (v: boolean) => void;
+  toggleEditMode: () => void;
+  /** Edit scope (see dev/docs/EDIT_SCOPES.md). 'semantic' (default) = metadata
+   *  edits only, which update the viewer in place with NO reload. 'structural'
+   *  (beta) = also geometry edits (walls, delete), which reload the 3D viewer.
+   *  Gates the wall-draw tool and the AI's structural write tools; persisted. */
+  editScope: 'semantic' | 'structural';
+  setEditScope: (scope: 'semantic' | 'structural') => void;
+  /** Bumped whenever cached details for the SELECTED element are invalidated,
+   *  so PropertiesPanel re-fetches even though selectedElementId is unchanged
+   *  (fixes the blank-panel-after-commit dead end). */
+  detailRefreshSerial: number;
+  /** Whether a redo is currently armed (from the last operation response). */
+  canRedo: boolean;
+  /** Run one model operation as a human direct edit (actor=USER). Returns the
+   *  result, or null on a transport error (403 gated / 400 no model). Adopts
+   *  the fresh model contract from the response; the backend also emits the
+   *  sync event that refreshes the tree + properties. */
+  applyOperation: (operation: string, params: Record<string, unknown>) => Promise<OperationResult | null>;
+  /** Redo the most recently undone operation (op layer; Ctrl+Y). */
+  redoLastEdit: () => Promise<void>;
 
   // Toasts
   toasts: Toast[];
@@ -858,9 +957,19 @@ function writePref(key: string, value: unknown) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* ignore */ }
 }
 
+/**
+ * Pin the edit scope to `semantic` while STRUCTURAL_EDIT_ENABLED is off.
+ * Applied on read as well as on write: `pref.editScope` persists, so a user who
+ * selected `structural` in an earlier build would otherwise stay in it forever
+ * with no toggle left to switch back.
+ */
+function coerceEditScope(scope: 'semantic' | 'structural'): 'semantic' | 'structural' {
+  return STRUCTURAL_EDIT_ENABLED ? scope : 'semantic';
+}
+
 const VIEWPOINTS_STORAGE_KEY = 'pref.viewpoints.v1';
 
-function readAllViewpoints(): Record<string, Viewpoint[]> {
+function readAllViewpoints(): Record<string, SavedViewpoint[]> {
   try {
     const raw = localStorage.getItem(VIEWPOINTS_STORAGE_KEY);
     if (!raw) return {};
@@ -871,13 +980,13 @@ function readAllViewpoints(): Record<string, Viewpoint[]> {
   }
 }
 
-function writeAllViewpoints(all: Record<string, Viewpoint[]>) {
+function writeAllViewpoints(all: Record<string, SavedViewpoint[]>) {
   try {
     localStorage.setItem(VIEWPOINTS_STORAGE_KEY, JSON.stringify(all));
   } catch {
     // Likely quota exceeded -- try dropping thumbnails to save space
     try {
-      const lite: Record<string, Viewpoint[]> = {};
+      const lite: Record<string, SavedViewpoint[]> = {};
       for (const [k, arr] of Object.entries(all)) {
         lite[k] = arr.map((v) => ({ ...v, thumbnail: null }));
       }
@@ -888,7 +997,7 @@ function writeAllViewpoints(all: Record<string, Viewpoint[]>) {
   }
 }
 
-function persistProjectViewpoints(projectKey: string, list: Viewpoint[]) {
+function persistProjectViewpoints(projectKey: string, list: SavedViewpoint[]) {
   const all = readAllViewpoints();
   if (list.length === 0) {
     delete all[projectKey];
@@ -934,7 +1043,7 @@ const initialState = {
   leftSidebarOpen: readPref<boolean>('pref.leftSidebarOpen', true),
   leftActivePane: readPref<LeftPane>('pref.leftActivePane', 'tree'),
 
-  viewpoints: [] as Viewpoint[],
+  viewpoints: [] as SavedViewpoint[],
   chatMessages: [] as ChatMessage[],
   chatLoading: false,
   chatProvider: readPref<string>('pref.chatProvider', 'openai'),
@@ -948,6 +1057,14 @@ const initialState = {
   activeToolSetId: readPref<string | null>('pref.activeToolSetId', null),
   activePromptId: readPref<string | null>('pref.activePromptId', null),
   pendingEdits: [] as PendingEditEnvelope[],
+  editApprovalMode: readPref<'ask' | 'auto'>('pref.editApprovalMode', 'ask'),
+  pendingEditOutcomes: {} as Record<string, 'applied' | 'discarded' | 'error'>,
+  editMode: false,
+  editModeAvailable: false,
+  editScope: coerceEditScope(readPref<'semantic' | 'structural'>('pref.editScope', 'semantic')),
+  modelDirty: false,
+  detailRefreshSerial: 0,
+  canRedo: false,
   activePendingEditId: null as string | null,
   budgetWarning: null as import('../types/ifc').BudgetWarning | null,
   activeFallbackModel: null as import('../types/ifc').ModelFallback | null,
@@ -965,6 +1082,7 @@ const initialState = {
   toasts: [] as Toast[],
   measurementLabelsVisible: true,
   sectionBoxEnabled: false,
+  sectionWorkspace: null as SectionWorkspaceDefinition | null,
   floatingChatMinimized: readPref<boolean>('pref.floatingChatMinimized', true),
   viewerToolsOpen: false,
   viewerToolsHidden: false,
@@ -1005,10 +1123,10 @@ const initialState = {
   consistencyMode: readPref<ConsistencyMode>('pref.consistencyMode', 'hybrid'),
   editFallback: readPref<EditFallbackMode>('pref.editFallback', 'background_rebuild'),
   rendererMode: readPref<RendererMode>('pref.rendererMode', 'auto'),
-  // Cache OFF by default - the IDB fragment cache caused real-world load
-  // failures (stale bytes, schema mismatch, hard-to-clear poisoned entries).
-  // Users can opt in via Settings > Performance once their setup is stable.
-  cachePolicy: readPref<CachePolicy>('pref.cachePolicy', 'off'),
+  // The Phase 1 cache contract includes the exact fragments/web-ifc/runtime
+  // identity and deletes rejected entries, so new installations can safely
+  // reuse a bounded parsed artifact. Existing persisted choices are retained.
+  cachePolicy: readPref<CachePolicy>('pref.cachePolicy', 'balanced'),
   // Server-side fragment cache ON by default. This matches the intended
   // backend convert-once architecture and makes repeat loads hit cached
   // `.frag` bytes instead of forcing `no_cache=1` conversions.
@@ -1016,7 +1134,11 @@ const initialState = {
   highlightStrategy: readPref<HighlightStrategy>('pref.highlightStrategy', 'wireframe'),
   graphicsProfile: readPref<GraphicsProfile>('pref.graphicsProfile', 'balanced'),
   viewerPerformanceMode: readPref<ViewerPerformanceMode>('pref.viewerPerformanceMode', 'auto'),
-  largeModelLod: readPref<boolean>('pref.largeModelLod', true),
+  // Whole-model proxy LOD is OFF by default. It swaps the complete fragment
+  // root while navigating and cannot carry selection/filter/opacity state, so
+  // stability wins until spatial, appearance-aware tile LOD replaces it.
+  // Existing users who explicitly enabled the persisted preference keep it.
+  largeModelLod: readPref<boolean>('pref.largeModelLod', false),
   prebuildWaitPrefs: sanitisePrebuildWaitPrefs(
     readPref<Partial<PrebuildWaitPrefs> | null>('pref.prebuildWait.v1', null),
   ),
@@ -1052,6 +1174,7 @@ const initialState = {
   zoomToElementFn: null as ((expressId: number) => void) | null,
   frameElementsFn: null as ((expressIds: number[]) => void) | null,
   clipToElementFn: null as ((expressId: number) => void) | null,
+  clipToElementsFn: null as ((expressIds: number[], label?: string) => void) | null,
   treeHoverPreviewFn: null as ((expressId: number | null) => void) | null,
   getCameraStateFn: null as (() => { pos: [number, number, number]; target: [number, number, number] } | null) | null,
   setLookAtFn: null as ((pos: [number,number,number], tgt: [number,number,number], animate: boolean) => void) | null,
@@ -1072,6 +1195,7 @@ export const useStore = create<AppState>()(
       healthCheckResult: v ? s.healthCheckResult : null,
       // Disable the section box on unload - stale clip planes confuse the next model.
       sectionBoxEnabled: v ? s.sectionBoxEnabled : false,
+      sectionWorkspace: v ? s.sectionWorkspace : null,
       // Clear stale checkpoints on unload.
       checkpoints: v ? s.checkpoints : [],
       // Clear native index status on unload so the next model starts fresh.
@@ -1130,12 +1254,25 @@ export const useStore = create<AppState>()(
       }, durationMs);
     },
     toggleSelectId: (id) => set((s) => {
-      const has = s.selectedIds.includes(id);
+      // A normal click stores its selection only in selectedElementId. When
+      // Shift-click starts a multi-selection, carry that primary selection
+      // into the set before toggling the newly-clicked id.
+      const current = s.selectedIds.length > 0
+        ? s.selectedIds
+        : s.selectedElementId !== null
+        ? [s.selectedElementId]
+        : [];
+      const has = current.includes(id);
       const next = has
-        ? s.selectedIds.filter((x) => x !== id)
-        : [...s.selectedIds, id];
-      // Keep selectedElementId in sync with the last-toggled id
-      return { selectedIds: next, selectedElementId: next.length > 0 ? next[next.length - 1] : s.selectedElementId };
+        ? current.filter((x) => x !== id)
+        : [...current, id];
+      // Keep selectedElementId in sync with the remaining set. Clearing the
+      // final id must also clear the primary selection; otherwise the amber
+      // highlight immediately reappears through the single-selection fallback.
+      return {
+        selectedIds: next,
+        selectedElementId: next.length > 0 ? next[next.length - 1] : null,
+      };
     }),
     clearSelectedIds: () => set({ selectedIds: [] }),
     setSelectedIds: (ids) => set((s) => {
@@ -1151,7 +1288,7 @@ export const useStore = create<AppState>()(
       forceExpandSerial: s.forceExpandSerial + 1,
     })),
     setIsolatedIds: (ids) => set({ isolatedIds: ids, hiddenIds: [] }),
-    setHiddenIds: (ids) => set({ hiddenIds: ids }),
+    setHiddenIds: (ids) => set({ hiddenIds: ids, isolatedIds: [] }),
     addHiddenIds: (ids) => set((s) => {
       const merged = new Set([...s.hiddenIds, ...ids]);
       return { hiddenIds: Array.from(merged), isolatedIds: [] };
@@ -1271,7 +1408,12 @@ export const useStore = create<AppState>()(
         const last = msgs[msgs.length - 1];
         if (last && last.role === 'assistant') {
           const existing = last.toolCalls || [];
-          msgs[msgs.length - 1] = { ...last, toolCalls: [...existing, toolCall] };
+          // Stamp the tool call's position in the transcript: the amount of
+          // assistant text emitted so far. The caller flushes the token buffer
+          // into `content` first, so this offset is accurate. Enables the
+          // chronological text↔tool interleaving in buildMessageParts.
+          const stamped = { ...toolCall, contentOffset: last.content.length };
+          msgs[msgs.length - 1] = { ...last, toolCalls: [...existing, stamped] };
         }
         return { chatMessages: msgs };
       }),
@@ -1321,17 +1463,40 @@ export const useStore = create<AppState>()(
         next[existing] = envelope;
         return { pendingEdits: next };
       }
-      return {
-        pendingEdits: [envelope, ...s.pendingEdits],
-        // Auto-focus the freshly-proposed edit so the panel pops on top.
-        activePendingEditId: envelope.edit_id,
-      };
+      // Do NOT auto-open the modal: the chat now shows an inline Approve /
+      // Discard below the tool call (or auto-applies). The modal was
+      // disruptive over the 3D viewer.
+      return { pendingEdits: [envelope, ...s.pendingEdits] };
     }),
     removePendingEdit: (editId: string) => set((s) => ({
       pendingEdits: s.pendingEdits.filter((e) => e.edit_id !== editId),
       activePendingEditId: s.activePendingEditId === editId ? null : s.activePendingEditId,
     })),
     setActivePendingEditId: (id: string | null) => set({ activePendingEditId: id }),
+    setEditApprovalMode: (mode) => { writePref('pref.editApprovalMode', mode); set({ editApprovalMode: mode }); },
+    resolvePendingEdit: async (editId, action) => {
+      const s = useStore.getState();
+      if (s.pendingEditOutcomes[editId]) return; // already applied/discarded
+      try {
+        if (action === 'apply') {
+          await apiApplyPendingEdit(editId);
+          set((st) => ({ pendingEditOutcomes: { ...st.pendingEditOutcomes, [editId]: 'applied' } }));
+          useStore.getState().logActivity({ kind: 'edit', summary: 'Applied edit' });
+        } else {
+          await apiDiscardPendingEdit(editId);
+          set((st) => ({ pendingEditOutcomes: { ...st.pendingEditOutcomes, [editId]: 'discarded' } }));
+          useStore.getState().logActivity({ kind: 'edit', summary: 'Discarded edit' });
+        }
+        useStore.getState().removePendingEdit(editId);
+        useStore.getState().refreshEditState();
+      } catch (err) {
+        set((st) => ({ pendingEditOutcomes: { ...st.pendingEditOutcomes, [editId]: 'error' } }));
+        useStore.getState().addToast(
+          `Edit ${action === 'apply' ? 'apply' : 'discard'} failed: ${err instanceof Error ? err.message : String(err)}`,
+          'error',
+        );
+      }
+    },
     setSettingsOpen: (v) => set({ settingsOpen: v }),
     setCommandPaletteOpen: (v) => set({ commandPaletteOpen: v }),
     setShortcutsHelpOpen: (v) => set({ shortcutsHelpOpen: v }),
@@ -1351,19 +1516,96 @@ export const useStore = create<AppState>()(
       if (s.isUndoing || !s.modelLoaded) return;
       set({ isUndoing: true });
       try {
-        const result = await apiUndoLastEdit();
-        if (result.undone) {
-          useStore.getState().addToast(`Undid: ${result.description ?? 'last edit'}`, 'success');
-          if (result.changed_ids?.length) {
-            useStore.getState().invalidateElementDetails(result.changed_ids);
+        if (s.editModeAvailable) {
+          // Operation-layer undo: recorded in the op log AND arms redo.
+          const result = await apiUndoOperation();
+          adoptOperationContract(result);
+          if (result.changed) {
+            useStore.getState().addToast(`Undid: ${result.description || 'last edit'}`, 'success');
+            if (result.changed_ids?.length) {
+              useStore.getState().invalidateElementDetails(result.changed_ids);
+            }
+          } else {
+            useStore.getState().addToast(result.error ?? 'Nothing to undo', 'info');
           }
         } else {
-          useStore.getState().addToast(result.reason ?? 'Nothing to undo', 'info');
+          // Legacy inverse-delta undo (edit mode off / older backend).
+          const result = await apiUndoLastEdit();
+          if (result.undone) {
+            useStore.getState().addToast(`Undid: ${result.description ?? 'last edit'}`, 'success');
+            if (result.changed_ids?.length) {
+              useStore.getState().invalidateElementDetails(result.changed_ids);
+            }
+          } else {
+            useStore.getState().addToast(result.reason ?? 'Nothing to undo', 'info');
+          }
         }
       } catch (err) {
         useStore.getState().addToast(`Undo failed: ${String(err)}`, 'error');
       } finally {
         set({ isUndoing: false });
+      }
+    },
+    redoLastEdit: async () => {
+      const s = useStore.getState();
+      if (s.isUndoing || !s.modelLoaded || !s.editModeAvailable) return;
+      set({ isUndoing: true });
+      try {
+        const result = await apiRedoOperation();
+        adoptOperationContract(result);
+        if (result.ok && result.changed) {
+          useStore.getState().addToast(`Redid: ${result.description || 'edit'}`, 'success');
+          if (result.changed_ids?.length) {
+            useStore.getState().invalidateElementDetails(result.changed_ids);
+          }
+        } else {
+          useStore.getState().addToast(result.error ?? 'Nothing to redo', 'info');
+        }
+      } catch (err) {
+        useStore.getState().addToast(`Redo failed: ${String(err)}`, 'error');
+      } finally {
+        set({ isUndoing: false });
+      }
+    },
+
+    // Editor - operation layer (human direct edits, actor=USER)
+    setEditModeAvailable: (v) => set({ editModeAvailable: v }),
+    refreshEditState: () => {
+      if (editStateRefreshTimer !== null) clearTimeout(editStateRefreshTimer);
+      editStateRefreshTimer = setTimeout(() => {
+        editStateRefreshTimer = null;
+        void import('../services/api').then(({ getEditState }) =>
+          getEditState()
+            .then((es) => set({
+              editModeAvailable: Boolean(es.edit_mode_enabled),
+              modelDirty: Boolean(es.dirty),
+            }))
+            .catch(() => { /* backend unreachable - keep last known state */ }),
+        );
+      }, 300);
+    },
+    setEditMode: (v) => set({ editMode: v }),
+    toggleEditMode: () => set((s) => ({ editMode: !s.editMode })),
+    setEditScope: (scope) => {
+      const next = coerceEditScope(scope);
+      writePref('pref.editScope', next);
+      set({ editScope: next });
+    },
+    applyOperation: async (operation, params) => {
+      try {
+        const result = await apiExecuteOperation(operation, params);
+        adoptOperationContract(result);
+        if (result.ok && result.changed && result.changed_ids?.length) {
+          // Clear the cached detail so the properties panel re-fetches; the
+          // backend's metadata_changed sync event refreshes the tree.
+          useStore.getState().invalidateElementDetails(result.changed_ids);
+        } else if (!result.ok) {
+          useStore.getState().addToast(`Edit failed: ${result.error ?? 'unknown error'}`, 'error');
+        }
+        return result;
+      } catch (err) {
+        useStore.getState().addToast(`Edit failed: ${String(err)}`, 'error');
+        return null;
       }
     },
 
@@ -1376,6 +1618,10 @@ export const useStore = create<AppState>()(
     removeToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
     setSectionBoxEnabled: (enabled) => set({ sectionBoxEnabled: enabled }),
     toggleSectionBox: () => set((s) => ({ sectionBoxEnabled: !s.sectionBoxEnabled })),
+    setSectionWorkspace: (workspace) => set({
+      sectionWorkspace: workspace,
+      sectionBoxEnabled: workspace?.box?.enabled === true,
+    }),
     setFloatingChatMinimized: (v) => { writePref('pref.floatingChatMinimized', v); set({ floatingChatMinimized: v }); },
     setViewerToolsOpen: (v) => set({ viewerToolsOpen: v }),
     setViewerToolsHidden: (v) => set({ viewerToolsHidden: v }),
@@ -1583,11 +1829,24 @@ export const useStore = create<AppState>()(
       writePref('pref.clipPlanes.v2', next);
       return { clipPlanes: next, pickPlaneMode: false };
     }),
+    applyWorkspaceClipPlanes: (desired) => set((s) => {
+      const { planes, changed } = reconcileWorkspaceClipPlanes(s.clipPlanes, desired, MAX_CLIP_PLANES);
+      if (!changed) return {};
+      writePref('pref.clipPlanes.v2', planes);
+      return { clipPlanes: planes };
+    }),
     setPickPlaneMode: (enabled) => set({ pickPlaneMode: enabled }),
     removeClipPlane: (id) => set((s) => {
       const next = s.clipPlanes.filter(p => p.id !== id);
       writePref('pref.clipPlanes.v2', next);
       return { clipPlanes: next };
+    }),
+    clearClipPlanes: () => set(() => {
+      // Must write the pref too: clip planes persist across reloads, and
+      // reset() deliberately keeps them, so dropping state alone would let
+      // every plane resurrect on the next load.
+      writePref('pref.clipPlanes.v2', []);
+      return { clipPlanes: [], pickPlaneMode: false };
     }),
     updateClipPlane: (id, patch) => set((s) => {
       const next = s.clipPlanes.map(p => {
@@ -1670,6 +1929,12 @@ export const useStore = create<AppState>()(
       const fn = useStore.getState().clipToElementFn;
       if (fn) fn(expressId);
     },
+    setClipToElementsFn: (fn) => set({ clipToElementsFn: fn }),
+    clipToElements: (expressIds, label) => {
+      if (!Array.isArray(expressIds) || expressIds.length === 0) return;
+      const fn = useStore.getState().clipToElementsFn;
+      if (fn) fn(expressIds, label);
+    },
     setTreeHoverPreviewFn: (fn) => set({ treeHoverPreviewFn: fn }),
     treeHoverPreview: (expressId) => {
       const fn = useStore.getState().treeHoverPreviewFn;
@@ -1710,18 +1975,18 @@ export const useStore = create<AppState>()(
     }),
 
     invalidateElementDetails: (changedIds) => {
-      // Also clear ModelService's element-detail cache (and, in backend-
-      // metadata mode, mark the ids so the next read fetches authoritative
-      // IfcOpenShell data instead of the stale pristine index). Dynamic import
-      // keeps the viewer engine out of the store's static chunk so the
-      // entry-bundle split is preserved; ModelService is already loaded by the
-      // time any edit fires, so this resolves from cache.
-      void import('../services/ifc/ModelService')
-        .then((m) => m.modelService.invalidateElementDetails(changedIds))
-        .catch(() => { /* viewer not loaded yet - nothing to invalidate */ });
+      // ModelService registers its already-loaded singleton with this tiny
+      // bridge, so cache eviction is synchronous without pulling the heavy IFC
+      // engine into the store's entry chunk.
+      invalidateModelElementDetails(changedIds);
       set((s) => {
         if (s.selectedElementId !== null && changedIds.includes(s.selectedElementId)) {
-          return { selectedElement: null };
+          // The serial re-runs PropertiesPanel's fetch effect while keeping the
+          // selected express id stable across semantic edits.
+          return {
+            selectedElement: null,
+            detailRefreshSerial: s.detailRefreshSerial + 1,
+          };
         }
         return {};
       });
@@ -1768,7 +2033,34 @@ export const useStore = create<AppState>()(
       // reopening a project doesn't leave clicks hijacked by a stale tool.
       measurement: { ...s.measurement, mode: 'off' as MeasurementMode },
       // Always reset to an empty viewpoints list; the next project load will repopulate
-      viewpoints: [] as Viewpoint[],
+      viewpoints: [] as SavedViewpoint[],
     })),
   })),
 );
+
+// Trailing-debounce handle for refreshEditState (module scope: the store is a
+// singleton and the timer must survive re-renders).
+let editStateRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Adopt the fresh model contract carried on an applied OperationResult.
+ *
+ * Applied operations re-fingerprint the working file server-side; until the
+ * store learns the new fingerprint, the model-sync stale filter would drop the
+ * very events describing this edit. The HTTP response and the WS event race -
+ * whichever lands first updates the contract, the other is a no-op. */
+function adoptOperationContract(result: OperationResult | null | undefined): void {
+  if (result?.changed && result.model_fingerprint) {
+    useStore.getState().setModelContract({
+      model_version: result.model_version ?? 0,
+      model_fingerprint: result.model_fingerprint,
+      edit_id: result.edit_id ?? '',
+    });
+  }
+  if (result && typeof result.can_redo === 'boolean') {
+    useStore.setState({ canRedo: result.can_redo });
+  }
+  // Any applied/undone/redone op may flip the backend dirty flag.
+  if (result?.changed) {
+    useStore.getState().refreshEditState();
+  }
+}

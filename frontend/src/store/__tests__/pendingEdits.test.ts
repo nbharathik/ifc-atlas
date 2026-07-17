@@ -38,14 +38,16 @@ describe('pending-edit reducers', () => {
   beforeEach(reset);
 
   describe('upsertPendingEdit', () => {
-    it('inserts a new envelope and auto-focuses it', () => {
+    it('inserts a new envelope WITHOUT auto-opening the modal', () => {
       const { upsertPendingEdit } = useStore.getState();
       upsertPendingEdit(env('A'));
 
       const s = useStore.getState();
       expect(s.pendingEdits).toHaveLength(1);
       expect(s.pendingEdits[0].edit_id).toBe('A');
-      expect(s.activePendingEditId).toBe('A');
+      // The chat approves edits inline now; inserting must NOT pop the modal
+      // over the 3D viewer.
+      expect(s.activePendingEditId).toBeNull();
     });
 
     it('prepends newer edits (newest-first ordering)', () => {
@@ -55,17 +57,16 @@ describe('pending-edit reducers', () => {
       upsertPendingEdit(env('C'));
 
       const ids = useStore.getState().pendingEdits.map((e) => e.edit_id);
-      // Newest-first - the freshly-proposed edit surfaces at the top so
-      // the DiffPreviewPanel always opens to the right one.
+      // Newest-first - the freshest staged edit surfaces at the top.
       expect(ids).toEqual(['C', 'B', 'A']);
     });
 
-    it('auto-focus moves with every fresh insert', () => {
+    it('never focuses an edit on insert (no modal auto-open)', () => {
       const { upsertPendingEdit } = useStore.getState();
       upsertPendingEdit(env('A'));
-      expect(useStore.getState().activePendingEditId).toBe('A');
+      expect(useStore.getState().activePendingEditId).toBeNull();
       upsertPendingEdit(env('B'));
-      expect(useStore.getState().activePendingEditId).toBe('B');
+      expect(useStore.getState().activePendingEditId).toBeNull();
     });
 
     it('refreshes an existing envelope in place without re-focusing', () => {
@@ -106,8 +107,8 @@ describe('pending-edit reducers', () => {
         useStore.getState();
       upsertPendingEdit(env('A'));
       upsertPendingEdit(env('B'));
-      // focus stays on whichever was inserted last - B
-      expect(useStore.getState().activePendingEditId).toBe('B');
+      // Simulate the opt-in review modal being open on B (command palette).
+      setActivePendingEditId('B');
 
       // Removing a non-active edit must leave the active one alone.
       removePendingEdit('A');

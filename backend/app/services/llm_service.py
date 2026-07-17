@@ -24,7 +24,7 @@ from app.services.tool_memo import tool_memo_cache
 from app.services.tools import (
     get_openai_tools,
     get_anthropic_tools,
-    execute_tool,
+    execute_tool_off_loop,
     format_tool_result,
 )
 from app.models.ifc_models import ChatAttachment, ChatMessage
@@ -57,9 +57,31 @@ _COST_PER_1M: dict[str, tuple[float, float]] = {
 }
 
 
+def _registry_rates(model: str) -> Optional[tuple[float, float]]:
+    """Look up $/1M rates for a provider model id in the model registry.
+
+    The registry is UI-editable and covers the models people actually run;
+    the static ``_COST_PER_1M`` table only knows a handful of legacy ids.
+    Registry entries are keyed by slug but priced per ``model_id`` - when
+    several entries share a model_id the first priced one wins.
+    """
+    try:
+        from app.services.model_registry import model_registry
+        for entry in model_registry.all():
+            if (
+                entry.model_id == model
+                and entry.input_cost_per_1m is not None
+                and entry.output_cost_per_1m is not None
+            ):
+                return (entry.input_cost_per_1m, entry.output_cost_per_1m)
+    except Exception:  # pragma: no cover - registry must never break costing
+        return None
+    return None
+
+
 def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     """Return approximate USD cost for a turn. Returns -1.0 when rates unknown."""
-    rates = _COST_PER_1M.get(model)
+    rates = _registry_rates(model) or _COST_PER_1M.get(model)
     if rates is None:
         return -1.0
     in_rate, out_rate = rates
@@ -336,8 +358,12 @@ def _build_messages_anthropic(
     return messages
 
 
-# Maximum number of tool-call rounds to prevent infinite loops
-MAX_TOOL_ROUNDS = 5
+# Maximum number of tool-call rounds to prevent infinite loops. This caps the
+# FALLBACK streamers (used when the LangGraph path can't build). The graph path
+# allows ~25 rounds (recursion_limit=50). Multi-step edits (find → create →
+# verify → repair) routinely need more than a handful of rounds, so 5 silently
+# truncated real edit turns; raised toward graph parity.
+MAX_TOOL_ROUNDS = 25
 ToolExecutor = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
@@ -532,7 +558,7 @@ async def stream_openai(
             if tool_executor is not None:
                 result = await tool_executor(name, args)
             else:
-                result = execute_tool(name, args)
+                result = await execute_tool_off_loop(name, args)
             if not isinstance(result, dict):
                 result = {"result": result}
 
@@ -664,7 +690,7 @@ async def stream_anthropic(
                 if tool_executor is not None:
                     result = await tool_executor(name, args)
                 else:
-                    result = execute_tool(name, args)
+                    result = await execute_tool_off_loop(name, args)
                 if not isinstance(result, dict):
                     result = {"result": result}
 
@@ -836,7 +862,7 @@ async def stream_openrouter(
             if tool_executor is not None:
                 result = await tool_executor(name, args)
             else:
-                result = execute_tool(name, args)
+                result = await execute_tool_off_loop(name, args)
             if not isinstance(result, dict):
                 result = {"result": result}
 
@@ -1166,6 +1192,62 @@ async def stream_via_langgraph(
     _yielded_any = False
     _retried = False
 
+    # Token usage accumulated across every model round in the turn (a ReAct
+    # turn is many model calls). Emitted as ONE usage event before every exit
+    # path so the ChatUsageChip and budget enforcement see graph-path turns -
+    # without this only the fallback streamers reported usage, i.e. budget caps
+    # silently never accrued on the primary path. Accumulators deliberately
+    # survive the transient retry below: the failed attempt's tokens were still
+    # billed.
+    _usage_in = 0
+    _usage_out = 0
+    _cache_read = 0
+    _cache_creation = 0
+
+    def _accumulate_usage(ev_data: dict) -> None:
+        nonlocal _usage_in, _usage_out, _cache_read, _cache_creation
+        out_msg = ev_data.get("output")
+        usage = getattr(out_msg, "usage_metadata", None)
+        if not isinstance(usage, dict):
+            return
+        try:
+            _usage_in += int(usage.get("input_tokens") or 0)
+            _usage_out += int(usage.get("output_tokens") or 0)
+            details = usage.get("input_token_details") or {}
+            _cache_read += int(details.get("cache_read") or 0)
+            _cache_creation += int(details.get("cache_creation") or 0)
+        except (TypeError, ValueError):  # pragma: no cover - malformed provider data
+            pass
+
+    def _final_usage_event() -> Optional[dict]:
+        if _usage_in or _usage_out:
+            return _usage_event(
+                model, provider, _usage_in, _usage_out, _cache_read, _cache_creation
+            )
+        return None
+
+    # Some providers - notably several models proxied through OpenRouter - do
+    # NOT stream token deltas, so `on_chat_model_stream` never fires and the
+    # turn appears frozen ("the model isn't generating"). Track per model round
+    # whether any text was streamed; if a round ends with text in its final
+    # message but streamed nothing, emit that text now. This makes non-streaming
+    # models work without double-emitting streamed ones.
+    _streamed_text_this_round = False
+
+    def _extract_message_text(msg: Any) -> str:
+        content = getattr(msg, "content", None)
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    parts.append(str(block.get("text") or ""))
+                elif isinstance(block, str):
+                    parts.append(block)
+            return "".join(parts)
+        return ""
+
     while True:
         try:
             # LangGraph's default recursion_limit is 25 supersteps (~12 tool
@@ -1180,7 +1262,11 @@ async def stream_via_langgraph(
                 ev_name: str = event.get("event", "")
                 ev_data: dict = event.get("data", {})
 
-                if ev_name == "on_chat_model_stream":
+                if ev_name == "on_chat_model_start":
+                    # New model round: reset the "did this round stream text?" flag.
+                    _streamed_text_this_round = False
+
+                elif ev_name == "on_chat_model_stream":
                     chunk = ev_data.get("chunk")
                     if chunk is None:
                         continue
@@ -1191,6 +1277,7 @@ async def stream_via_langgraph(
                     if isinstance(content_raw, str):
                         if content_raw:
                             _yielded_any = True
+                            _streamed_text_this_round = True
                             yield {"type": "chunk", "content": content_raw}
                     elif isinstance(content_raw, list):
                         for block in content_raw:
@@ -1198,9 +1285,11 @@ async def stream_via_langgraph(
                                 text = block.get("text", "")
                                 if text:
                                     _yielded_any = True
+                                    _streamed_text_this_round = True
                                     yield {"type": "chunk", "content": text}
                             elif isinstance(block, str) and block:
                                 _yielded_any = True
+                                _streamed_text_this_round = True
                                 yield {"type": "chunk", "content": block}
 
                 elif ev_name == "on_tool_start":
@@ -1249,6 +1338,21 @@ async def stream_via_langgraph(
                         "executed_on": executed_on,
                     }
 
+                elif ev_name == "on_chat_model_end":
+                    # Each model round reports usage on its final AIMessage.
+                    _accumulate_usage(ev_data)
+                    # Non-streaming fallback: if the provider streamed no text
+                    # this round but the final message carries text, emit it so
+                    # the answer isn't silently dropped (common on OpenRouter).
+                    if not _streamed_text_this_round:
+                        final_text = _extract_message_text(ev_data.get("output"))
+                        if final_text.strip():
+                            _yielded_any = True
+                            yield {"type": "chunk", "content": final_text}
+
+            usage_ev = _final_usage_event()
+            if usage_ev is not None:
+                yield usage_ev
             return  # turn completed
 
         except Exception as exc:
@@ -1290,6 +1394,10 @@ async def stream_via_langgraph(
                 else:
                     logger.exception("stream_via_langgraph error for provider=%s", provider)
                     yield {"type": "error", "message": "Agent stream interrupted; response may be incomplete."}
+                # Tokens consumed before the failure were still billed.
+                usage_ev = _final_usage_event()
+                if usage_ev is not None:
+                    yield usage_ev
                 return
             if friendly:
                 # Recognised provider error (quota/billing/auth/rate-limit) with
@@ -1301,6 +1409,9 @@ async def stream_via_langgraph(
                     provider, friendly, type(exc).__name__,
                 )
                 yield {"type": "error", "message": friendly}
+                usage_ev = _final_usage_event()
+                if usage_ev is not None:
+                    yield usage_ev
                 return
             # Unrecognised failure with nothing sent yet - the graph itself may have
             # been the problem, so fall back to the provider-specific path (which
@@ -1309,6 +1420,12 @@ async def stream_via_langgraph(
                 "stream_via_langgraph failed pre-stream (provider=%s); trying raw path: %s",
                 provider, _exc_line(exc),
             )
+            # Report any tokens the aborted graph attempt burned before handing
+            # over; the fallback streamers emit their own usage events and the
+            # consumer sums all usage events in a turn.
+            usage_ev = _final_usage_event()
+            if usage_ev is not None:
+                yield usage_ev
             async for ev in _fallback_stream():
                 yield ev
             return
@@ -1327,6 +1444,7 @@ async def stream_chat(
     tool_set_id: Optional[str] = None,
     prompt_id: Optional[str] = None,
     model_registry_id: Optional[str] = None,
+    edit_scope: str = "semantic",
 ) -> AsyncGenerator[dict, None]:
     """
     Main entry point for streaming chat with tool calling.
@@ -1434,6 +1552,16 @@ async def stream_chat(
         base = all_tool_names() if allowed_tools is None else frozenset(allowed_tools)
         allowed_tools = base - write_edit_tool_names()
 
+    # Edit scope (dev/docs/EDIT_SCOPES.md): in "semantic" scope the structural
+    # write tools (create/delete geometry, execute_ifc_code, propose_edit) are
+    # stripped so the agent can only make metadata edits that update the viewer
+    # in place - never a 3D reload. "structural" scope keeps them (the UI shows
+    # a beta reload warning). Only tightens the allowlist; never widens it.
+    if EDIT_MODE_ENABLED and edit_scope == "semantic":
+        from app.services.tools import all_tool_names, structural_write_tool_names
+        base = all_tool_names() if allowed_tools is None else frozenset(allowed_tools)
+        allowed_tools = base - structural_write_tool_names()
+
     # Default model IDs per provider.
     _default_model: dict[str, str] = {
         "openai": "gpt-4o",
@@ -1482,6 +1610,27 @@ async def stream_chat(
                 }
                 yield {"type": "done"}
                 return
+
+    # Capability guard for edit turns: editing requires tool calling. If the
+    # user pointed an edit-category agent at a model the registry marks as
+    # non-tool-calling (common on OpenRouter, where many models can't call
+    # functions), warn up front - otherwise the model just chats and "never
+    # edits the model", which looks like a hang.
+    if (
+        getattr(agent, "category", "ask") == "edit"
+        and model_entry is not None
+        and not model_entry.supports_tools
+    ):
+        yield {
+            "type": "chunk",
+            "content": (
+                f"⚠️ The selected model **{model_entry.display_name}** is marked as "
+                "not supporting tool calling, so it cannot make edits. Pick a "
+                "tool-capable model (most OpenAI and Anthropic models, or "
+                "DeepSeek / Qwen-Coder on OpenRouter) in the model dropdown to "
+                "edit the model.\n\n"
+            ),
+        }
 
     if effective_provider in ("openai", "anthropic", "openrouter"):
         # Route through LangGraph for openai/anthropic (native streaming).

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 from fastapi.testclient import TestClient
 
 
@@ -68,3 +70,34 @@ def test_convert_endpoint_uses_ifc_size_cap(monkeypatch):
 
     assert resp.status_code == 413
     assert resp.json()["detail"] == "IFC file too large (max 4 B)."
+
+
+def test_convert_cache_hit_exposes_fragments_format_version(tmp_path, monkeypatch):
+    from app.api import ifc_routes
+    from app.services.fragment_cache import (
+        atomic_write_fragment_cache,
+        fragments_format_version,
+        full_fragment_cache_entry,
+    )
+
+    ifc_bytes = b"ISO-10303-21;test-cache-hit"
+    fingerprint = hashlib.sha256(ifc_bytes).hexdigest()
+    entry = full_fragment_cache_entry(tmp_path, fingerprint, "balanced")
+    atomic_write_fragment_cache(entry, b"FRAGMENT")
+    monkeypatch.setattr(ifc_routes, "FRAGMENT_CACHE_DIR", tmp_path)
+
+    resp = _client().post(
+        "/api/ifc/convert",
+        content=ifc_bytes,
+        headers={
+            "content-type": "application/octet-stream",
+            "origin": "http://localhost:5173",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.content == b"FRAGMENT"
+    assert resp.headers["X-Fragment-Source"] == "cache"
+    assert resp.headers["X-Fragments-Format-Version"] == fragments_format_version(entry)
+    exposed = resp.headers["Access-Control-Expose-Headers"].lower()
+    assert "x-fragments-format-version" in exposed

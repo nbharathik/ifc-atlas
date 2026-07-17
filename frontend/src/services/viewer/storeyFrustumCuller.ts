@@ -20,6 +20,7 @@ import * as THREE from 'three';
 import type * as FRAGS from '@thatopen/fragments';
 import type { SpatialNode } from '../../types/ifc';
 import { collectLeavesUnder } from './spatialTreeHelpers';
+import type { VisibilityMutationTarget } from './renderStateCoordinator';
 
 const MAX_TOTAL_ELEMENTS = 5_000;
 
@@ -56,12 +57,14 @@ export class StoreyFrustumCuller {
   private frustum = new THREE.Frustum();
   private projScreenMatrix = new THREE.Matrix4();
   private readonly padFraction: number;
+  /** Last-invoked operation owns bookkeeping after its async mutation settles. */
+  private ownershipEpoch = 0;
 
   constructor(opts: StoreyFrustumCullerOptions = {}) {
     this.padFraction = Math.max(0, opts.padFraction ?? 0);
   }
 
-  get isBuilt(): boolean { return this._built; }
+  get isBuilt(): boolean { return this._built && !this._disposed; }
   get storeyCount(): number { return this.records.length; }
 
   /**
@@ -81,6 +84,12 @@ export class StoreyFrustumCuller {
       }
     }
     return out;
+  }
+
+  /** See ElementFrustumCuller.releaseOwnership. */
+  releaseOwnership(): void {
+    this.ownershipEpoch += 1;
+    for (const record of this.records) record.autoCulled = false;
   }
 
   /**
@@ -219,8 +228,10 @@ export class StoreyFrustumCuller {
   async tick(
     camera: THREE.Camera,
     model: FRAGS.FragmentsModel,
+    visibility: VisibilityMutationTarget = model,
   ): Promise<number> {
     if (!this._built || this._disposed || this.records.length === 0) return 0;
+    const operationEpoch = ++this.ownershipEpoch;
 
     camera.updateMatrixWorld();
     this.projScreenMatrix.multiplyMatrices(
@@ -229,48 +240,68 @@ export class StoreyFrustumCuller {
     );
     this.frustum.setFromProjectionMatrix(this.projScreenMatrix);
 
-    let culledCount = 0;
+    const toHide: StoreyRecord[] = [];
+    const toShow: StoreyRecord[] = [];
 
     for (const r of this.records) {
-      if (this._disposed) return culledCount;
+      if (this._disposed) return 0;
       const inFrustum = this.frustum.intersectsBox(r.box);
 
       if (!inFrustum && !r.autoCulled) {
-        // Cull: hide this storey
-        try {
-          await model.setVisible(r.localIds, false);
-          r.autoCulled = true;
-        } catch { /* setVisible may fail if model is being rebuilt */ }
+        toHide.push(r);
       } else if (inFrustum && r.autoCulled) {
-        // Un-cull: restore this storey
-        try {
-          await model.setVisible(r.localIds, true);
-          r.autoCulled = false;
-        } catch { /* restore is best-effort */ }
+        toShow.push(r);
       }
-
-      if (r.autoCulled) culledCount++;
     }
 
-    return culledCount;
+    if (toHide.length > 0 || toShow.length > 0) {
+      // Record desired ownership before awaiting the rendered coordinator
+      // acknowledgement. Navigation can then reveal a just-published hide
+      // without scanning/sending every in-frustum storey on steady frames.
+      for (const record of toHide) record.autoCulled = true;
+      for (const record of toShow) record.autoCulled = false;
+      try {
+        const hideIds = toHide.flatMap((record) => record.localIds);
+        const showIds = toShow.flatMap((record) => record.localIds);
+        if (visibility.applyVisibilityDelta) {
+          await visibility.applyVisibilityDelta(hideIds, showIds);
+        } else {
+          if (showIds.length > 0) await visibility.setVisible(showIds, true);
+          if (hideIds.length > 0) await visibility.setVisible(hideIds, false);
+        }
+      } catch {
+        if (operationEpoch === this.ownershipEpoch && !this._disposed) {
+          for (const record of toHide) record.autoCulled = false;
+          for (const record of toShow) record.autoCulled = true;
+        }
+        /* rolled-back flags make a later tick retry */
+      }
+    }
+
+    return this.records.filter((record) => record.autoCulled).length;
   }
 
   /**
    * Cheap show-only pass for use DURING orbit. Companion to
-   * ElementFrustumCuller.showPass - iterates only the currently
-   * `autoCulled` storey records and un-hides any whose padded AABB has
-   * re-entered the frustum. No hide writes - hides wait for the full
-   * settle tick.
+   * ElementFrustumCuller.showPass - iterates only desired `autoCulled`
+   * storeys. Settle ticks set that desired flag before awaiting the rendered
+   * acknowledgement, so pending hides remain revealable without redundant
+   * full-model coordinator writes. No hide writes - hides wait for settle.
    */
   async showPass(
     camera: THREE.Camera,
     model: FRAGS.FragmentsModel,
+    visibility: VisibilityMutationTarget = model,
   ): Promise<number> {
     if (!this._built || this._disposed || this.records.length === 0) return 0;
+    const operationEpoch = ++this.ownershipEpoch;
 
     let anyCulled = false;
-    for (const r of this.records) {
-      if (r.autoCulled) { anyCulled = true; break; }
+    for (const record of this.records) {
+      if (record.autoCulled) {
+        anyCulled = true;
+        break;
+      }
     }
     if (!anyCulled) return 0;
 
@@ -281,39 +312,62 @@ export class StoreyFrustumCuller {
     );
     this.frustum.setFromProjectionMatrix(this.projScreenMatrix);
 
-    let shown = 0;
+    const toShow: StoreyRecord[] = [];
     for (const r of this.records) {
-      if (this._disposed) return shown;
+      if (this._disposed) return 0;
       if (r.autoCulled && this.frustum.intersectsBox(r.box)) {
-        try {
-          await model.setVisible(r.localIds, true);
-          r.autoCulled = false;
-          shown++;
-        } catch { /* best-effort */ }
+        toShow.push(r);
       }
     }
-    return shown;
+    if (toShow.length > 0) {
+      for (const record of toShow) record.autoCulled = false;
+      try {
+        await visibility.setVisible(toShow.flatMap((record) => record.localIds), true);
+      } catch {
+        if (operationEpoch === this.ownershipEpoch && !this._disposed) {
+          for (const record of toShow) record.autoCulled = true;
+        }
+        return 0;
+      }
+    }
+    return toShow.length;
   }
 
   /**
    * Clear all auto-culled storeys (restores visibility) without tearing down records.
    * Call before user activates isolation so the two systems don't fight.
    */
-  async clearCull(model: FRAGS.FragmentsModel): Promise<void> {
-    for (const r of this.records) {
-      if (r.autoCulled) {
-        try {
-          await model.setVisible(r.localIds, true);
-          r.autoCulled = false;
-        } catch { /* best-effort */ }
+  async clearCull(
+    model: FRAGS.FragmentsModel,
+    visibility: VisibilityMutationTarget = model,
+  ): Promise<void> {
+    const operationEpoch = ++this.ownershipEpoch;
+    const culled = this.records.filter((record) => record.autoCulled);
+    for (const record of culled) record.autoCulled = false;
+    try {
+      if (visibility.clearVisibility) {
+        await visibility.clearVisibility();
+      } else if (culled.length > 0) {
+        await visibility.setVisible(culled.flatMap((record) => record.localIds), true);
       }
+      if (operationEpoch === this.ownershipEpoch) {
+        for (const record of this.records) record.autoCulled = false;
+      }
+    } catch (error) {
+      if (operationEpoch === this.ownershipEpoch && !this._disposed) {
+        for (const record of culled) record.autoCulled = true;
+      }
+      throw error;
     }
   }
 
   /** Release all resources and restore visibility. */
-  async dispose(model?: FRAGS.FragmentsModel): Promise<void> {
+  async dispose(
+    model?: FRAGS.FragmentsModel,
+    visibility?: VisibilityMutationTarget,
+  ): Promise<void> {
     this._disposed = true;
-    if (model) await this.clearCull(model);
+    if (model) await this.clearCull(model, visibility ?? model);
     this.records = [];
   }
 }

@@ -20,9 +20,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { URL } from 'node:url';
 
-import { convert, getWasmDir } from './converter.js';
+import { convert, ConversionCancelledError, getWasmDir } from './converter.js';
 import { decimateFragments, type DecimateStats } from './decimate.js';
 import { parseIfc, parseIfcStatsOnly, scanSections } from './parser/index.js';
+import { decodeSubsetEnvelope, subsetFragments, type SubsetRequestEnvelope } from './subset.js';
 import {
   extractGeometry,
   extractGeometryStreaming,
@@ -114,6 +115,32 @@ async function readRequestBody(req: IncomingMessage, maxBytes: number): Promise<
 
 const MAX_IFC_BYTES = 1024 * 1024 * 1024; // 1 GB upper bound
 
+/**
+ * Abort when the client disconnects before the response finished. Queued heavy
+ * jobs check the signal at the head of the FIFO so a disconnected client's
+ * job is skipped instead of occupying the importer.
+ *
+ * An aborting client (undici/fetch, httpx) half-closes with FIN; Node keeps a
+ * half-closed connection alive while a response is pending, so `res` emits
+ * 'close' only after the response is written. The socket's 'end' event is the
+ * early disconnect signal; 'close' still covers hard resets.
+ */
+function watchClientDisconnect(req: IncomingMessage, res: ServerResponse): AbortSignal {
+  const cancel = new AbortController();
+  const socket = req.socket;
+  const onDisconnect = () => {
+    if (!res.writableFinished) cancel.abort();
+  };
+  socket.once('end', onDisconnect);
+  res.on('close', () => {
+    // Keep-alive sockets outlive the response; drop the listener so serving
+    // many requests over one connection does not accumulate handlers.
+    socket.removeListener('end', onDisconnect);
+    onDisconnect();
+  });
+  return cancel.signal;
+}
+
 async function handleConvert(req: IncomingMessage, res: ServerResponse, parsedUrl: URL) {
   const profileParam = (parsedUrl.searchParams.get('profile') ?? 'balanced') as ParseProfile;
   const modelId = parsedUrl.searchParams.get('modelId') ?? 'sidecar-model';
@@ -139,6 +166,7 @@ async function handleConvert(req: IncomingMessage, res: ServerResponse, parsedUr
   // The HTTP path is one-shot: Python forwards the whole IFC, waits for
   // the whole .frag. Progress is emitted to stderr so the manager can
   // forward it as SSE to the frontend.
+  const clientGone = watchClientDisconnect(req, res);
   const stageLog: string[] = [];
   const onProgress = (stage: string, progress: number) => {
     // Structured line; Python parses by prefix.
@@ -148,7 +176,11 @@ async function handleConvert(req: IncomingMessage, res: ServerResponse, parsedUr
   };
 
   try {
-    const result = await convert(bytes, { profile: profileParam, onProgress });
+    const result = await convert(bytes, {
+      profile: profileParam,
+      onProgress,
+      signal: clientGone,
+    });
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('X-Sidecar-Profile', result.effectiveProfile);
@@ -167,6 +199,11 @@ async function handleConvert(req: IncomingMessage, res: ServerResponse, parsedUr
       })}\n`,
     );
   } catch (err) {
+    if (err instanceof ConversionCancelledError) {
+      // Client is gone; there is nobody to answer.
+      process.stderr.write(`SIDECAR_CANCELLED ${JSON.stringify({ modelId, endpoint: 'convert' })}\n`);
+      return;
+    }
     const message = err instanceof Error ? err.message : 'conversion failed';
     process.stderr.write(`SIDECAR_ERROR ${JSON.stringify({ modelId, message })}\n`);
     jsonResponse(res, 500, { error: message, stageLog });
@@ -231,6 +268,16 @@ async function handleDecimate(req: IncomingMessage, res: ServerResponse, parsedU
       res.setHeader('X-Sidecar-Tris-After', String(stats.trisAfter));
       res.setHeader('X-Sidecar-Shells-Decimated', String(stats.decimated));
       res.setHeader('X-Sidecar-Elapsed-Ms', String(stats.elapsedMs));
+      res.setHeader('X-Sidecar-Lod-Target-Ratio', String(stats.targetRatio));
+      res.setHeader('X-Sidecar-Lod-Target-Error', String(stats.targetError));
+      res.setHeader('X-Sidecar-Lod-Max-Error', String(stats.achievedMaxError));
+      res.setHeader(
+        'X-Sidecar-Lod-Mean-Error',
+        String(stats.achievedWeightedMeanError),
+      );
+      res.setHeader('X-Sidecar-Identity-Count', String(stats.identityCount));
+      res.setHeader('X-Sidecar-Identity-Sha256', stats.identitySha256);
+      res.setHeader('X-Sidecar-Identity-Verified', String(stats.identityVerified));
     }
     res.end(Buffer.from(out));
     process.stderr.write(
@@ -241,12 +288,80 @@ async function handleDecimate(req: IncomingMessage, res: ServerResponse, parsedU
         trisBefore: stats?.trisBefore ?? 0,
         trisAfter: stats?.trisAfter ?? 0,
         decimated: stats?.decimated ?? 0,
+        achievedMaxError: stats?.achievedMaxError ?? 0,
+        identityCount: stats?.identityCount ?? 0,
+        identitySha256: stats?.identitySha256 ?? null,
+        identityVerified: stats?.identityVerified ?? false,
         elapsedMs: stats?.elapsedMs ?? 0,
       })}\n`,
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : 'decimation failed';
     process.stderr.write(`SIDECAR_DECIMATE_ERROR ${JSON.stringify({ modelId, message })}\n`);
+    jsonResponse(res, 500, { error: message });
+  }
+}
+
+/**
+ * Create a standalone spatial/storey fragment subset from a cached full model.
+ * The length-prefixed identity table avoids URL/header limits for large tiles.
+ */
+async function handleSubset(req: IncomingMessage, res: ServerResponse, parsedUrl: URL) {
+  const modelId = parsedUrl.searchParams.get('modelId') ?? 'subset-model';
+  let envelopeBytes: Uint8Array;
+  try {
+    envelopeBytes = await readRequestBody(req, MAX_IFC_BYTES);
+  } catch (err) {
+    jsonResponse(res, 413, {
+      error: err instanceof Error ? err.message : 'body read failed',
+    });
+    return;
+  }
+  if (envelopeBytes.byteLength === 0) {
+    jsonResponse(res, 400, { error: 'empty body' });
+    return;
+  }
+
+  // Envelope decoding failures (bad magic, truncation, unsupported schema,
+  // invalid items) are malformed client requests → 400, matching /convert
+  // and /decimate; only authoring failures below are sidecar faults (500).
+  let envelope: SubsetRequestEnvelope;
+  try {
+    envelope = decodeSubsetEnvelope(envelopeBytes);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'invalid subset envelope';
+    jsonResponse(res, 400, { error: message });
+    return;
+  }
+
+  const clientGone = watchClientDisconnect(req, res);
+  try {
+    const result = await subsetFragments(envelope.fragmentBytes, envelope.items, clientGone);
+    const { stats } = result;
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('X-Sidecar-Input-Bytes', String(stats.inputBytes));
+    res.setHeader('X-Sidecar-Output-Bytes', String(stats.outputBytes));
+    res.setHeader('X-Sidecar-Subset-Requested', String(stats.requestedCount));
+    res.setHeader('X-Sidecar-Subset-Resolved', String(stats.resolvedCount));
+    res.setHeader('X-Sidecar-Subset-Guid-Remaps', String(stats.guidRemapCount));
+    res.setHeader('X-Sidecar-Identity-Count', String(stats.identityCount));
+    res.setHeader('X-Sidecar-Identity-Sha256', stats.identitySha256);
+    res.setHeader('X-Sidecar-Identity-Verified', String(stats.identityVerified));
+    res.setHeader('X-Sidecar-Content-Sha256', stats.contentSha256);
+    res.setHeader('X-Sidecar-Content-Verified', String(stats.contentVerified));
+    res.setHeader('X-Sidecar-Elapsed-Ms', String(stats.elapsedMs));
+    res.end(Buffer.from(result.bytes));
+    process.stderr.write(
+      `SIDECAR_SUBSET_DONE ${JSON.stringify({ modelId, ...stats })}\n`,
+    );
+  } catch (err) {
+    if (err instanceof ConversionCancelledError) {
+      process.stderr.write(`SIDECAR_CANCELLED ${JSON.stringify({ modelId, endpoint: 'subset' })}\n`);
+      return;
+    }
+    const message = err instanceof Error ? err.message : 'subset authoring failed';
+    process.stderr.write(`SIDECAR_SUBSET_ERROR ${JSON.stringify({ modelId, message })}\n`);
     jsonResponse(res, 500, { error: message });
   }
 }
@@ -568,6 +683,10 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'POST' && parsedUrl.pathname === '/decimate') {
       await handleDecimate(req, res, parsedUrl);
+      return;
+    }
+    if (req.method === 'POST' && parsedUrl.pathname === '/subset') {
+      await handleSubset(req, res, parsedUrl);
       return;
     }
     if (req.method === 'POST' && parsedUrl.pathname === '/parse') {

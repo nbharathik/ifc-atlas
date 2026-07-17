@@ -12,15 +12,15 @@
  * The floor rule: the interaction ladder drops quality to 0.6 during
  * navigation, which maps to a ~1.5x wider cull band than the idle 0.85.
  * Wiring that drop naively to every model would make elements visibly
- * vanish during orbit on exactly the models users care about. So:
+ * vanish during orbit on exactly the models users care about.
  *
  *   small  (< ALL_VISIBLE_MAX_ELEMENTS): ALL_VISIBLE LodMode - the worker
  *          skips coverage/frustum culling entirely, quality is irrelevant.
- *   medium (up to LARGE_MODEL_MIN_ELEMENTS): quality PINNED to the ladder's
- *          idle level at all times - navigation must not widen the cull band.
- *   large  (above): the nav drop is allowed (the alternative is dropped
- *          frames), and the resting level is capped at LARGE_TIER_MAX_QUALITY
- *          to keep the per-frame coverage budget bounded.
+ *   medium (up to LARGE_MODEL_MIN_ELEMENTS): ALL_VISIBLE LodMode - every
+ *          element stays resident and drawable at any camera distance, so
+ *          nothing pops during orbit or zoom; quality is irrelevant.
+ *   large  (above): DEFAULT coverage classifier with quality pinned to the
+ *          ladder's idle level, until per-tile LOD replaces it.
  *
  * Thresholds are provisional pending scaling probes; keep them as named
  * constants so tuning lands in one place.
@@ -28,9 +28,7 @@
 
 export type LodTier = 'small' | 'medium' | 'large';
 
-/** Below this element count the model runs ALL_VISIBLE (nothing ever
- *  disappears during camera motion). Matches the element-culler small-model
- *  gate; raise only with probe data showing ALL_VISIBLE holds frame rate. */
+/** Small/medium tier boundary and the element-culler's small-model gate. */
 export const ALL_VISIBLE_MAX_ELEMENTS = 300;
 
 /** At or above this element count the model is 'large'. Kept as a distinct
@@ -42,6 +40,82 @@ export function resolveLodTier(elementCount: number): LodTier {
   if (elementCount < ALL_VISIBLE_MAX_ELEMENTS) return 'small';
   if (elementCount < LARGE_MODEL_MIN_ELEMENTS) return 'medium';
   return 'large';
+}
+
+/**
+ * Small and medium models bypass the fragments worker's view-dependent LOD
+ * entirely: every element stays resident and drawable regardless of camera
+ * distance or angle, matching the stable-geometry invariant. The classifier's
+ * measured frame-time benefit on this class of model is within noise, while
+ * its wire/cull bands make elements visibly pop during orbit and zoom.
+ * Large models keep the classifier until per-tile LOD ships; drawing every
+ * triangle of a 20k+ element model unculled is a real GPU regression.
+ */
+export function shouldPinAllVisible(tier: LodTier): boolean {
+  return tier === 'small' || tier === 'medium';
+}
+
+export function shouldAttachNavigationLod(tier: LodTier, enabled: boolean): boolean {
+  return enabled && tier === 'large';
+}
+
+export interface NavigationLodAppearanceInput {
+  enabled: boolean;
+  isolatedCount: number;
+  hiddenCount: number;
+  ghostModeOn: boolean;
+  selectedElementId: number | null;
+  selectedCount: number;
+  highlightedCount: number;
+  colourBy: string;
+  colourLayerCount: number;
+  furnishingMerged: boolean;
+}
+
+export interface FurnishingMergeInteractionInput {
+  enabled: boolean;
+  isolatedCount: number;
+  hiddenCount: number;
+  ghostModeOn: boolean;
+  selectedElementId: number | null;
+  selectedCount: number;
+  highlightedCount: number;
+  colourBy: string;
+  colourLayerCount: number;
+  hoverHighlightEnabled: boolean;
+  measurementMode: string;
+}
+
+/** The proxy is unstyled/unmerged, so durable appearance or merge state keeps the primary visible. */
+export function canUseNavigationLod(input: NavigationLodAppearanceInput): boolean {
+  return input.enabled
+    && input.isolatedCount === 0
+    && input.hiddenCount === 0
+    && !input.ghostModeOn
+    && input.selectedElementId === null
+    && input.selectedCount === 0
+    && input.highlightedCount === 0
+    && input.colourBy === 'off'
+    && input.colourLayerCount === 0
+    && !input.furnishingMerged;
+}
+
+/** A static merged mesh cannot carry fragment-level picking or appearance. */
+export function canUseFurnishingMerge(input: FurnishingMergeInteractionInput): boolean {
+  return canUseNavigationLod({
+    enabled: input.enabled,
+    isolatedCount: input.isolatedCount,
+    hiddenCount: input.hiddenCount,
+    ghostModeOn: input.ghostModeOn,
+    selectedElementId: input.selectedElementId,
+    selectedCount: input.selectedCount,
+    highlightedCount: input.highlightedCount,
+    colourBy: input.colourBy,
+    colourLayerCount: input.colourLayerCount,
+    furnishingMerged: false,
+  })
+    && !input.hoverHighlightEnabled
+    && input.measurementMode === 'off';
 }
 
 /**

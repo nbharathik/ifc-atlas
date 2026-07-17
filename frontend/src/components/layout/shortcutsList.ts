@@ -33,7 +33,7 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { key: 'a', label: 'A', description: 'Show all elements', category: 'Visibility' },
   { key: 'x', label: 'X', description: 'Toggle section / clip plane', category: 'Visibility' },
   { key: 'Shift+X', label: 'Shift+X', description: 'Pick surface to place section plane', category: 'Visibility' },
-  { key: 'Alt+X', label: 'Alt+X', description: 'Clip section box to selected element', category: 'Visibility' },
+  { key: 'Alt+X', label: 'Alt+X', description: 'Fit section box to current selection', category: 'Visibility' },
   { key: 'Shift+1-9', label: 'Shift+1…9', description: 'Isolate / navigate to storey 1-9', category: 'Visibility' },
   // Panels
   { key: 't', label: 'T', description: 'Focus model tree', category: 'Panels' },
@@ -57,7 +57,7 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { key: 'Shift+F', label: 'Shift+F', description: 'Element property filter panel', category: 'Panels' },
   { key: 'Shift+S', label: 'Shift+S', description: 'Model statistics panel', category: 'Panels' },
   // Measurement
-  { key: 'r', label: 'R', description: 'Toggle measurement panel', category: 'Measurement' },
+  { key: 'r', label: 'R', description: 'Start or stop measuring', category: 'Measurement' },
   { key: 'n', label: 'N', description: 'Toggle angle measurement mode', category: 'Measurement' },
   { key: 'l', label: 'L', description: 'Toggle measurement labels (while measurements exist; otherwise focuses activity log)', category: 'Measurement' },
   // Capture
@@ -66,6 +66,7 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { key: 'Shift+L', label: 'Shift+L', description: 'Copy share link (camera + highlights)', category: 'Capture' },
   // Edit
   { key: 'Ctrl+Z', label: 'Ctrl+Z', description: 'Undo last committed edit', category: 'Edit' },
+  { key: 'Ctrl+Y', label: 'Ctrl+Y', description: 'Redo the most recently undone edit (also Ctrl+Shift+Z)', category: 'Edit' },
   { key: 'Ctrl+Shift+C', label: 'Ctrl+Shift+C', description: 'Copy selected element details (type, name, Express ID, GlobalId, storey)', category: 'Edit' },
   // General
   { key: 'Ctrl/Cmd+K', label: 'Ctrl+K', description: 'Open command palette', category: 'General' },

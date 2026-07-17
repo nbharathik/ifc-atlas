@@ -153,7 +153,27 @@ export default function ViewerToolsPanel() {
   const setIsolatedIds = useStore((s) => s.setIsolatedIds);
   const clearVisibility = useStore((s) => s.clearVisibility);
   const logActivity = useStore((s) => s.logActivity);
-  const [activeStorey, setActiveStorey] = useState<string | null>(null);
+  // The active storey chip is derived from the visibility model: a chip is
+  // active only while the isolation set is exactly that storey's leaf set,
+  // no matter which surface (chips, Shift+1..9, AI commands) isolated it.
+  const storeyLeafSets = useMemo(() => {
+    const map = new Map<string, number[]>();
+    for (const name of stats?.storeys ?? []) {
+      const node = findStoreyNode(spatialTree, name);
+      if (node) map.set(name, collectLeavesUnder(node));
+    }
+    return map;
+  }, [spatialTree, stats]);
+  const activeStorey = useMemo(() => {
+    if (isolatedIds.length === 0) return null;
+    const iso = new Set(isolatedIds);
+    for (const [name, leaves] of storeyLeafSets) {
+      if (leaves.length === isolatedIds.length && leaves.every((id) => iso.has(id))) {
+        return name;
+      }
+    }
+    return null;
+  }, [isolatedIds, storeyLeafSets]);
 
   // Clip plane state
   const clipPlanes = useStore((s) => s.clipPlanes);
@@ -168,10 +188,16 @@ export default function ViewerToolsPanel() {
 
   // Section box state
   const sectionBoxEnabled = useStore((s) => s.sectionBoxEnabled);
+  const sectionWorkspace = useStore((s) => s.sectionWorkspace);
   const toggleSectionBox = useStore((s) => s.toggleSectionBox);
+  const setSectionBoxEnabled = useStore((s) => s.setSectionBoxEnabled);
+  const setSectionWorkspace = useStore((s) => s.setSectionWorkspace);
   const clipToElement = useStore((s) => s.clipToElement);
   const clipToElementFn = useStore((s) => s.clipToElementFn);
+  const clipToElements = useStore((s) => s.clipToElements);
+  const clipToElementsFn = useStore((s) => s.clipToElementsFn);
   const selectedElementId = useStore((s) => s.selectedElementId);
+  const selectedIds = useStore((s) => s.selectedIds);
 
   // Colour-by state
   const colourBy = useStore((s) => s.colourBy);
@@ -198,22 +224,28 @@ export default function ViewerToolsPanel() {
   const handleStoreyClick = useCallback((storeyName: string) => {
     if (activeStorey === storeyName) {
       clearVisibility();
-      setActiveStorey(null);
       logActivity({ kind: 'show-all', summary: `Cleared storey isolation` });
     } else {
       const node = findStoreyNode(spatialTree, storeyName);
       if (!node) return;
       const ids = collectLeavesUnder(node);
       setIsolatedIds(ids);
-      setActiveStorey(storeyName);
       logActivity({ kind: 'isolate', summary: `Isolated storey "${storeyName}" (${ids.length} elements)` });
     }
   }, [activeStorey, spatialTree, setIsolatedIds, clearVisibility, logActivity]);
 
-  // Sync isolation state: if visibility was cleared externally, clear chip state too
-  if (activeStorey && isolatedIds.length === 0) {
-    setActiveStorey(null);
-  }
+  const handleStoreySection = useCallback((storeyName: string) => {
+    const node = findStoreyNode(spatialTree, storeyName);
+    if (!node) return;
+    const ids = collectLeavesUnder(node);
+    clipToElements(ids, `storey "${storeyName}"`);
+  }, [clipToElements, spatialTree]);
+
+  const sectionSelectionIds = selectedIds.length > 0
+    ? selectedIds
+    : selectedElementId != null
+    ? [selectedElementId]
+    : [];
 
   if (!modelLoaded) return null;
 
@@ -333,7 +365,7 @@ export default function ViewerToolsPanel() {
                 {(activeStorey || hasIsolation) && (
                   <button
                     className="vtp-link-btn vtp-show-all"
-                    onClick={() => { clearVisibility(); setActiveStorey(null); logActivity({ kind: 'show-all', summary: 'Cleared storey isolation' }); }}
+                    onClick={() => { clearVisibility(); logActivity({ kind: 'show-all', summary: 'Cleared storey isolation' }); }}
                   >
                     Show all
                   </button>
@@ -347,6 +379,17 @@ export default function ViewerToolsPanel() {
                   >
                     <Icon name="eye" size={11} style={{ marginRight: 3 }} />
                     Ghost xray
+                  </button>
+                )}
+                {activeStorey && (
+                  <button
+                    className="vtp-pill-btn"
+                    onClick={() => handleStoreySection(activeStorey)}
+                    disabled={!clipToElementsFn}
+                    title={`Fit the section box to storey "${activeStorey}"`}
+                  >
+                    <Icon name="crop" size={11} style={{ marginRight: 3 }} />
+                    Section storey
                   </button>
                 )}
               </div>
@@ -367,10 +410,13 @@ export default function ViewerToolsPanel() {
         )}
 
         {/* ── Section planes ── */}
-        <VtpSection id="sections" label="Sections" defaultOpen={enabledPlanes.length > 0} icon={<Icon name="section" size={13} />}>
+        <VtpSection id="sections" label="Section planes" defaultOpen={enabledPlanes.length > 0} icon={<Icon name="section" size={13} />}>
+          <p className="vtp-section-desc">
+            Slice the model along an axis to look inside. Drag the slider to move the cut.
+          </p>
           <div className="vtp-section-actions">
             {enabledPlanes.length < MAX_CLIP_PLANES && (
-              <button className="vtp-action-btn" onClick={addClipPlane} title={`Add section plane (max ${MAX_CLIP_PLANES})`}>
+              <button className="vtp-action-btn" onClick={addClipPlane} title={`Add a section plane (up to ${MAX_CLIP_PLANES})`}>
                 <Icon name="plus" size={11} />
                 Add plane
               </button>
@@ -380,7 +426,10 @@ export default function ViewerToolsPanel() {
             )}
           </div>
           {enabledPlanes.length === 0 && (
-            <p className="vtp-empty">No section planes active. Press <kbd>X</kbd> or use Add plane.</p>
+            <p className="vtp-empty">
+              No planes yet. Click Add plane, press <kbd>X</kbd>, or <kbd>Shift+X</kbd> then
+              click a surface to cut along it.
+            </p>
           )}
           {enabledPlanes.map((plane, i) => (
             <ClipPlaneRow key={plane.id} plane={plane} index={i} />
@@ -388,61 +437,103 @@ export default function ViewerToolsPanel() {
         </VtpSection>
 
         {/* ── Section box ── */}
-        <VtpSection id="sectionbox" label="Section Box" defaultOpen={sectionBoxEnabled} icon={<Icon name="box" size={13} />}>
+        <VtpSection id="sectionbox" label="Section box" defaultOpen={sectionBoxEnabled} icon={<Icon name="box" size={13} />}>
+          <p className="vtp-section-desc">
+            Hides everything outside a crop box, so you can inspect one room, floor,
+            or element without the rest of the building in the way.
+          </p>
           <div className="vtp-section-actions">
             <button
               className={`vtp-action-btn${sectionBoxEnabled ? ' active' : ''}`}
               onClick={toggleSectionBox}
               aria-pressed={sectionBoxEnabled}
-              title={sectionBoxEnabled ? 'Disable AABB crop (Alt+B)' : 'Enable AABB crop fitted to model bounds (Alt+B)'}
+              title={sectionBoxEnabled ? 'Turn the crop box off (Alt+B)' : 'Turn the crop box on (Alt+B)'}
             >
               <Icon name={sectionBoxEnabled ? 'eye-off' : 'box'} size={11} />
-              {sectionBoxEnabled ? 'Disable' : 'Enable'}
+              {sectionBoxEnabled ? 'Turn off' : 'Turn on'}
             </button>
             <button
               className="vtp-action-btn"
-              onClick={() => selectedElementId != null && clipToElement(selectedElementId)}
-              disabled={!clipToElementFn || selectedElementId == null}
+              onClick={() => {
+                if (selectedIds.length > 0) {
+                  clipToElements(selectedIds, `${selectedIds.length} selected elements`);
+                } else if (selectedElementId != null) {
+                  clipToElement(selectedElementId);
+                }
+              }}
+              disabled={
+                sectionSelectionIds.length === 0
+                || (selectedIds.length > 0 ? !clipToElementsFn : !clipToElementFn)
+              }
               title={
-                !clipToElementFn
-                  ? 'Load a model first'
-                  : selectedElementId == null
-                  ? 'Select an element first'
-                  : `Clip section box to element #${selectedElementId}`
+                sectionSelectionIds.length === 0
+                  ? 'Select an element first, then shrink the box around it'
+                  : sectionSelectionIds.length > 1
+                  ? `Shrink the box around the ${sectionSelectionIds.length} selected elements`
+                  : 'Shrink the box around the selected element'
               }
             >
               <Icon name="crop" size={11} />
-              Clip to selection
+              Box around selection
+            </button>
+            <button
+              className="vtp-action-btn"
+              onClick={() => {
+                setSectionWorkspace(null);
+                setSectionBoxEnabled(true);
+              }}
+              title="Grow the box back to the whole model"
+            >
+              <Icon name="maximize" size={11} />
+              Whole model
             </button>
           </div>
-          {sectionBoxEnabled ? (
+          {sectionBoxEnabled && (
             <p className="vtp-empty" style={{ marginTop: 4 }}>
-              AABB crop active. Use <kbd>Alt+B</kbd> to toggle off.
-            </p>
-          ) : (
-            <p className="vtp-empty">
-              Crops the model to an axis-aligned bounding box. Press <kbd>Alt+B</kbd> or click Enable.
+              {sectionWorkspace?.name ?? 'Full model section box'} active. <kbd>Alt+B</kbd> toggles
+              it off without losing its size.
             </p>
           )}
         </VtpSection>
 
         {/* ── Measurement ── */}
         <VtpSection id="measure" label="Measure" defaultOpen={mode !== 'off'} icon={<Icon name="ruler" size={13} />}>
+          <p className="vtp-row-label" style={{ marginBottom: 5 }}>Construction</p>
           <div className="vtp-btn-row">
-            <button
-              className={`vtp-pill-btn${mode === 'linear' ? ' active' : ''}`}
-              onClick={() => setMeasurementMode(mode === 'linear' ? 'off' : 'linear')}
-              title="Linear distance"
-            >
-              Line
-            </button>
-            <button
-              className={`vtp-pill-btn${mode === 'area' ? ' active' : ''}`}
-              onClick={() => setMeasurementMode(mode === 'area' ? 'off' : 'area')}
-              title="Polygon area"
-            >
-              Area
-            </button>
+            {([
+              ['linear', 'Distance', 'Point-to-point distance'],
+              ['height', 'Height', 'Project-up height'],
+              ['clearance', 'Clearance', 'Shortest/perpendicular witness'],
+              ['position', 'Position', 'Project coordinate marker'],
+            ] as const).map(([toolMode, label, title]) => (
+              <button
+                key={toolMode}
+                className={`vtp-pill-btn${mode === toolMode ? ' active' : ''}`}
+                onClick={() => setMeasurementMode(mode === toolMode ? 'off' : toolMode)}
+                title={title}
+                aria-pressed={mode === toolMode}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="vtp-row-label" style={{ margin: '8px 0 5px' }}>Geometry</p>
+          <div className="vtp-btn-row">
+            {([
+              ['box', 'Rectangle', 'Two-click rectangular area'],
+              ['area', 'Polygon', 'Polygon area'],
+              ['angle', 'Angle', 'Three-click angle'],
+            ] as const).map(([toolMode, label, title]) => (
+              <button
+                key={toolMode}
+                className={`vtp-pill-btn${mode === toolMode ? ' active' : ''}`}
+                onClick={() => setMeasurementMode(mode === toolMode ? 'off' : toolMode)}
+                title={title}
+                aria-pressed={mode === toolMode}
+              >
+                {label}
+              </button>
+            ))}
             {mode !== 'off' && (
               <button
                 className="vtp-pill-btn vtp-pill-btn-danger"
@@ -455,8 +546,12 @@ export default function ViewerToolsPanel() {
           </div>
           {mode !== 'off' && (
             <div className="vtp-measure-hint">
-              Click surfaces in the 3D view to place points.
-              {mode === 'area' && ' Use Finish in the readout bar to close the polygon.'}
+              Click surfaces in the 3D view to place points. The live value follows
+              your cursor.
+              {mode === 'area' && ' Press Enter or double-click to close the polygon.'}
+              {mode === 'height' && ' Height follows the project Y axis.'}
+              {mode === 'clearance' && ' Snap to both witness targets for an exact result.'}
+              {mode === 'position' && ' One click places a persistent coordinate marker.'}
             </div>
           )}
           <div className="vtp-btn-row vtp-unit-row">

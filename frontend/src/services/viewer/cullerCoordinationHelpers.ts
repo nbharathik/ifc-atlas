@@ -5,8 +5,8 @@
  * `model.setVisible(localIds, boolean)` on the same @thatopen/fragments
  * model:
  *
- *   1. `applyVisibility(...)` - user isolate / hide (rAF-coalesced,
- *      see `visibilityRebuildHelpers.ts`).
+ *   1. The user isolate / hide policy (rAF-coalesced through the
+ *      render-state coordinator).
  *   2. `StoreyFrustumCuller.tick(...)` - coarse AABB cull at the storey
  *      granularity, fires on camera `controlend` settle.
  *   3. `ElementFrustumCuller.tick(...)` - fine AABB cull at the element
@@ -49,7 +49,6 @@
  * Companion to:
  *   - `hoverHighlightHelpers.ts`
  *   - `selectionHighlightHelpers.ts`
- *   - `visibilityRebuildHelpers.ts`
  *
  * Same shape as those helpers: framework-free pure functions so vitest
  * can pin the contract without mounting a renderer or @thatopen/

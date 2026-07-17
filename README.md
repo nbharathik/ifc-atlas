@@ -1,7 +1,26 @@
-<h1 align="center">IFC Atlas</h1>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/wordmark-dark.svg">
+    <img alt="IFC Atlas" src="docs/assets/brand/wordmark-light.svg" width="340">
+  </picture>
+</p>
 
 <p align="center">
-  <strong>Open-source IFC viewer for visualizing and inspecting BIM models with built-in AI chat features.</strong><br>
+  <strong>Open-source, native IFC viewer and editor with AI assistance.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/nbharathik/ifc-atlas/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/nbharathik/ifc-atlas?style=flat-square&labelColor=000000&color=0070f3"></a>
+  <a href="LICENSE"><img alt="License: MPL 2.0" src="https://img.shields.io/badge/license-MPL--2.0-blue?style=flat-square&labelColor=000000&color=0070f3"></a>
+  <a href="https://nbharathik.github.io/ifc-atlas/"><img alt="Documentation" src="https://img.shields.io/badge/docs-nbharathik.github.io-blue?style=flat-square&labelColor=000000&color=0070f3"></a>
+</p>
+
+<p align="center">
+  <a href="#download">Download</a> ·
+  <a href="#quick-start-from-source">Quick start</a> ·
+  <a href="docs/user/FEATURES.md">Features</a> ·
+  <a href="docs/user/USE_CASES.md">Use cases</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 <p align="center">
@@ -10,13 +29,18 @@
 
 ## Features
 
-- **3D viewer.** Selection, isolate / hide, section planes, measurements, camera presets, saved viewpoints, share links.
-- **Inspector.** Properties, quantities, model tree, search, command palette (`Ctrl+K`).
-- **AI chat.** Multi-provider (OpenAI, Anthropic, OpenRouter) with structured tool calls that act directly on the 3D view.
-- **Integrations.** buildingSMART IDS 1.0 validation, MCP client registry, and a built-in MCP server.
+- **3D viewer.** Selection, isolate / hide, section planes and section box, measurements with snapping, camera presets, saved viewpoints, share links.
+- **Inspector.** Properties, quantities, model tree, search, BIM filters, quantity takeoff, command palette (`Ctrl+K`).
+- **Native IFC editing.** Create projects from templates and edit names, descriptions, property values, and classifications inline - every change is a logged, undoable IfcOpenShell operation on the IFC file itself, saved with stable IDs. ([guide](docs/user/EDITING.md))
+- **AI chat + AI editing.** Multi-provider (OpenAI, Anthropic, OpenRouter) with structured tool calls that act on the 3D view; AI edits are sandboxed, diff-previewed, and health-verified before you apply them.
+- **History.** Automatic git checkpoints per change, an actor-attributed timeline (you / AI / MCP), semantic compare via ifcdiff, undo/redo, rollback.
+- **Issue tracking.** BCF 2.1 topics that capture the current view, with `.bcfzip` import and export that round-trips with other BIM tools.
+- **Plugins.** Sandboxed Python batch scripts over the loaded model, staged through the same diff preview as AI edits.
+- **Integrations.** buildingSMART IDS 1.0 validation, bSDD + IfcOpenShell docs as AI knowledge tools, MCP client registry, a built-in MCP server through which external agents (e.g. Claude Desktop) can read and edit models, and a headless CLI.
 - **Deployment.** Desktop app, Docker self-hosting, or a browser-only demo.
 
 Full feature catalogue and shortcuts: [`docs/user/FEATURES.md`](docs/user/FEATURES.md).
+Practical workflows and example prompts: [`docs/user/USE_CASES.md`](docs/user/USE_CASES.md).
 
 ## Download
 
@@ -43,7 +67,7 @@ cd backend && pip install -r requirements.txt && python run.py
 cd frontend && npm install && npm run dev
 ```
 
-Open <http://localhost:5173> in Chrome or Edge and drop an `.ifc` file onto the upload zone. API keys are set in-app on first launch, via environment variables, or in `~/.ifc-atlas/.env`. 
+Open <http://localhost:5173> in Chrome or Edge and drop an `.ifc` file onto the upload zone. API keys are set in-app on first launch, via environment variables, or in `~/.ifc-atlas/.env`.
 
 To run with Docker instead:
 

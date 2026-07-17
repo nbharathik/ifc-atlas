@@ -21,7 +21,7 @@ Layout (created lazily):
         data/                 # custom agents, prompts, tool sets, snippets,
                               #   models.json, aabb-cache/, ifc-index/, doc_index/
         uploads/              # uploaded IFC files (+ hidden .working/ edit copies)
-        fragments/            # converted-fragment cache ({sha}-{profile}.frag)
+        fragments/            # versioned converted-fragment cache + manifests
         snapshots/            # geometry snapshots
         ifc_history/          # git-backed model checkpoints
         mcp_servers.json      # external MCP server registry (optional)
@@ -133,14 +133,12 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # Feature toggles
-# v1: the LLM "Edit" surface is gated OFF until the sandboxed edit / diff-preview
-# flow is fully tested. When off, ``stream_chat`` drops every ``write_edit``-tier
-# (mutating) tool from the allowlist, so neither the read-only Ask agent
-# (``allowed_tools=None`` -> all tools) nor a ``/agent edit-assistant`` switch can
-# stage a write. All backend wiring (edit-assistant agent, write tools, sandbox,
-# diff-preview routes) stays in place - this is a UX gate, not a removal.
-#
-# To re-enable for v-next: set ``EDIT_MODE_ENABLED=1`` here AND flip the frontend
-# ``EDIT_MODE_ENABLED`` flag in ``frontend/src/config/featureFlags.ts`` (both flip
-# points must move together).
-EDIT_MODE_ENABLED = _truthy(os.getenv("EDIT_MODE_ENABLED", "0"))
+# v0.1.1: editing is ON by default (ADR 003 phased flip - the operation layer,
+# dual-mode gating, verifier loop, undo/redo, and save round-trip all landed).
+# The flag gates BOTH surfaces from this single point: the human editor
+# (/operations routes return 403 when off; the frontend probes the flag at
+# runtime via /api/ifc/edit-state, so no rebuild is needed) and the AI Edit
+# tier (``stream_chat`` drops every ``write_edit``-tier tool when off; MCP
+# direct ops honour it too). Set ``EDIT_MODE_ENABLED=0`` to run a read-only
+# deployment (kiosk/demo servers).
+EDIT_MODE_ENABLED = _truthy(os.getenv("EDIT_MODE_ENABLED", "1"))

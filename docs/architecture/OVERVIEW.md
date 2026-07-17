@@ -75,10 +75,9 @@ Both paths refer to the same uploaded file, so the backend can serve semantic he
 
 ## Data flow: an edit
 
-In this release the Edit surface is disabled by default behind the
-`EDIT_MODE_ENABLED` flag (backend env var + frontend constant, both default
-off). The protocol below is fully wired and describes the flow once the flag
-is enabled.
+The Edit surface is enabled by default and gates on the backend's
+`EDIT_MODE_ENABLED` runtime setting. Set it to `0` for a read-only deployment;
+the frontend probes the same capability so UI and backend cannot disagree.
 
 Simple attribute edits (`rename_element`, `update_property_value`, and their
 batch variants) take a direct fast path: they mutate the live model
@@ -127,7 +126,7 @@ Frontend DiffPreviewPanel renders before/after
 6. **No redundant state across the boundary.** Every piece of state has exactly one owner; the other side is at most a cache.
 7. **Performance budgets, measured every change.** On the `BasicHouse.ifc` baseline: TTFR < 2.5 s cold / < 1.0 s warm, TTFG < 4.0 s cold / < 1.5 s warm, click-to-highlight < 80 ms; no silent regressions.
 8. **Frontend-first for interaction, backend-first for IFC conversion.** New viewer work ships client-only unless the feature genuinely needs the backend.
-9. **Two chat modes.** Ask is read-only; Edit is the only writer (disabled by default in this release behind `EDIT_MODE_ENABLED`).
+9. **Two chat modes.** Ask is read-only; Edit is the only writer, and agent writes are staged for approval. `EDIT_MODE_ENABLED=0` disables the write surface globally.
 10. **Tool sets, prompts, and agents are independent libraries** persisted as JSON under `~/.ifc-atlas/data/`.
 11. **(retired)** Workflow pipelines were removed; the review-before-execute principle lives on in the diff preview.
 
@@ -139,3 +138,5 @@ Frontend DiffPreviewPanel renders before/after
 - [`EDIT_PROTOCOL.md`](EDIT_PROTOCOL.md), sandbox / diff / Apply / Discard contract in detail.
 - [`DEPLOY.md`](DEPLOY.md), web / Tauri / GH-Pages matrices.
 - [`TAURI.md`](TAURI.md), desktop architecture specifics.
+- [`BIM_VIEWER_DALUX_REVIEW.md`](BIM_VIEWER_DALUX_REVIEW.md), viewer stability,
+  performance, Dalux benchmark, and prioritized implementation plan.

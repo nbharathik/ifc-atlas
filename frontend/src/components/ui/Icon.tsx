@@ -57,6 +57,8 @@ export type IconName =
   | 'cube'
   | 'activity'
   | 'refresh'
+  | 'undo'
+  | 'redo'
   | 'folder'
   | 'file'
   | 'column'
@@ -90,7 +92,11 @@ export type IconName =
   | 'inbox'
   | 'ghost'
   | 'brain'
-  | 'more-horizontal';
+  | 'more-horizontal'
+  | 'height'
+  | 'clearance'
+  | 'polygon'
+  | 'angle';
 
 interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'children'> {
   name: IconName;
@@ -102,6 +108,36 @@ interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'children'> {
 // split it later. Paths were authored with the same visual rules lucide
 // uses: 24x24 grid, 2-unit stroke, round linecaps/joins.
 const PATHS: Record<IconName, React.ReactNode> = {
+  // ── Measurement tools ──────────────────────────────────────────────────
+  // Vertical double-headed arrow: a height dimension constrained to project up.
+  'height': (
+    <>
+      <path d="M12 3v18" />
+      <path d="m8 7 4-4 4 4" />
+      <path d="m8 17 4 4 4-4" />
+    </>
+  ),
+  // Two faces with a gap arrow between them: shortest clearance.
+  'clearance': (
+    <>
+      <path d="M4 4v16M20 4v16" />
+      <path d="M8 12h8" />
+      <path d="m10 9-3 3 3 3" />
+      <path d="m14 9 3 3-3 3" />
+    </>
+  ),
+  // Pentagon: polygon area.
+  'polygon': (
+    <path d="M12 3 21.5 10 17.8 21H6.2L2.5 10Z" />
+  ),
+  // Two arms meeting at a vertex with a sweep arc: angle.
+  'angle': (
+    <>
+      <path d="M4 20h17" />
+      <path d="M4 20 18 5" />
+      <path d="M12 20a8 8 0 0 0-2.2-5.5" strokeDasharray="2 2" />
+    </>
+  ),
   // Dashed wireframe cube, represents AABB section box
   'box': (
     <>
@@ -394,6 +430,19 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <path d="M21 12a9 9 0 1 1-3-6.7" />
       <path d="M21 3v6h-6" />
+    </>
+  ),
+  // Undo / redo (lucide undo-2 / redo-2)
+  'undo': (
+    <>
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11" />
+    </>
+  ),
+  'redo': (
+    <>
+      <path d="m15 14 5-5-5-5" />
+      <path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5v0A5.5 5.5 0 0 0 9.5 20H13" />
     </>
   ),
   // Folder

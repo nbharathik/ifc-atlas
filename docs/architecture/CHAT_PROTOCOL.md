@@ -177,7 +177,7 @@ In-band failure (invalid request payload, provider error, interrupted stream). A
 
 Every tool carries a tier, and the WS handler's tool executor enforces three gates in order before any tool runs:
 
-1. **Mode gate**: `write_edit` tools are refused when `EDIT_MODE_ENABLED` is off (the default in this release) or when the active agent is an ask-category agent.
+1. **Mode gate**: `write_edit` tools are refused when `EDIT_MODE_ENABLED` is off (it defaults to on) or when the active agent is an ask-category agent.
 2. **Global disable**: tools switched off in Chat Manager → Tools are refused for every agent.
 3. **Agent allowlist**: a tool missing from the agent's `allowed_tools` is refused. This is defence in depth; the tool schema sent to the LLM is already filtered to the allowlist.
 

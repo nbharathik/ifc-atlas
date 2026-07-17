@@ -1,6 +1,6 @@
-# IFC Atlas
+# ![IFC Atlas](assets/brand/wordmark-dark.svg#only-dark){ width="300" }![IFC Atlas](assets/brand/wordmark-light.svg#only-light){ width="300" }
 
-**An open-source IFC / BIM viewer with a built-in multi-LLM agent.**
+**An AI-assisted IFC workspace for exploring, understanding, validating, and editing BIM models.**
 
 Explore building models in 3D and ask questions in plain English. Every answer is grounded in real model data via structured tool calls, not guesswork.
 
@@ -18,7 +18,7 @@ The desktop installers bundle the viewer, the AI agent, and the backend into a s
 
 - **3D viewer.** Three.js with `@thatopen/components` rendering. Selection, isolate / hide / ghost mode, section planes, measurements (linear / polygon / angle), classification browser, screenshots, saved viewpoints, share links.
 - **AI Chat.** Streaming WebSocket chat against OpenAI, Anthropic, or OpenRouter. A UI-configurable model catalogue, per-agent tool allowlists, cost telemetry, and a per-agent monthly budget cap.
-- **Model editing (experimental, disabled by default).** An Edit Assistant agent can stage writes inside a sandboxed IfcOpenShell copy, with a Diff Preview panel for Apply / Discard. The capability ships disabled in this release and must be explicitly enabled.
+- **Native IFC editing.** Editing is available by default in the desktop workspace. Human semantic edits are validated and undoable; AI writes run inside a sandboxed IfcOpenShell copy with an inline Apply / Discard preview. Set `EDIT_MODE_ENABLED=0` for a read-only deployment.
 - **Integrations.** Full buildingSMART IDS 1.0 validation, MCP client and server (Claude Desktop / Cursor compatible), Tauri 2 desktop shell.
 
 ---
@@ -29,6 +29,8 @@ The desktop installers bundle the viewer, the AI agent, and the backend into a s
 |---|---|
 | [Getting Started](user/GETTING_STARTED.md) | First-time setup, first model, first AI query. |
 | [Features](user/FEATURES.md) | Every shipped feature, grouped by area. |
+| [Practical workflows](user/USE_CASES.md) | BIM use cases and ready-to-run example prompts. |
+| [Known limitations](user/KNOWN_LIMITATIONS.md) | Supported IFC scope, editing constraints, and platform caveats. |
 | [Keyboard Shortcuts](user/KEYBOARD_SHORTCUTS.md) | Full key reference. |
 | [AI Agent Guide](user/AI_AGENT_GUIDE.md) | Built-in agents, example prompts, tool routing. |
 | [API Reference](api/index.md) | REST + WebSocket protocol, generated from the live FastAPI app. |

@@ -6,9 +6,16 @@ How IFC Atlas avoids the classic "live-parse on every load" pipeline. This docum
 
 ## Design thesis
 
-1. **Backend owns IFC.** IfcOpenShell is the only place that understands IFC semantics. When the backend is reachable, the browser never parses raw IFC.
-2. **Deltas, not dumps.** Every committed edit emits a typed `ifc_patch` event over WebSocket. The viewer patches the spatial tree and the affected geometry in place; no full reload.
-3. **Streaming everywhere.** Upload, fragment conversion, queries, and edit apply all stream progress events rather than blocking on a single response.
+1. **Backend owns authoritative IFC semantics.** IfcOpenShell is the source of
+   truth for queries and edits. The browser normally consumes server-built
+   fragments, but may parse raw IFC in its worker as a conversion fallback.
+2. **Smallest safe update.** Metadata-only edits patch the live store in place.
+   Structural edits currently refresh the complete rendered model; fragment
+   deltas and staged atomic model replacement are the target, not a shipped
+   no-reload guarantee.
+3. **Progress is explicit.** Long upload, conversion, query, and edit work
+   reports stages or progress where supported. The standard fragment response
+   is still a complete binary artifact; spatial-tile streaming is opt-in.
 4. **Typed contracts.** Patch envelopes and tool I/O are typed end-to-end (Pydantic on the backend, mirror types on the frontend).
 5. **Agents are first-class citizens.** Per-agent tool allowlists, model selection, and budget caps live in the same registry as the engine knobs.
 
@@ -19,8 +26,8 @@ How IFC Atlas avoids the classic "live-parse on every load" pipeline. This docum
 ```
 ┌───────────────────────────────────────────────────────────────┐
 │ Viewer  (React + Three.js + @thatopen/components)             │
-│   • Receives pre-built .frag tiles (not raw IFC)              │
-│   • Applies ifc_patch events in place                         │
+│   • Normally receives pre-built .frag artifacts               │
+│   • Applies metadata patches; structural edits reload         │
 │   • Per-storey + per-element frustum culling                  │
 ├───────────────────────────────────────────────────────────────┤
 │ AI Chat  (frontend)                                           │
@@ -56,7 +63,7 @@ How IFC Atlas avoids the classic "live-parse on every load" pipeline. This docum
 ## Cold-load pipeline
 
 1. **Upload.** `POST /api/ifc/upload` writes the file to `~/.ifc-atlas/uploads/`, kicks off the native-metadata-index parse, and starts a background fragment pre-build.
-2. **Server convert.** The viewer calls `POST /api/ifc/convert` with the raw IFC bytes. The Node sidecar (`backend/sidecar/`) boots `@thatopen/fragments` and `web-ifc-node`, builds optimised fragment binaries, and the backend returns them as raw binary bytes (`application/octet-stream`, with `X-Fragment-*` headers for source, profile, and timing). The express → local ID bridge is built client-side from the fragments model itself.
+2. **Server convert.** The viewer calls `POST /api/ifc/convert` with the raw IFC bytes. The Node sidecar (`backend/sidecar/`) boots `@thatopen/fragments` and `web-ifc-node`, builds optimised fragment binaries, and the backend returns them as raw binary bytes (`application/octet-stream`, with `X-Fragment-*` headers for source, profile, and timing). The express → local ID bridge is built client-side from the fragments model itself. The sidecar reuses one WASM-warmed mutable importer, so conversion jobs execute through a process-local FIFO queue; the complete configure/process/restore transaction is exclusive and one failed job does not block later jobs.
 3. **Cache.** Output lands at `~/.ifc-atlas/fragments/{sha256}-{profile}.frag`. On a remount, `GET /api/ifc/fragment-manifest` answers with the cached manifest and the viewer downloads the fragments directly (`fragmentsManager.core.load()`), skipping upload entirely.
 4. **Fallback.** If the sidecar is down or the endpoint returns 5xx, the viewer falls back to in-browser `web-ifc` parsing in a Web Worker. The activity log records which path won the cold load.
 
@@ -66,15 +73,21 @@ Settings → Performance exposes a wait-timeout slider so a cold reload of a mod
 
 ## Edit pipeline (`ifc_patch`)
 
-Every committed edit produces a typed envelope on the `/api/ifc/sync/ws` WebSocket. Frontend handlers in [`frontend/src/services/viewer/`](https://github.com/nbharathik/ifc-atlas/blob/main/frontend/src/services/viewer/) apply the patch in place:
+Every committed edit produces a typed envelope on the `/api/ifc/sync/ws`
+WebSocket. Frontend handlers apply the smallest update the current viewer can
+support safely:
 
 | Patch kind | Frontend reaction |
 |---|---|
 | `attribute_changed`, `pset_changed` | Update the in-memory store; Properties panel re-renders. No geometry reload. |
-| `element_removed` | `model.hide([localId])` + drop from spatial tree. |
-| `element_added`, `geometry_changed` | Backend sends a mini `.frag` containing just the affected elements; frontend does `fragmentsManager.core.load(delta, { merge: true })`. |
+| `element_removed`, `element_added`, `geometry_changed`, or other structural change | Trigger a debounced, camera-preserving complete model refresh. The current `ViewerPanel` is remounted and its fragment scene is rebuilt. |
 
-`appliedPatchIds` in the store de-duplicates retries. After every AI edit, directly modified elements flash-highlight for 250 ms so the user can see exactly what changed.
+`appliedPatchIds` in the store de-duplicates retries. After every AI edit,
+directly modified elements flash-highlight so the user can see what changed.
+The backend has fragment-delta helpers, but live fragment merge/replacement is
+not yet the general structural-edit path. The next safe step is to keep the old
+session visible while a replacement session reaches its first valid frame;
+bounded fragment deltas follow once stable semantic/local IDs are guaranteed.
 
 ---
 
@@ -108,7 +121,10 @@ A streaming tile path exists in [`frontend/src/services/viewer/streamingGeometry
 
 ## How this maps to the architecture invariants
 
-- **Invariants 1 + 2 (convert-once, IfcOpenShell stays authoritative)**: enforced end-to-end. The browser sees pre-built fragments, never raw IFC, when the backend is reachable.
+- **Invariants 1 + 2 (convert-once, IfcOpenShell stays authoritative)**:
+  server-built fragments are the standard path and IfcOpenShell remains the
+  semantic authority. Browser raw-IFC parsing is a deliberate conversion
+  fallback, not a second semantic source of truth.
 - **Invariant 4 (sandbox + hash diff)**: unchanged. The patch generator reads existing sandbox diffs and re-emits them as typed `ifc_patch` events.
 - **Invariant 5 (tiered sync events)**: `ifc_patch` is the typed superset of the legacy `metadata_changed` event.
 - **Invariant 8 (frontend-first)**: server convert is the documented exception, a frontend-performance feature that requires backend work.

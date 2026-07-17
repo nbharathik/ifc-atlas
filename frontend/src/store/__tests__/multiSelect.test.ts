@@ -33,6 +33,20 @@ describe('multi-select reducers', () => {
       expect(useStore.getState().selectedIds).toEqual([10, 20]);
     });
 
+    it('keeps the normal single selection when Shift-click starts a multi-set', () => {
+      useStore.getState().selectElement(10);
+      useStore.getState().toggleSelectId(20);
+      expect(useStore.getState().selectedIds).toEqual([10, 20]);
+      expect(useStore.getState().selectedElementId).toBe(20);
+    });
+
+    it('toggles off a normal single selection when it is Shift-clicked', () => {
+      useStore.getState().selectElement(10);
+      useStore.getState().toggleSelectId(10);
+      expect(useStore.getState().selectedIds).toEqual([]);
+      expect(useStore.getState().selectedElementId).toBeNull();
+    });
+
     it('removes an id that is already in the set', () => {
       useStore.getState().toggleSelectId(10);
       useStore.getState().toggleSelectId(20);
@@ -44,6 +58,7 @@ describe('multi-select reducers', () => {
       useStore.getState().toggleSelectId(10);
       useStore.getState().toggleSelectId(10);
       expect(useStore.getState().selectedIds).toEqual([]);
+      expect(useStore.getState().selectedElementId).toBeNull();
     });
 
     it('keeps selectedElementId as the last-toggled id when adding', () => {

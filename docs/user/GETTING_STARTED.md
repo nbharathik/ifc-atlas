@@ -76,8 +76,8 @@ The agent calls structured tools (`get_model_stats`, `search_elements`, `highlig
 
 You can tailor the agent's behaviour from the Chat Manager (`Ctrl+Shift+M`): pick a model on the **Models** tab, or activate a specialised system prompt on the **Skills** tab. See the [AI Agent Guide](AI_AGENT_GUIDE.md) for details.
 
-!!! note "Editing is experimental and disabled in this release"
-    An Edit Assistant agent exists that can stage model edits through a sandboxed diff-preview loop, but it ships disabled by default. The chat panel in this release is read-only.
+!!! note "Editing and read-only deployments"
+    Editing is available by default in the desktop workspace. Ask mode remains read-only. In Edit mode, AI writes are staged through a sandboxed preview with Apply / Discard controls. Administrators can set `EDIT_MODE_ENABLED=0` to hide editing and hard-block write tools.
 
 ---
 

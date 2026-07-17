@@ -3,6 +3,7 @@ import {
   attachGeometryTitle,
   buildViewerPerfLogEntry,
   buildFragmentCacheKey,
+  FRAGMENT_ARTIFACT_COMPATIBILITY,
   clearFragmentThreadPlaceholder,
   computeViewerReadyMetrics,
   formatUnknownLoadError,
@@ -83,9 +84,23 @@ describe('formatImportProgressDetail', () => {
 });
 
 describe('buildFragmentCacheKey', () => {
+  it('uses the importer-settings compatibility revision', () => {
+    expect(FRAGMENT_ARTIFACT_COMPATIBILITY).toContain('parse-r2');
+  });
+
   it('includes stable prefix, profile, and sha fingerprint', async () => {
     const key = await buildFragmentCacheKey(new Uint8Array([1, 2, 3]), 'balanced');
-    expect(key).toMatch(/^\/__ifc_frag_cache__\/balanced-3-[a-f0-9-]+\.frag$/);
+    expect(key).toMatch(new RegExp(
+      `^/__ifc_frag_cache__/${FRAGMENT_ARTIFACT_COMPATIBILITY}-balanced-auto-coordinate-3-[a-f0-9-]+\\.frag$`,
+    ));
+  });
+
+  it('separates profile and coordinate-policy artifacts', async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const balanced = await buildFragmentCacheKey(bytes, 'balanced');
+    const performance = await buildFragmentCacheKey(bytes, 'performance');
+    expect(balanced).not.toBe(performance);
+    expect(performance).toContain('-performance-local-origin-');
   });
 });
 
@@ -363,5 +378,31 @@ describe('loadFragmentsWithTimeout', () => {
     await assertion;
     expect(manager.core._data?._modelThread?.has('model-timeout')).toBe(false);
     expect(manager.core.settings.autoCoordinate).toBe(true);
+  });
+
+  it('disposes a model that resolves after its timed-out load was replaced', async () => {
+    vi.useFakeTimers();
+    let resolveLoad!: (model: Awaited<ReturnType<FragmentManagerWithCore['core']['load']>>) => void;
+    const lateModel = {
+      dispose: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Awaited<ReturnType<FragmentManagerWithCore['core']['load']>>;
+    const manager = makeFragmentsManager(() => new Promise((resolve) => {
+      resolveLoad = resolve;
+    }));
+    manager.core._data?._modelThread?.set('late-model', {});
+
+    const load = loadFragmentsWithTimeout(
+      manager,
+      new Uint8Array([1]),
+      'late-model',
+      { timeoutMs: 25 },
+    );
+    const assertion = expect(load).rejects.toThrow('Fragment load timed out after 25 ms');
+    await vi.advanceTimersByTimeAsync(25);
+    await assertion;
+
+    resolveLoad(lateModel);
+    await vi.waitFor(() => expect(lateModel.dispose).toHaveBeenCalledOnce());
+    expect(manager.core._data?._modelThread?.has('late-model')).toBe(false);
   });
 });

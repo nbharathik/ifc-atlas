@@ -454,3 +454,54 @@ def test_get_diff_result_has_required_keys(tmp_repo, monkeypatch):
     for key in ("sha", "added", "removed", "changed", "total", "truncated", "entries"):
         assert key in result, f"missing key: {key}"
     assert result["sha"] == sha
+
+
+# ---------------------------------------------------------------------------
+# rebind() - per-model repos that survive reloads (ADR 004, plan R3)
+# ---------------------------------------------------------------------------
+
+def test_rebind_same_key_preserves_history(tmp_repo):
+    """Reloading the same model must NOT destroy its checkpoints (the old
+    load path rmtree'd the one global repo on every load)."""
+    tmp_repo.rebind("fp-model-a")
+    tmp_repo.snapshot(_dummy_ifc("A1"), "first")
+    tmp_repo.snapshot(_dummy_ifc("A2"), "second")
+    assert len(tmp_repo.list_checkpoints()) == 2
+
+    # Simulate a reload of the same file.
+    tmp_repo.rebind("fp-model-a")
+    assert len(tmp_repo.list_checkpoints()) == 2, "history must survive rebind"
+    # And it can keep committing.
+    tmp_repo.snapshot(_dummy_ifc("A3"), "third")
+    assert len(tmp_repo.list_checkpoints()) == 3
+
+
+def test_rebind_different_key_isolates_histories(tmp_repo):
+    tmp_repo.rebind("fp-model-a")
+    tmp_repo.snapshot(_dummy_ifc("A1"), "model A")
+    tmp_repo.rebind("fp-model-b")
+    assert tmp_repo.list_checkpoints() == [], "model B starts with its own empty history"
+    tmp_repo.snapshot(_dummy_ifc("B1"), "model B snap")
+    assert len(tmp_repo.list_checkpoints()) == 1
+
+    # Back to model A - its history is intact.
+    tmp_repo.rebind("fp-model-a")
+    cps = tmp_repo.list_checkpoints()
+    assert len(cps) == 1
+    assert cps[0]["message"] == "model A"
+
+
+def test_rebind_sanitizes_hostile_keys(tmp_repo):
+    """Path-hostile fingerprints must not escape the base dir."""
+    tmp_repo.rebind("../../evil/../key with spaces!")
+    sha = tmp_repo.snapshot(_dummy_ifc(), "safe")
+    assert sha is not None
+    # The repo landed inside the base dir.
+    assert str(tmp_repo._repo_dir).startswith(str(tmp_repo._base_dir))
+
+
+def test_reset_still_wipes_current_repo(tmp_repo):
+    tmp_repo.rebind("fp-model-a")
+    tmp_repo.snapshot(_dummy_ifc(), "snap")
+    tmp_repo.reset()
+    assert tmp_repo.list_checkpoints() == []

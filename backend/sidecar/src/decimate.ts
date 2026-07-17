@@ -27,6 +27,12 @@ import * as FRAGS from '@thatopen/fragments';
 import { MeshoptSimplifier } from 'meshoptimizer';
 import * as THREE from 'three';
 
+import {
+  assertFragmentIdentityEqual,
+  createFragmentIdentitySnapshot,
+  type FragmentIdentitySnapshot,
+} from './fragmentIdentity.js';
+
 // Defaults proven on a large model (5.68M -> 1.77M tris, ~31%, identity preserved).
 export const DEFAULT_TARGET_RATIO = 0.35; // aim ~35% of original index count per shell
 export const DEFAULT_SLOPPY_ERROR = 0.05; // relative error ceiling for sloppy simplification
@@ -80,12 +86,19 @@ export interface DecimateStats {
   inputBytes: number;
   outputBytes: number;
   elapsedMs: number;
+  targetRatio: number;
+  targetError: number;
+  achievedMaxError: number;
+  achievedWeightedMeanError: number;
+  identityCount: number;
+  identitySha256: string;
+  identityVerified: true;
 }
 
 export interface DecimateOptions {
   /** Target fraction of the original per-shell index count. Clamped to (0, 1). Default 0.35. */
   ratio?: number;
-  /** Relative error ceiling for `simplifySloppy`. Clamped to >= 0. Default 0.1. */
+  /** Relative error ceiling for `simplifySloppy`. Clamped to >= 0. Default 0.05. */
   error?: number;
   /** Optional progress hook; `progress` is roughly 0-100. */
   onProgress?: (stage: string, progress: number) => void;
@@ -105,6 +118,13 @@ interface VirtualModel {
 
 function vmOf(model: FRAGS.SingleThreadedFragmentsModel): VirtualModel {
   return (model as unknown as { _virtualModel: VirtualModel })._virtualModel;
+}
+
+async function snapshotIdentity(
+  model: FRAGS.SingleThreadedFragmentsModel,
+): Promise<FragmentIdentitySnapshot> {
+  const localIds = [...(await model.getLocalIds())].sort((a, b) => a - b);
+  return createFragmentIdentitySnapshot(localIds, model.getGuidsByLocalIds(localIds));
 }
 
 /** Concatenate shell geometry chunks (16-bit index splits) into one geometry. */
@@ -174,6 +194,7 @@ export async function decimateFragments(
   // The constructor kicks off setupData() but does not await it; await tile
   // generation so getItemsGeometry can read shell triangles.
   await vm.setupData();
+  const sourceIdentity = await snapshotIdentity(model);
   onProgress('load', 8);
 
   try {
@@ -247,18 +268,26 @@ export async function decimateFragments(
     let skippedErr = 0;
     let triBefore = 0;
     let triAfter = 0;
+    let decimatedTriBefore = 0; // decimated shells only; weights the mean error
+    let maxAchievedError = 0;
+    let weightedErrorTotal = 0;
 
     let processed = 0;
     for (const [rid, geom] of reprGeom) {
       processed++;
       const triCount = geom.indices.length / 3;
+      // Whole-model stats: every shell counts toward "before"; shells left
+      // untouched keep their full triangle count in "after".
+      triBefore += triCount;
       if (triCount < MIN_TRIS_TO_DECIMATE) {
         skippedSmall++;
+        triAfter += triCount;
         continue;
       }
       // Per-category: keep elongated/thin shells full (see PRESERVE_ELONGATED_RATIO).
       if (isElongatedShell(geom.positions, PRESERVE_ELONGATED_RATIO)) {
         skippedThin++;
+        triAfter += triCount;
         continue;
       }
       try {
@@ -272,7 +301,7 @@ export async function decimateFragments(
           3,
           Math.floor((geom.indices.length * targetRatio) / 3) * 3,
         );
-        const [newIndex] = MeshoptSimplifier.simplifySloppy(
+        const [newIndex, achievedError] = MeshoptSimplifier.simplifySloppy(
           weldedIndices,
           geom.positions,
           3,
@@ -282,6 +311,7 @@ export async function decimateFragments(
         );
         if (newIndex.length >= geom.indices.length || newIndex.length < 3) {
           notReduced++;
+          triAfter += triCount;
           continue;
         }
         const bg = new THREE.BufferGeometry();
@@ -299,13 +329,16 @@ export async function decimateFragments(
           data: newRepr,
         } as FRAGS.UpdateRepresentationRequest);
 
-        triBefore += geom.indices.length / 3;
         triAfter += newIndex.length / 3;
+        decimatedTriBefore += triCount;
+        maxAchievedError = Math.max(maxAchievedError, achievedError);
+        weightedErrorTotal += achievedError * triCount;
         decimated++;
       } catch {
         // Non-shell / unsupported repr geometry (e.g. CIRCLE_EXTRUSION) throws
         // in representationFromGeometry - skip it, keep the original shell.
         skippedErr++;
+        triAfter += triCount;
       }
       if (reprGeom.size > 0) {
         onProgress('decimate', 55 + Math.round((processed / reprGeom.size) * 35));
@@ -326,10 +359,23 @@ export async function decimateFragments(
 
     // Re-wrap raw (third arg true = uncompressed) and compress to a `.frag`.
     const lodModel = new FRAGS.SingleThreadedFragmentsModel('lod-write', fullRaw, true);
-    const compressed = lodModel.getBuffer(false); // pako.deflate
-    const out =
-      compressed instanceof Uint8Array ? compressed : new Uint8Array(compressed as ArrayBuffer);
-    lodModel.dispose();
+    let out: Uint8Array;
+    try {
+      // setupData validates that the authored buffer can generate its geometry
+      // indices.  Then prove that every local ID/GUID pair survived before the
+      // result is compressed or offered to the backend cache.
+      await vmOf(lodModel).setupData();
+      const outputIdentity = await snapshotIdentity(lodModel);
+      assertFragmentIdentityEqual(sourceIdentity, outputIdentity, 'LOD artifact');
+
+      const compressed = lodModel.getBuffer(false); // pako.deflate
+      out =
+        compressed instanceof Uint8Array
+          ? compressed
+          : new Uint8Array(compressed as ArrayBuffer);
+    } finally {
+      lodModel.dispose();
+    }
     onProgress('done', 100);
 
     if (opts.onStats) {
@@ -346,6 +392,14 @@ export async function decimateFragments(
         inputBytes: fragBytes.byteLength,
         outputBytes: out.byteLength,
         elapsedMs: Date.now() - started,
+        targetRatio,
+        targetError: sloppyError,
+        achievedMaxError: maxAchievedError,
+        achievedWeightedMeanError:
+          decimatedTriBefore > 0 ? weightedErrorTotal / decimatedTriBefore : 0,
+        identityCount: sourceIdentity.localIds.length,
+        identitySha256: sourceIdentity.sha256,
+        identityVerified: true,
       });
     }
 

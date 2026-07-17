@@ -22,6 +22,7 @@
 
 import * as THREE from 'three';
 import type * as FRAGS from '@thatopen/fragments';
+import type { VisibilityMutationTarget } from './renderStateCoordinator';
 
 const MAX_ELEMENTS = 1_500;
 
@@ -58,6 +59,8 @@ export class ElementFrustumCuller {
   private frustum = new THREE.Frustum();
   private projScreenMatrix = new THREE.Matrix4();
   private readonly padFraction: number;
+  /** Last-invoked operation owns bookkeeping after its async mutation settles. */
+  private ownershipEpoch = 0;
 
   constructor(opts: ElementFrustumCullerOptions = {}) {
     this.padFraction = Math.max(0, opts.padFraction ?? 0);
@@ -190,8 +193,10 @@ export class ElementFrustumCuller {
     camera: THREE.Camera,
     model: FRAGS.FragmentsModel,
     excludeIds?: ReadonlySet<number>,
+    visibility: VisibilityMutationTarget = model,
   ): Promise<number> {
     if (!this._built || this._disposed || this.records.length === 0) return 0;
+    const operationEpoch = ++this.ownershipEpoch;
 
     camera.updateMatrixWorld();
     this.projScreenMatrix.multiplyMatrices(
@@ -200,8 +205,8 @@ export class ElementFrustumCuller {
     );
     this.frustum.setFromProjectionMatrix(this.projScreenMatrix);
 
-    const toHide: number[] = [];
-    const toShow: number[] = [];
+    const toHide: ElementRecord[] = [];
+    const toShow: ElementRecord[] = [];
 
     for (const r of this.records) {
       if (this._disposed) return 0;
@@ -209,37 +214,52 @@ export class ElementFrustumCuller {
         // Storey culler owns this element this tick. Reset our flag so it
         // doesn't claim a phantom culling state for a record we are not
         // touching. Skip the frustum test.
-        r.autoCulled = false;
+        if (r.autoCulled) toShow.push(r);
         continue;
       }
       const inFrustum = this.frustum.intersectsBox(r.box);
       if (!inFrustum && !r.autoCulled) {
-        toHide.push(r.localId);
-        r.autoCulled = true;
+        toHide.push(r);
       } else if (inFrustum && r.autoCulled) {
-        toShow.push(r.localId);
-        r.autoCulled = false;
+        toShow.push(r);
       }
     }
 
-    // Batch setVisible calls for efficiency (one call per direction)
-    if (toHide.length > 0) {
-      try { await model.setVisible(toHide, false); } catch { /* best-effort */ }
-    }
-    if (toShow.length > 0) {
-      try { await model.setVisible(toShow, true); } catch { /* best-effort */ }
+    // Publish local desired ownership before awaiting the worker/coordinator.
+    // The coordinator updates its named mask synchronously, then resolves only
+    // after a rendered acknowledgement. A navigation show-pass can therefore
+    // overlap this await and must already see the pending hide. Roll back only
+    // when this operation is still the newest owner; a newer show/tick wins.
+    if (toHide.length > 0 || toShow.length > 0) {
+      for (const record of toHide) record.autoCulled = true;
+      for (const record of toShow) record.autoCulled = false;
+      try {
+        const hideIds = toHide.map((record) => record.localId);
+        const showIds = toShow.map((record) => record.localId);
+        if (visibility.applyVisibilityDelta) {
+          await visibility.applyVisibilityDelta(hideIds, showIds);
+        } else {
+          if (showIds.length > 0) await visibility.setVisible(showIds, true);
+          if (hideIds.length > 0) await visibility.setVisible(hideIds, false);
+        }
+      } catch {
+        if (operationEpoch === this.ownershipEpoch && !this._disposed) {
+          for (const record of toHide) record.autoCulled = false;
+          for (const record of toShow) record.autoCulled = true;
+        }
+        /* best-effort; rolled-back flags make the next pass retry */
+      }
     }
 
     return this.records.filter((r) => r.autoCulled).length;
   }
 
   /**
-   * Cheap show-only pass for use DURING orbit. Iterates only the
-   * subset currently `autoCulled` and un-hides any whose padded AABB has
-   * re-entered the frustum. No hide writes - hiding can wait for the full
-   * settle tick. This is the asymmetric-culling fix: hides are imperceptible
-   * when delayed, but late shows look like "objects loading slowly" to the
-   * user.
+   * Cheap show-only pass for use DURING orbit. It iterates only the desired
+   * `autoCulled` subset. Settle ticks publish that local desired ownership
+   * before awaiting the renderer, so this includes hides whose rendered
+   * acknowledgement is still in flight without sending every visible element
+   * through the coordinator on each navigation pass.
    *
    * Cost: one frustum.intersectsBox per currently-hidden record + one
    * batched setVisible(true). With the 5 % frustum margin, the show set is
@@ -255,15 +275,17 @@ export class ElementFrustumCuller {
     camera: THREE.Camera,
     model: FRAGS.FragmentsModel,
     excludeIds?: ReadonlySet<number>,
+    visibility: VisibilityMutationTarget = model,
   ): Promise<number> {
     if (!this._built || this._disposed || this.records.length === 0) return 0;
+    const operationEpoch = ++this.ownershipEpoch;
 
-    // Cheap pre-check: if nothing is currently culled, there is nothing to
-    // show. Avoids the frustum matrix rebuild on every rAF tick when the
-    // user is panning entirely within a fully-visible region.
     let anyCulled = false;
-    for (const r of this.records) {
-      if (r.autoCulled) { anyCulled = true; break; }
+    for (const record of this.records) {
+      if (record.autoCulled) {
+        anyCulled = true;
+        break;
+      }
     }
     if (!anyCulled) return 0;
 
@@ -274,22 +296,28 @@ export class ElementFrustumCuller {
     );
     this.frustum.setFromProjectionMatrix(this.projScreenMatrix);
 
-    const toShow: number[] = [];
+    const toShow: ElementRecord[] = [];
     for (const r of this.records) {
       if (this._disposed) return 0;
       if (excludeIds?.has(r.localId)) {
-        r.autoCulled = false;
+        if (r.autoCulled) toShow.push(r);
         continue;
       }
-      if (!r.autoCulled) continue;
-      if (this.frustum.intersectsBox(r.box)) {
-        toShow.push(r.localId);
-        r.autoCulled = false;
+      if (r.autoCulled && this.frustum.intersectsBox(r.box)) {
+        toShow.push(r);
       }
     }
 
     if (toShow.length > 0) {
-      try { await model.setVisible(toShow, true); } catch { /* best-effort */ }
+      for (const record of toShow) record.autoCulled = false;
+      try {
+        await visibility.setVisible(toShow.map((record) => record.localId), true);
+      } catch {
+        if (operationEpoch === this.ownershipEpoch && !this._disposed) {
+          for (const record of toShow) record.autoCulled = true;
+        }
+        return 0;
+      }
     }
     return toShow.length;
   }
@@ -298,18 +326,49 @@ export class ElementFrustumCuller {
    * Restore all auto-culled elements without clearing records.
    * Call before user activates isolation to avoid visibility conflicts.
    */
-  async clearCull(model: FRAGS.FragmentsModel): Promise<void> {
-    const culled = this.records.filter((r) => r.autoCulled).map((r) => r.localId);
-    if (culled.length > 0) {
-      try { await model.setVisible(culled, true); } catch { /* best-effort */ }
+  async clearCull(
+    model: FRAGS.FragmentsModel,
+    visibility: VisibilityMutationTarget = model,
+  ): Promise<void> {
+    const operationEpoch = ++this.ownershipEpoch;
+    const culledRecords = this.records.filter((record) => record.autoCulled);
+    const culled = culledRecords.map((record) => record.localId);
+    for (const record of culledRecords) record.autoCulled = false;
+    // A coordinator target is authoritative even when local flags are stale
+    // because an older async tick has not acknowledged yet.
+    try {
+      if (visibility.clearVisibility) {
+        await visibility.clearVisibility();
+      } else if (culled.length > 0) {
+        await visibility.setVisible(culled, true);
+      }
+      if (operationEpoch === this.ownershipEpoch) {
+        this.records.forEach((r) => { r.autoCulled = false; });
+      }
+    } catch (error) {
+      if (operationEpoch === this.ownershipEpoch && !this._disposed) {
+        for (const record of culledRecords) record.autoCulled = true;
+      }
+      throw error;
     }
-    this.records.forEach((r) => { r.autoCulled = false; });
   }
 
   /** Release all resources and restore visibility. */
-  async dispose(model?: FRAGS.FragmentsModel): Promise<void> {
+  async dispose(
+    model?: FRAGS.FragmentsModel,
+    visibility?: VisibilityMutationTarget,
+  ): Promise<void> {
     this._disposed = true;
-    if (model) await this.clearCull(model);
+    if (model) await this.clearCull(model, visibility ?? model);
     this.records = [];
+  }
+
+  /**
+   * Forget culler ownership without mutating renderer visibility. Used when a
+   * semantic user mask atomically clears the coordinator layer itself.
+   */
+  releaseOwnership(): void {
+    this.ownershipEpoch += 1;
+    for (const record of this.records) record.autoCulled = false;
   }
 }

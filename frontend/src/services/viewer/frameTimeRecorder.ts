@@ -22,6 +22,29 @@ export interface FrameTimeStats {
   framesOver33Ms: number;
 }
 
+export interface FrameSamplingPolicyInput {
+  readonly elapsedMs: number;
+  readonly requestedDurationMs: number;
+  readonly validSamples: number;
+  readonly minimumSamples: number;
+  readonly maximumDurationMs: number;
+}
+
+/**
+ * Keep a diagnostic probe alive for both its requested time window and a
+ * useful sample count. The maximum guard prevents a pathological software
+ * renderer from extending an E2E run indefinitely.
+ */
+export function shouldContinueFrameSampling(input: FrameSamplingPolicyInput): boolean {
+  const requestedDurationMs = Math.max(0, input.requestedDurationMs);
+  const maximumDurationMs = Math.max(requestedDurationMs, input.maximumDurationMs);
+  if (input.elapsedMs >= maximumDurationMs) return false;
+  return (
+    input.elapsedMs < requestedDurationMs
+    || input.validSamples < Math.max(0, input.minimumSamples)
+  );
+}
+
 export function summarizeFrameDeltas(deltas: readonly number[]): FrameTimeStats {
   const valid = deltas.filter((d) => Number.isFinite(d) && d > 0);
   if (valid.length === 0) {

@@ -10,6 +10,11 @@
  *
  * These two files could later be generated from a shared JSON schema
  * so they can never drift apart.
+ *
+ * The category drop sets below are additionally mirrored in
+ * backend/app/services/spatial_fragment_service.py, which filters spatial
+ * subset requests down to the categories a profile actually converts.
+ * Changing a drop set here requires updating that table too.
  */
 
 import * as FRAGS from '@thatopen/fragments';
@@ -17,6 +22,9 @@ import type * as OBC from '@thatopen/components';
 
 export type ParseProfile = 'quality' | 'balanced' | 'performance' | 'ultra_fast';
 
+// Not consumed in the sidecar; kept so this file stays in lock-step with the
+// frontend mirror, whose browser-only load path still reads the perf
+// threshold for auto-selection (ViewerPanel.tsx).
 export const AUTO_PERF_PROFILE_THRESHOLD_BYTES = 40 * 1024 * 1024;
 export const AUTO_ULTRA_PROFILE_THRESHOLD_BYTES = 60 * 1024 * 1024;
 

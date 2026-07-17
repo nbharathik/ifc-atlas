@@ -41,7 +41,7 @@ Press **`?`** anywhere in the viewer to open the interactive shortcut overlay. S
 |---|---|
 | `X` | Toggle a clip plane |
 | `Shift+X` | Click a surface to place a clip plane aligned to that face |
-| `Alt+X` | Crop the section box to the currently selected element |
+| `Alt+X` | Fit one section box to the merged bounds of the current selection |
 
 ---
 
@@ -57,7 +57,7 @@ Press **`?`** anywhere in the viewer to open the interactive shortcut overlay. S
 | `C` | Focus the AI Chat tab |
 | `B` | Focus the Viewpoints tab |
 | `L` | Focus the Activity Log tab |
-| `R` | Toggle the Measurement history panel |
+| `R` | Start or stop measuring |
 | `M` | Toggle the Performance HUD |
 | `Shift+M` | Toggle the Performance Dashboard |
 | `Shift+Q` | Toggle the Model Health panel |
@@ -79,10 +79,10 @@ Start a measurement from the toolbar ruler icon, the command palette, or the sho
 | Key | Action |
 |---|---|
 | Click | Add a vertex point |
-| Double-click / Enter | Commit a linear or polygon measurement |
-| `R` | Toggle the measurement history panel |
+| Double-click / `Enter` | Close a polygon area measurement |
+| `R` | Start or stop measuring (distance tool) |
 | `N` | Toggle angle-measurement mode (vertex → arm 1 → arm 2) |
-| `Esc` | Cancel a pending measurement |
+| `Esc` | Cancel the pending points, then exit the tool |
 
 ---
 
@@ -91,6 +91,7 @@ Start a measurement from the toolbar ruler icon, the command palette, or the sho
 | Key | Action |
 |---|---|
 | `Ctrl+Z` | Undo the most recent committed IFC edit |
+| `Ctrl+Y` | Redo the most recently undone edit (also `Ctrl+Shift+Z`) |
 | `Ctrl+Shift+C` | Copy details (type, name, Express ID, GlobalId, storey) for the current selection |
 
 ---
@@ -131,6 +132,10 @@ Start a measurement from the toolbar ruler icon, the command palette, or the sho
 
 ## Notes
 
-- `Alt+X` requires an element to be selected first.
-- `Shift+1` … `Shift+9` requires a model with at least two storeys; the Storey Navigator Bar at the bottom-left shows the storey list.
+- `Alt+X` requires at least one element to be selected first; with a
+  multi-selection it fits the box to the merged bounds of every selected
+  element.
+- `Shift+1` … `Shift+9` requires a model with at least two storeys; the
+  Viewer Tools → Storeys section lists the storey chips and highlights the
+  active one.
 - The command palette (`Ctrl+K`) provides fuzzy-search access to every viewer action, panel toggle, agent preset, and shortcut.

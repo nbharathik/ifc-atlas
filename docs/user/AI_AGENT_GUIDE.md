@@ -8,8 +8,8 @@ Every chat message in IFC Atlas is handled by an **agent**: a named persona with
 
 The chat panel runs in **Ask** mode: read-only questions and viewer commands. The agent can search, inspect, and highlight, but it cannot mutate the model. The backend rejects any write attempt at the API layer, so a prompt cannot trick a read-only conversation into making edits.
 
-!!! note "Editing is experimental and disabled in this release"
-    A second mode, **Edit**, exists behind a feature flag (`EDIT_MODE_ENABLED`, off by default on both the backend and the frontend). When enabled, the Edit Assistant agent can stage writes through a sandboxed diff-preview loop where you **Apply** or **Discard** every change. This release ships with the flag off, so the Edit pill is hidden and all write tools are blocked.
+!!! note "Edit mode is approval-driven"
+    **Ask** mode is always read-only. **Edit** mode is available by default and stages agent writes through a sandboxed diff-preview loop where you **Apply** or **Discard** every change. Administrators can set `EDIT_MODE_ENABLED=0` for a read-only deployment.
 
 ---
 
@@ -18,7 +18,7 @@ The chat panel runs in **Ask** mode: read-only questions and viewer commands. Th
 | Agent | Mode | When to use |
 |---|---|---|
 | **Default** | Ask | General-purpose, all read tools enabled. Answers model questions, runs quantity summaries, drives the viewer (highlight, isolate, select). |
-| **Edit Assistant** | Edit | Experimental, disabled by default. Renames, property updates, and custom IfcOpenShell scripts, every change staged through Diff Preview. |
+| **Edit Assistant** | Edit | Semantic and beta geometry edits, with every agent write staged through an inline approval preview. |
 
 Each agent has its own system prompt, model, temperature, and tool allowlist. To specialise the assistant for a task (quantity take-off, model audit, IDS review), activate a system prompt from Chat Manager (`Ctrl+Shift+M`) → **Skills**: built-in prompts are read-only, and editing one forks it into your own editable copy that persists server-side. Custom agents can also be managed through the [REST API](../agent/CUSTOM_AGENTS.md).
 

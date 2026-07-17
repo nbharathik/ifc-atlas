@@ -111,7 +111,8 @@ describe('humanizeProcessStage', () => {
     expect(humanizeProcessStage('geometries')).toBe('Building shapes');
     expect(humanizeProcessStage('attributes')).toBe('Reading element data');
     expect(humanizeProcessStage('relations')).toBe('Linking elements');
-    expect(humanizeProcessStage('conversion')).toBe('Packing the model');
+    expect(humanizeProcessStage('conversion')).toBe('Processing model data');
+    expect(humanizeProcessStage('Processing model data')).toBe('Processing model data');
     expect(humanizeProcessStage('parsing')).toBe('Reading the file');
   });
 

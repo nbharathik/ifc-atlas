@@ -23,7 +23,7 @@ For agents: if a tool returns `{warming: true, …}`, pause for `retry_after_ms`
 
 ### Mode
 
-The chat panel runs in **Ask** mode: the agent can search, inspect, and highlight, but write tools are blocked at the API layer. An experimental **Edit** mode (sandboxed writes with Diff Preview) exists behind the `EDIT_MODE_ENABLED` flag and is disabled in this release, so the Edit pill is hidden.
+The chat panel starts in **Ask** mode: the agent can search, inspect, validate, and highlight, but write tools are blocked at the API layer. **Edit** mode exposes sandboxed semantic edits (names, safe text attributes, existing property values, classifications). The Edit pill is hidden only when the backend reports `EDIT_MODE_ENABLED=0`.
 
 ### Model dropdown
 

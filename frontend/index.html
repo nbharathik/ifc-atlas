@@ -12,14 +12,12 @@
       instead of the network. Saves ~300-500ms off first-model-open on
       cold starts.
 
-      The inline script below detects cross-origin isolation
-      (COOP + COEP set by the dev/preview/prod server) and preloads the
-      MT variant when it's available. web-ifc auto-selects
-      `web-ifc-mt.wasm` when `SharedArrayBuffer` is usable, so we want
-      the correct binary in the HTTP cache by the time
-      `ifcLoader.setup()` runs. Falls back to the ST variant otherwise
-      so unsupported environments still get the preload speedup and we
-      never log "unused preload" warnings.
+      Browser conversion intentionally forces web-ifc's single-thread mode:
+      conversion already runs in an application worker, while web-ifc's nested
+      classic workers are incompatible with the module-worker URLs emitted by
+      this build. Always preload the ST binary actually consumed by Init().
+      Cross-origin isolation remains useful platform telemetry, but it does not
+      select the MT binary until nested-worker support is explicitly enabled.
     -->
     <script>
       (function () {
@@ -27,7 +25,7 @@
           typeof self !== 'undefined' &&
           self.crossOriginIsolated === true &&
           typeof SharedArrayBuffer !== 'undefined';
-        var href = isolated ? '/web-ifc-mt.wasm' : '/web-ifc.wasm';
+        var href = '/web-ifc.wasm';
         var link = document.createElement('link');
         link.rel = 'preload';
         link.as = 'fetch';
@@ -35,9 +33,8 @@
         link.crossOrigin = 'anonymous';
         link.href = href;
         document.head.appendChild(link);
-        // Expose for runtime telemetry; App.tsx reads this to log which
-        // variant is likely to be consumed.
-        window.__ifcWasmVariant = isolated ? 'mt' : 'st';
+        // Keep this literal aligned with services/ifc/webIfcRuntime.ts.
+        window.__ifcWasmVariant = 'st';
         window.__crossOriginIsolated = !!isolated;
       })();
     </script>

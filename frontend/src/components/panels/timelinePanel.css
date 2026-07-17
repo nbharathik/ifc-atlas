@@ -1,0 +1,175 @@
+/* TimelinePanel additions (plan C4). The panel chrome reuses the cp-* classes
+   from index.css (overlay, header, rows, diff palette); only the timeline-
+   specific pieces live here: actor chips/badges, operation rows, the two-point
+   compare bar and clickable diff entries. */
+
+/* ── Actor filter chips ────────────────────────────────────────────────────── */
+.tl-chips {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border, #2a2a2a);
+  flex-shrink: 0;
+}
+.tl-chip {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border, #2a2a2a);
+  background: none;
+  color: var(--text-secondary, #9ca3af);
+  cursor: pointer;
+}
+.tl-chip:hover { color: var(--text-primary, #e5e7eb); }
+.tl-chip--active {
+  background: rgba(99,102,241,0.15);
+  border-color: var(--accent, #6366f1);
+  color: var(--accent, #818cf8);
+}
+
+/* ── Actor badges ──────────────────────────────────────────────────────────── */
+.tl-actor {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+.tl-actor--user   { background: rgba(34,197,94,0.15);  color: #4ade80; }
+.tl-actor--agent  { background: rgba(99,102,241,0.2);  color: #818cf8; }
+.tl-actor--mcp    { background: rgba(251,191,36,0.15); color: #fbbf24; }
+.tl-actor--system { background: rgba(148,163,184,0.15); color: #94a3b8; }
+
+/* ── Operation rows ────────────────────────────────────────────────────────── */
+.tl-op-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px 5px 30px; /* indent aligns with checkpoint text past the ○ */
+  border-bottom: 1px solid var(--border, #2a2a2a);
+}
+.tl-op-row--failed { opacity: 0.5; }
+.tl-op-desc {
+  font-size: 11px;
+  color: var(--text-primary, #e5e7eb);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-op-failed-badge {
+  font-size: 9px;
+  font-weight: 600;
+  color: #f87171;
+  border: 1px solid rgba(248,113,113,0.4);
+  border-radius: 3px;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+/* ── Compare selection ─────────────────────────────────────────────────────── */
+.tl-compare-toggle {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-tertiary, #6b7280);
+  cursor: pointer;
+}
+.tl-compare-toggle:hover { color: var(--text-primary, #e5e7eb); }
+.tl-compare-toggle--on { color: var(--accent, #6366f1); }
+
+.tl-compare-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border, #2a2a2a);
+  background: rgba(99,102,241,0.06);
+  flex-shrink: 0;
+}
+.tl-compare-label {
+  font-size: 11px;
+  color: var(--text-secondary, #9ca3af);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tl-compare-current { font-style: italic; color: var(--text-primary, #e5e7eb); }
+.tl-compare-run {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--accent, #6366f1);
+  background: rgba(99,102,241,0.15);
+  color: var(--text-primary, #e5e7eb);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.tl-compare-run:hover:not(:disabled) { background: var(--accent, #6366f1); }
+.tl-compare-run:disabled { opacity: 0.5; cursor: default; }
+.tl-compare-clear {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border, #2a2a2a);
+  background: none;
+  color: var(--text-secondary, #9ca3af);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.tl-compare-clear:hover { color: var(--text-primary, #e5e7eb); }
+
+/* ── Diff result ───────────────────────────────────────────────────────────── */
+.tl-diff {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border, #2a2a2a);
+  max-height: 40vh;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+.tl-diff-list { margin-top: 4px; }
+.tl-diff-entry {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 1px 0;
+  font-size: 10px;
+  color: var(--text-secondary, #9ca3af);
+  cursor: pointer;
+  text-align: left;
+}
+.tl-diff-entry:hover:not(:disabled) { color: var(--text-primary, #e5e7eb); }
+.tl-diff-entry:disabled { cursor: default; opacity: 0.6; }
+.tl-diff-type {
+  font-family: monospace;
+  color: var(--text-tertiary, #6b7280);
+  flex-shrink: 0;
+}
+.tl-diff-eid {
+  margin-left: auto;
+  font-family: monospace;
+  font-size: 9px;
+  color: var(--text-tertiary, #6b7280);
+  flex-shrink: 0;
+}
+/* Reuse the cp-diff badge colours; 'deleted' is ifcdiff's name for 'removed'. */
+.cp-diff-entry--deleted .cp-diff-entry-badge { color: #f87171; }
+
+/* ── Restore confirm ───────────────────────────────────────────────────────── */
+.cp-restore-btn.tl-restore-confirm {
+  background: rgba(248,113,113,0.15);
+  border-color: #f87171;
+  color: #f87171;
+}
+.cp-restore-btn.tl-restore-confirm:hover:not(:disabled) {
+  background: #f87171;
+  border-color: #f87171;
+  color: #1a1a1a;
+}

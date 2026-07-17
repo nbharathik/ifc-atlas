@@ -5,11 +5,9 @@ mutated." Four invariants underpin this: 3 (tool tiers), 4 (sandbox +
 hash diff), 5 (sync event tiering), 8 (frontend-first). The whole flow exists
 to make edits **reviewable, reversible, and race-safe.**
 
-> **Release note:** the Edit surface is disabled by default in this release.
-> The backend wiring described here is complete but gated by the
-> `EDIT_MODE_ENABLED` flag (backend env var + frontend constant, both default
-> off; they must flip together). With the flag off, the tool router refuses
-> every write tool.
+> **Release note:** the Edit surface is enabled by default and gated by the
+> backend `EDIT_MODE_ENABLED` runtime setting. With the flag off, the tool
+> router refuses every write tool and the frontend hides editing controls.
 
 ## Two write paths
 
@@ -112,7 +110,7 @@ diff counts and publishes on the model-sync WebSocket (`/api/ifc/sync/ws`):
 | `pending_applied` | Always | Remove the envelope from the pending list; adopt the new model version + fingerprint. |
 | `ifc_patch` | When the diff is non-empty | Typed per-element patch list for incremental consumers. |
 | `metadata_patch` | Only renames / property changes | Patch spatial-tree names and stats in place. No geometry reload. |
-| `rebuild_started` | Any created / deleted / retyped element | Reload the model geometry. A per-fragment delta endpoint (`GET /api/ifc/frag-delta/{edit_id}`) exists but serves an empty patch set in v1.0, so the full reload path takes over. |
+| `rebuild_started` | Any created / deleted / retyped element | Reload the model geometry while preserving camera and store state. A per-fragment delta endpoint (`GET /api/ifc/frag-delta/{edit_id}`) exists but does not yet provide complete hot-replacement data in v0.1.1, so the full reload path remains the correctness fallback. |
 
 The frontend handler is the model-sync WebSocket subscriber in
 `frontend/src/App.tsx`, which feeds the store's `upsertPendingEdit` /
@@ -188,7 +186,7 @@ the result is `execute_rejected` and nothing is staged.
 
 ## Tool allowlist (how a preset restricts writes)
 
-Every preset in [`agent_registry.py`](https://github.com/nbharathik/ifc-atlas/blob/main/backend/app/services/agent_registry.py) carries an `allowed_tools` list. Of the two built-in presets, `default` (Ask) uses `null` (every tool passes the allowlist) and `edit-assistant` carries an explicit list including the write tools. Three router gates apply before any write executes: the global `EDIT_MODE_ENABLED` flag (off by default in this release) refuses the entire write tier, ask-category agents are refused every write tool regardless of allowlist, and a tool absent from an explicit allowlist is refused before it reaches any service.
+Every preset in [`agent_registry.py`](https://github.com/nbharathik/ifc-atlas/blob/main/backend/app/services/agent_registry.py) carries an `allowed_tools` list. Of the two built-in presets, `default` (Ask) uses `null` (every read tool passes the allowlist; the mode gate still blocks writes) and `edit-assistant` carries an explicit list including the write tools. Three router gates apply before any write executes: `EDIT_MODE_ENABLED=0` refuses the entire write tier, ask-category agents are refused every write tool regardless of allowlist, and a tool absent from an explicit allowlist is refused before it reaches any service.
 
 ## Frontend contract: `DiffPreviewPanel`
 

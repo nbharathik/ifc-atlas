@@ -63,7 +63,7 @@ MAX_OPS_PER_PROPOSAL = 128
 # Supported op shapes (prototype subset of the eventual execute_ifc_code)
 # ──────────────────────────────────────────────────────────────────────
 
-SUPPORTED_OPS = {"set_name", "set_property", "create_wall", "delete_element"}
+SUPPORTED_OPS = {"set_name", "set_property", "set_attribute", "create_wall", "delete_element"}
 
 
 @dataclass
@@ -163,6 +163,9 @@ class SandboxService:
             operations=list(operations),
             changes=changes,
             counts=counts,
+            verifier_verdict=_verify_sandbox(
+                sandbox_model, live_model, base_fingerprint, changes
+            ),
         )
         self._pending[edit_id] = _PendingRecord(
             envelope=envelope,
@@ -327,6 +330,9 @@ class SandboxService:
             operations=[pseudo_op],
             changes=changes,
             counts=counts,
+            verifier_verdict=_verify_sandbox(
+                sandbox_model, ifc_service.model, base_fingerprint, changes
+            ),
         )
         self._pending[edit_id] = _PendingRecord(
             envelope=envelope,
@@ -342,10 +348,12 @@ class SandboxService:
             "stdout": run.stdout,
             "result": run.result_repr,
             "elapsed_ms": run.elapsed_ms,
+            "verifier_verdict": envelope.verifier_verdict,
             "note": (
                 "Code ran successfully and produced a structural change. "
                 "The edit is PENDING - the user must click Apply in the "
                 "Diff Preview panel. Nothing mutates the live model yet."
+                + _verifier_note(envelope.verifier_verdict)
             ),
         }
 
@@ -460,6 +468,20 @@ class SandboxService:
                 new_value = op.get("new_value")
                 _apply_property_edit(entity, prop_name, pset_name, new_value)
 
+            elif kind == "set_attribute":
+                attribute = str(op.get("attribute") or "")
+                allowed = {"Description", "ObjectType", "Tag", "LongName"}
+                if attribute not in allowed:
+                    raise ValueError(
+                        f"Op #{idx}: attribute must be one of {sorted(allowed)}"
+                    )
+                if not hasattr(entity, attribute):
+                    raise ValueError(
+                        f"Op #{idx}: element {expr_id} ({entity.is_a()}) has no {attribute} attribute"
+                    )
+                raw = op.get("new_value")
+                setattr(entity, attribute, None if raw is None or not str(raw).strip() else str(raw).strip())
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Create / delete op helpers
@@ -469,97 +491,44 @@ class SandboxService:
 def _create_wall_in_sandbox(
     model: "ifcopenshell.file", op: dict[str, Any], idx: int
 ) -> None:
-    """Create an IfcWallStandardCase between two XY endpoints in *model*.
+    """Create a wall between two XY endpoints in *model*.
 
     Required op keys: start ([x,y] or [x,y,z]), end ([x,y] or [x,y,z]).
     Optional: height (default 3.0 m), thickness (default 0.2 m),
-              storey_name (fuzzy match; None → first storey found),
+              storey_name (fuzzy match; None → lowest storey),
               name (element Name attribute).
-    """
-    import math
 
-    import ifcopenshell.api
-    import ifcopenshell.api.geometry
-    import ifcopenshell.api.root
-    import ifcopenshell.api.spatial
-    import ifcopenshell.util.representation
-    from ifcopenshell.util.shape_builder import ShapeBuilder
+    Thin wrapper over the shared ``element_factory.create_wall`` recipe -
+    the SAME code the operation layer's direct ``create_wall`` op runs, so
+    the AI's staged walls and the editor's drawn walls are identical. (The
+    previous hand-rolled ShapeBuilder recipe silently broke on ifcopenshell
+    0.8.5 keyword drift - keep this a delegation, never a re-implementation.)
+    """
+    from app.services import element_factory
 
     start_raw = op.get("start")
     end_raw = op.get("end")
     if not start_raw or not end_raw:
         raise ValueError(f"Op #{idx} (create_wall): 'start' and 'end' are required")
-
-    sx, sy = float(start_raw[0]), float(start_raw[1])
-    ex, ey = float(end_raw[0]), float(end_raw[1])
-    height = float(op.get("height") or 3.0)
-    thickness = float(op.get("thickness") or 0.2)
-    storey_name: Optional[str] = op.get("storey_name") or None
-    wall_name: str = str(op.get("name") or "Wall")
-
-    # Direction vector + length
-    dx, dy = ex - sx, ey - sy
-    length = math.hypot(dx, dy)
-    if length < 1e-6:
-        raise ValueError(f"Op #{idx} (create_wall): start and end are too close (distance {length:.4f})")
-    ux, uy = dx / length, dy / length
-
-    # Find the target storey
-    storey = _find_storey(model, storey_name, idx)
-    elevation = 0.0
     try:
-        elev_attr = getattr(storey, "Elevation", None)
-        if elev_attr is not None:
-            elevation = float(elev_attr)
-    except (TypeError, ValueError):
-        pass
-
-    # Build 4×4 placement matrix (row-major, column-major in IFC terms)
-    # X = wall direction, Y = perpendicular, Z = up; origin = start at storey elevation
-    perp_x, perp_y = -uy, ux  # 90° CCW
-    matrix = [
-        [ux, perp_x, 0.0, sx],
-        [uy, perp_y, 0.0, sy],
-        [0.0, 0.0, 1.0, elevation],
-        [0.0, 0.0, 0.0, 1.0],
-    ]
-
-    # Create entity
-    wall = ifcopenshell.api.run("root.create_entity", model, ifc_class="IfcWallStandardCase")
-    wall.Name = wall_name
-
-    # Assign placement using the 4×4 matrix
-    ifcopenshell.api.run(
-        "geometry.edit_object_placement",
-        model,
-        product=wall,
-        matrix=matrix,
-        is_si=True,
-    )
-
-    # Build body geometry
-    sb = ShapeBuilder(model)
-    body_context = _get_body_context(model)
-    profile = sb.rectangle(width=thickness, height=length)
-    extrusion = sb.extrude(profile, magnitude=height)
-    rep = model.createIfcShapeRepresentation(body_context, "Body", "SweptSolid", [extrusion])
-    ifcopenshell.api.run("geometry.assign_representation", model, product=wall, representation=rep)
-
-    # Assign to storey
-    ifcopenshell.api.run(
-        "spatial.assign_container",
-        model,
-        product=wall,
-        relating_structure=storey,
-    )
+        element_factory.create_wall(
+            model,
+            start=start_raw,
+            end=end_raw,
+            height=float(op.get("height") or element_factory.DEFAULT_WALL_HEIGHT_M),
+            thickness=float(op.get("thickness") or element_factory.DEFAULT_WALL_THICKNESS_M),
+            storey_name=op.get("storey_name") or None,
+            name=str(op.get("name") or "Wall"),
+        )
+    except ValueError as exc:
+        raise ValueError(f"Op #{idx} (create_wall): {exc}") from exc
 
 
 def _delete_element_in_sandbox(
     model: "ifcopenshell.file", op: dict[str, Any], idx: int
 ) -> None:
-    """Remove an IfcProduct from *model* by express id."""
-    import ifcopenshell.api
-    import ifcopenshell.api.root
+    """Remove an IfcProduct from *model* by express id (shared factory recipe)."""
+    from app.services import element_factory
 
     element_id = op.get("element_id")
     if element_id is None:
@@ -571,60 +540,146 @@ def _delete_element_in_sandbox(
         entity = None
     if entity is None:
         raise ValueError(f"Op #{idx} (delete_element): element {element_id} not found")
+    try:
+        element_factory.delete_product(model, entity)
+    except ValueError as exc:
+        raise ValueError(f"Op #{idx} (delete_element): {exc}") from exc
 
-    if not entity.is_a("IfcProduct"):
-        raise ValueError(
-            f"Op #{idx} (delete_element): element {element_id} is {entity.is_a()}, "
-            "not an IfcProduct - only products can be deleted via this tool"
+
+# ──────────────────────────────────────────────────────────────────────
+# D4 verifier - health delta + geometry sanity on the sandbox BEFORE the
+# pending edit is presented (Text2BIM checker pattern). Advisory: a verifier
+# crash must never block a proposal, and a 'fail' verdict still lets the
+# user apply (they see the verdict in the diff preview and decide).
+# ──────────────────────────────────────────────────────────────────────
+
+# Health baselines are expensive on big models; the live model's baseline is
+# stable per fingerprint, so cache the most recent few.
+_HEALTH_BASELINE_CACHE: dict[str, dict[str, int]] = {}
+_HEALTH_BASELINE_CACHE_MAX = 4
+_VERIFIER_GEOMETRY_CAP = 20
+
+
+def _verify_sandbox(
+    sandbox_model: "ifcopenshell.file",
+    live_model: "ifcopenshell.file",
+    live_fingerprint: str,
+    changes: list,
+) -> Optional[dict[str, Any]]:
+    """Verdict dict for the envelope, or None when verification is impossible."""
+    try:
+        from app.services.model_health import run_health_check
+
+        baseline = _HEALTH_BASELINE_CACHE.get(live_fingerprint)
+        if baseline is None:
+            baseline = dict(
+                run_health_check(live_model, limit_per_rule=5).get("by_severity") or {}
+            )
+            _HEALTH_BASELINE_CACHE[live_fingerprint] = baseline
+            while len(_HEALTH_BASELINE_CACHE) > _HEALTH_BASELINE_CACHE_MAX:
+                _HEALTH_BASELINE_CACHE.pop(next(iter(_HEALTH_BASELINE_CACHE)))
+
+        after = dict(
+            run_health_check(sandbox_model, limit_per_rule=5).get("by_severity") or {}
         )
+        new_errors = max(0, int(after.get("error", 0)) - int(baseline.get("error", 0)))
+        new_warnings = max(0, int(after.get("warning", 0)) - int(baseline.get("warning", 0)))
 
-    ifcopenshell.api.run("root.remove_product", model, product=entity)
+        geometry = _geometry_sanity(sandbox_model, changes)
+
+        if new_errors or geometry["failures"]:
+            status = "fail"
+        elif new_warnings:
+            status = "warn"
+        else:
+            status = "pass"
+        note_bits: list[str] = []
+        if new_errors:
+            note_bits.append(f"{new_errors} new health error(s)")
+        if new_warnings:
+            note_bits.append(f"{new_warnings} new warning(s)")
+        if geometry["failures"]:
+            note_bits.append(f"{len(geometry['failures'])} created element(s) with degenerate geometry")
+        return {
+            "status": status,
+            "new_errors": new_errors,
+            "new_warnings": new_warnings,
+            "baseline": baseline,
+            "after": after,
+            "geometry": geometry,
+            "note": "; ".join(note_bits) or "no new issues introduced",
+        }
+    except Exception:  # noqa: BLE001 - advisory only
+        logger.warning("sandbox verifier failed (proposal continues)", exc_info=True)
+        return None
 
 
-def _find_storey(
-    model: "ifcopenshell.file", storey_name: Optional[str], idx: int
-) -> Any:
-    """Return the first IfcBuildingStorey whose name matches *storey_name*.
+def _geometry_sanity(sandbox_model: "ifcopenshell.file", changes: list) -> dict[str, Any]:
+    """Tessellate created products and flag failures/degenerate AABBs (F7-lite).
 
-    Falls back to the first storey in the model when *storey_name* is None
-    or no match is found.
+    This is exactly the check that would have caught the broken wall recipe:
+    a wall whose representation fails to tessellate or collapses to a plane.
     """
-    storeys = list(model.by_type("IfcBuildingStorey"))
-    if not storeys:
-        raise ValueError(
-            f"Op #{idx}: IFC model has no IfcBuildingStorey - cannot assign wall"
-        )
-    if storey_name:
-        wanted = storey_name.strip().lower()
-        for s in storeys:
-            if (s.Name or "").strip().lower() == wanted:
-                return s
-        # fuzzy: contains match
-        for s in storeys:
-            if wanted in (s.Name or "").strip().lower():
-                return s
-    return storeys[0]
+    created_ids = [
+        c.express_id for c in changes if getattr(c, "change", None) == "created"
+    ][:_VERIFIER_GEOMETRY_CAP]
+    failures: list[dict[str, Any]] = []
+    checked = 0
+    if not created_ids:
+        return {"checked": 0, "failures": []}
+
+    try:
+        import ifcopenshell.geom as geom
+
+        settings = geom.settings()
+        try:
+            settings.set("use-world-coords", True)
+        except Exception:  # pragma: no cover - pre-0.8 settings API
+            settings.set(settings.USE_WORLD_COORDS, True)
+    except Exception:  # pragma: no cover - geom module unavailable
+        return {"checked": 0, "failures": []}
+
+    for eid in created_ids:
+        try:
+            entity = sandbox_model.by_id(eid)
+        except RuntimeError:
+            continue
+        if entity is None or not entity.is_a("IfcProduct"):
+            continue
+        # Products without their own representation (e.g. storeys) are fine.
+        if getattr(entity, "Representation", None) is None:
+            continue
+        checked += 1
+        try:
+            shape = geom.create_shape(settings, entity)
+            verts = shape.geometry.verts
+            if not verts:
+                failures.append({"express_id": eid, "reason": "no geometry produced"})
+                continue
+            xs, ys, zs = verts[0::3], verts[1::3], verts[2::3]
+            extents = (max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
+            degenerate = sum(1 for e in extents if e < 1e-6) >= 2
+            if degenerate:
+                failures.append({
+                    "express_id": eid,
+                    "reason": f"degenerate bounding box {tuple(round(e, 6) for e in extents)}",
+                })
+        except Exception as exc:  # tessellation failure IS the finding
+            failures.append({"express_id": eid, "reason": f"tessellation failed: {exc}"})
+    return {"checked": checked, "failures": failures}
 
 
-def _get_body_context(model: "ifcopenshell.file") -> Any:
-    """Return the Model/Body/SweptSolid representation context.
-
-    Falls back to any 3D context if the canonical one is missing.
-    """
-    for ctx in model.by_type("IfcGeometricRepresentationSubContext"):
-        ident = (getattr(ctx, "ContextIdentifier", None) or "").lower()
-        ctx_type = (getattr(ctx, "ContextType", None) or "").lower()
-        if ident == "body" and ctx_type == "model":
-            return ctx
-    for ctx in model.by_type("IfcGeometricRepresentationContext"):
-        ctx_type = (getattr(ctx, "ContextType", None) or "").lower()
-        if ctx_type == "model":
-            return ctx
-    # last resort
-    contexts = list(model.by_type("IfcGeometricRepresentationContext"))
-    if not contexts:
-        raise ValueError("IFC model has no IfcGeometricRepresentationContext")
-    return contexts[0]
+def _verifier_note(verdict: Optional[dict[str, Any]]) -> str:
+    """One-line suffix for LLM-facing tool results so the agent can
+    self-repair in the same turn when verification flags problems."""
+    if not verdict:
+        return ""
+    if verdict.get("status") == "pass":
+        return " Verifier: PASS (no new issues)."
+    return (
+        f" Verifier: {str(verdict.get('status', '')).upper()} - {verdict.get('note', '')}. "
+        "Consider discarding this pending edit and proposing a corrected one."
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -862,6 +917,20 @@ def _compute_diff(base: ifcopenshell.file, sandbox: ifcopenshell.file) -> list[P
                             "after": s.get(prop_name),
                         }
                     )
+
+        # Controlled IFC text attributes use the same preview structure as
+        # property changes so the current diff UI can show before/after values
+        # without inventing an incompatible wire type.
+        for attribute in ("Description", "ObjectType", "Tag", "LongName"):
+            before = getattr(base_entity, attribute, None)
+            after = getattr(sandbox_entity, attribute, None)
+            if before != after:
+                prop_changes.append({
+                    "property_set": "$attributes",
+                    "property_name": attribute,
+                    "before": before,
+                    "after": after,
+                })
 
         if prop_changes:
             changes.append(

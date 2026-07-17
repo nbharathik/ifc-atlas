@@ -94,14 +94,16 @@ const PROCESS_STAGE_COPY: Record<string, string> = {
   geometries: 'Building shapes',
   attributes: 'Reading element data',
   relations: 'Linking elements',
-  conversion: 'Packing the model',
+  // `conversion` spans importer initialization, OpenModel, geometry work, and
+  // final compression; it is not a signal that only packing remains.
+  conversion: 'Processing model data',
   parsing: 'Reading the file',
   // The live-parse path titles checkpoints with IMPORT_STAGE_LABELS values
   // rather than raw process tokens; translate those too.
   'streaming geometry batches': 'Building shapes',
   'indexing element attributes': 'Reading element data',
   'linking model relations': 'Linking elements',
-  'finalizing fragment model': 'Packing the model',
+  'processing model data': 'Processing model data',
 };
 
 export function humanizeProcessStage(token: string | null | undefined): string | null {

@@ -10,6 +10,10 @@ describe('chooseFrameTargets', () => {
     expect(chooseFrameTargets(7, [1, 2, 3])).toEqual([7]);
   });
 
+  it('prefers selectedIds over the primary selection and highlightedIds', () => {
+    expect(chooseFrameTargets(7, [1, 2, 3], [10, 11])).toEqual([10, 11]);
+  });
+
   it('returns the highlight list when no element is selected', () => {
     expect(chooseFrameTargets(null, [10, 20, 30])).toEqual([10, 20, 30]);
   });

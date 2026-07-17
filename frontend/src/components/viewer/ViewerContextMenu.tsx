@@ -48,6 +48,14 @@ export default function ViewerContextMenu({ state, onClose }: Props) {
   const clipToElement = useStore((s) => s.clipToElement);
   const clipToElementFn = useStore((s) => s.clipToElementFn);
 
+  // This lookup must stay above the `state === null` early return with every
+  // other hook. ViewerPanel keeps the component mounted while closed, so a
+  // hook below that return would change the hook count when the menu opens.
+  const treeNodeForCopy = useMemo(() => {
+    if (state?.expressId == null) return null;
+    return findNodeById(spatialTree, state.expressId);
+  }, [state?.expressId, spatialTree]);
+
   const sameTypeIds = useMemo(() => {
     if (!state?.ifcType) return [] as number[];
     return collectIdsByType(spatialTree, state.ifcType);
@@ -101,6 +109,10 @@ export default function ViewerContextMenu({ state, onClose }: Props) {
     onClose();
   };
 
+  // Pointer-context actions deliberately target the exact raycast hit. They
+  // must not silently act on an older global selection/highlight set; the
+  // viewer-wide keyboard, palette, and toolbar actions use the shared target
+  // resolver instead.
   const onIsolateThis = () =>
     hasElement && run(`Isolate #${state.expressId}`, () => setIsolatedIds([state.expressId!]), 'isolate');
   const onHideThis = () =>
@@ -123,14 +135,9 @@ export default function ViewerContextMenu({ state, onClose }: Props) {
     hasElement && run(`Zoom to #${state.expressId}`, () => zoomToElement(state.expressId!), 'view');
   const onClipToElement = () =>
     hasElement && run(`Clip section box to #${state.expressId}`, () => clipToElement(state.expressId!), 'view');
-  // Memoise the SpatialNode lookup so the disabled-flag derivation and the
-  // three Copy handlers share one tree walk per menu open. findNodeById is
-  // O(n) but menus open at click cadence, not per frame, so this is cheap
-  // even on large models; useMemo is for clarity, not perf.
-  const treeNodeForCopy = useMemo(() => {
-    if (state?.expressId == null) return null;
-    return findNodeById(spatialTree, state.expressId);
-  }, [state?.expressId, spatialTree]);
+  // The memoised SpatialNode lookup lets the disabled flag and three Copy
+  // handlers share one tree walk per menu open. findNodeById is O(n), but
+  // menus open at click cadence rather than per frame.
   const hasGlobalId = !!treeNodeForCopy?.global_id;
 
   const onCopy = (format: ClipboardFormat) => async () => {

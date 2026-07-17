@@ -7,13 +7,20 @@ import type * as OBC from '@thatopen/components';
 
 function makeClipperMock() {
   const created: Array<{ normal: THREE.Vector3; origin: THREE.Vector3 }> = [];
+  const updated: Array<{ normal: THREE.Vector3; origin: THREE.Vector3 }> = [];
   const deleted: string[] = [];
-  const planes = new Map<string, { visible: boolean }>();
+  const planes = new Map<string, {
+    visible: boolean;
+    normal: THREE.Vector3;
+    origin: THREE.Vector3;
+    setFromNormalAndCoplanarPoint: ReturnType<typeof vi.fn>;
+  }>();
   let idCounter = 0;
 
   return {
     enabled: false,
     created,
+    updated,
     deleted,
     planes,
     createFromNormalAndCoplanarPoint: vi.fn((
@@ -23,7 +30,17 @@ function makeClipperMock() {
     ) => {
       const uuid = `plane-${++idCounter}`;
       created.push({ normal: normal.clone(), origin: origin.clone() });
-      planes.set(uuid, { visible: true });
+      const plane = {
+        visible: true,
+        normal: normal.clone(),
+        origin: origin.clone(),
+        setFromNormalAndCoplanarPoint: vi.fn((nextNormal: THREE.Vector3, nextOrigin: THREE.Vector3) => {
+          plane.normal.copy(nextNormal);
+          plane.origin.copy(nextOrigin);
+          updated.push({ normal: nextNormal.clone(), origin: nextOrigin.clone() });
+        }),
+      };
+      planes.set(uuid, plane);
       return uuid;
     }),
     delete: vi.fn((_world: unknown, uuid: string) => {
@@ -124,16 +141,29 @@ describe('SectionBoxController', () => {
     expect(ctrl.enabled).toBe(false);
   });
 
-  it('setBounds() while enabled re-applies 6 planes at new bounds', () => {
+  it('setBounds() while enabled updates the stable 6 planes in place', () => {
     const box1 = new THREE.Box3(new THREE.Vector3(-1, -1, -1), new THREE.Vector3(1, 1, 1));
     ctrl.enable(box1);
     expect(clipper.createFromNormalAndCoplanarPoint).toHaveBeenCalledTimes(6);
 
     const box2 = new THREE.Box3(new THREE.Vector3(-5, -5, -5), new THREE.Vector3(5, 5, 5));
     ctrl.setBounds(box2);
-    // Old 6 deleted + new 6 created
-    expect(clipper.delete).toHaveBeenCalledTimes(6);
-    expect(clipper.createFromNormalAndCoplanarPoint).toHaveBeenCalledTimes(12);
+    expect(clipper.delete).not.toHaveBeenCalled();
+    expect(clipper.createFromNormalAndCoplanarPoint).toHaveBeenCalledTimes(6);
+    expect(clipper.updated).toHaveLength(6);
+    expect(clipper.planes.get('plane-1')?.origin.x).toBe(5);
+    expect(clipper.planes.get('plane-2')?.origin.x).toBe(-5);
+  });
+
+  it('does not touch plane equations when identical bounds are republished', () => {
+    const box = new THREE.Box3(new THREE.Vector3(-1, -1, -1), new THREE.Vector3(1, 1, 1));
+    ctrl.enable(box);
+    ctrl.setBounds(box.clone());
+    ctrl.enable(box.clone());
+
+    expect(clipper.createFromNormalAndCoplanarPoint).toHaveBeenCalledTimes(6);
+    expect(clipper.updated).toHaveLength(0);
+    expect(clipper.delete).not.toHaveBeenCalled();
   });
 
   it('setBounds() while disabled does NOT create planes', () => {

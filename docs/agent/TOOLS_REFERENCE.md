@@ -645,4 +645,4 @@ Look up reference documentation. Sources: 'ifcopenshell' (the IfcOpenShell Pytho
 
 ---
 
-_Last regenerated: 2026-07-12. Run `python scripts/generate_tools_doc.py` to refresh._
+_Last regenerated: 2026-07-17. Run `python scripts/generate_tools_doc.py` to refresh._

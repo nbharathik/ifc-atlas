@@ -2,7 +2,7 @@
  * Edit-scope store slice: semantic (no viewer reload) vs structural (reloads).
  * See dev/docs/EDIT_SCOPES.md.
  *
- * Structural is gated off for the v0.1.1 release (STRUCTURAL_EDIT_ENABLED in
+ * Structural is gated off for the v1.1.0 release (STRUCTURAL_EDIT_ENABLED in
  * config/featureFlags.ts). These tests branch on the flag so they keep asserting
  * the right contract when it flips back on, rather than baking in "off" forever.
  */

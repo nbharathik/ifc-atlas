@@ -1026,7 +1026,7 @@ async def get_frag_delta(edit_id: str):
     ``fragmentDeltaLoader`` consumes this to apply per-element geometry
     updates via ``Editor.edit()`` instead of triggering a full reload.
 
-    **v0.1.1 scope** - the route returns the correct shape but with an
+    **v1.1.0 scope** - the route returns the correct shape but with an
     empty ``representations`` map. The frontend loader iterates, finds
     no matching repData per express id, and returns ``updatedCount=0``;
     the existing ``rebuild_started`` full-reload path then takes over.
@@ -1045,7 +1045,7 @@ async def get_frag_delta(edit_id: str):
                 f"evicted from the recent-edits cache or never existed."
             ),
         )
-    # v0.1.1 - empty representations map; the full refresh remains the fallback.
+    # v1.1.0 - empty representations map; the full refresh remains the fallback.
     return {
         "edit_id": record.edit_id,
         "express_ids": record.express_ids,

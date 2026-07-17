@@ -29,15 +29,15 @@
 
 ## Features
 
-- **3D viewer.** Selection, isolate / hide, section planes and section box, measurements with snapping, camera presets, saved viewpoints, share links.
-- **Inspector.** Properties, quantities, model tree, search, BIM filters, quantity takeoff, command palette (`Ctrl+K`).
-- **Native IFC editing.** Create projects from templates and edit names, descriptions, property values, and classifications inline - every change is a logged, undoable IfcOpenShell operation on the IFC file itself, saved with stable IDs. ([guide](docs/user/EDITING.md))
-- **AI chat + AI editing.** Multi-provider (OpenAI, Anthropic, OpenRouter) with structured tool calls that act on the 3D view; AI edits are sandboxed, diff-previewed, and health-verified before you apply them.
-- **History.** Automatic git checkpoints per change, an actor-attributed timeline (you / AI / MCP), semantic compare via ifcdiff, undo/redo, rollback.
-- **Issue tracking.** BCF 2.1 topics that capture the current view, with `.bcfzip` import and export that round-trips with other BIM tools.
-- **Plugins.** Sandboxed Python batch scripts over the loaded model, staged through the same diff preview as AI edits.
-- **Integrations.** buildingSMART IDS 1.0 validation, bSDD + IfcOpenShell docs as AI knowledge tools, MCP client registry, a built-in MCP server through which external agents (e.g. Claude Desktop) can read and edit models, and a headless CLI.
-- **Deployment.** Desktop app, Docker self-hosting, or a browser-only demo.
+- **3D viewer.** Cut sections, measure, isolate, and save viewpoints.
+- **Inspector.** Properties, quantities, tree, search, and filters.
+- **Native IFC editing.** Edit the model itself. Every change logged and undoable. ([guide](docs/user/EDITING.md))
+- **AI chat + AI editing.** Ask questions, get edits. Previewed before you apply them.
+- **History.** A timeline of every change, with compare and rollback.
+- **Issue tracking.** BCF topics that round-trip with other BIM tools.
+- **Plugins.** Run Python scripts over the model, safely.
+- **Integrations.** IDS validation, an MCP server for outside agents, and a CLI.
+- **Deployment.** Desktop app, Docker, or browser-only.
 
 Full feature catalogue and shortcuts: [`docs/user/FEATURES.md`](docs/user/FEATURES.md).
 Practical workflows and example prompts: [`docs/user/USE_CASES.md`](docs/user/USE_CASES.md).

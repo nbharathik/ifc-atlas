@@ -34,7 +34,7 @@ export const BROWSER_ONLY: boolean = import.meta.env.VITE_PUBLIC_DEMO === 'true'
 
 /**
  * STRUCTURAL_EDIT_ENABLED - the structural edit scope (create walls / slabs,
- * delete elements). Off for v0.1.1: geometry edits reload the viewer, too
+ * delete elements). Off for v1.1.0: geometry edits reload the viewer, too
  * disruptive to ship. Frontend gate only; the backend keeps every structural
  * op for API/MCP clients. Pins `editScope` to semantic (including a persisted
  * structural pref) and hides the scope toggle, banner, and wall-draw tool.

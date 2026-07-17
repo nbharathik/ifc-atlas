@@ -167,7 +167,7 @@ class PatchGenerator:
             elif change == "created":
                 # Point at the frag-delta endpoint when the caller
                 # provided an edit_id. The frontend's fragmentDeltaLoader
-                # fetches geometry per-element from this URL. The v0.1.1 endpoint
+                # fetches geometry per-element from this URL. The v1.1.0 endpoint
                 # returns an empty representations map so the frontend falls
                 # back to the rebuild_started full-reload; a future release will
                 # populate real RawRepresentation blobs.

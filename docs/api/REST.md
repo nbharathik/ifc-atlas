@@ -1339,7 +1339,7 @@ the elements touched by the named applied edit. The frontend's
 ``fragmentDeltaLoader`` consumes this to apply per-element geometry
 updates via ``Editor.edit()`` instead of triggering a full reload.
 
-**v0.1.1 scope** - the route returns the correct shape but with an
+**v1.1.0 scope** - the route returns the correct shape but with an
 empty ``representations`` map. The frontend loader iterates, finds
 no matching repData per express id, and returns ``updatedCount=0``;
 the existing ``rebuild_started`` full-reload path then takes over.
@@ -2395,4 +2395,4 @@ Upload Snapshot
 
 ---
 
-_Last regenerated: 2026-07-16. Run `python scripts/generate_api_doc.py` to refresh._
+_Last regenerated: 2026-07-17. Run `python scripts/generate_api_doc.py` to refresh._

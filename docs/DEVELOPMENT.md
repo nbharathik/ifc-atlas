@@ -140,8 +140,8 @@ npm run tauri:build
 Output:
 
 ```
-src-tauri\target\release\bundle\nsis\IFC Atlas_1.0.0_x64-setup.exe   (~80 MB)
-src-tauri\target\release\bundle\msi\IFC Atlas_1.0.0_x64_en-US.msi    (~81 MB)
+src-tauri\target\release\bundle\nsis\IFC Atlas_1.1.0_x64-setup.exe   (~80 MB)
+src-tauri\target\release\bundle\msi\IFC Atlas_1.1.0_x64_en-US.msi    (~81 MB)
 ```
 
 > **Always re-run Step 1 after backend changes.** `tauri build` bundles whatever binary is sitting in `src-tauri/binaries/` - a stale sidecar means the installer ships old backend code with no warning.

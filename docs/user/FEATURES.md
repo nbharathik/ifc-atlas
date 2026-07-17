@@ -147,7 +147,7 @@ Switch the chat to **Edit** mode to stage model changes - every AI write is sand
 | Agent | Mode | Purpose |
 |---|---|---|
 | Default | Ask | General-purpose assistant, all read tools enabled. |
-| Edit Assistant | Edit | Semantic changes (names, descriptions, property values, classifications), with agent writes staged through inline approval. Geometry authoring is not available to the AI in v0.1.1. Set `EDIT_MODE_ENABLED=0` for read-only deployments. |
+| Edit Assistant | Edit | Semantic changes (names, descriptions, property values, classifications), with agent writes staged through inline approval. Geometry authoring is not available to the AI in v1.1.0. Set `EDIT_MODE_ENABLED=0` for read-only deployments. |
 
 Each agent has its own system prompt, model, temperature, and tool allowlist. Specialise the assistant by activating a system prompt from the **Skills** tab: editing a built-in prompt forks it into your own editable copy.
 
@@ -214,13 +214,13 @@ ops - disappears together; the frontend probes the flag at runtime).
 |---|---|
 | **Edit mode** | View/Edit toggle in the top bar. Inline-editable Name, Description, ObjectType, Tag, and existing property values in the Properties panel, with validation and instant refresh. |
 | **Operation layer** | Every mutation - human, AI, or MCP - is a named, validated, actor-attributed, logged, undoable operation over `ifcopenshell.api` (ADR 003). |
-| **Creation ops** | `create_wall` (two-point, storey work plane), `create_slab` (polygon), `create_storey`, `assign_to_storey`, `set_storey_elevation`, `delete_element` - available to the REST API and MCP. **Not exposed in the app or to the AI in v0.1.1** (see below). |
-| **Wall drawing** | Turned off for v0.1.1. Geometry authoring reloads the viewer on every applied edit, so the drawing toolbar and the semantic/structural scope toggle are hidden and the AI's geometry tools are withheld. In-app editing is metadata-only and updates in place. |
+| **Creation ops** | `create_wall` (two-point, storey work plane), `create_slab` (polygon), `create_storey`, `assign_to_storey`, `set_storey_elevation`, `delete_element` - available to the REST API and MCP. **Not exposed in the app or to the AI in v1.1.0** (see below). |
+| **Wall drawing** | Turned off for v1.1.0. Geometry authoring reloads the viewer on every applied edit, so the drawing toolbar and the semantic/structural scope toggle are hidden and the AI's geometry tools are withheld. In-app editing is metadata-only and updates in place. |
 | **Undo / redo** | `Ctrl+Z` / `Ctrl+Y` (also status-bar buttons and the Edit menu), backed by the operation log. Creation undo removes the created elements; deletion undo restores an exact pre-delete snapshot (express IDs preserved). |
 | **Save** | File → Save writes edits back to the loaded file with stable IDs; unsaved-changes badge, close guards, and a browser warning protect against data loss. Save-As still downloads a copy. |
 | **AI edits stay previewed** | Every AI write is staged in a sandbox and presented as a before/after diff with **Apply** / **Discard** - plus an automatic **verifier verdict** (model health delta + geometry sanity) so broken proposals are flagged before you apply them. |
 | **Bulk operations** | `rename_elements_batch` and `update_properties_batch` change N elements in one atomic, one-undo step. |
-| **Script sandbox** | `execute_ifc_query_code` runs read-only IfcOpenShell analyses. The edit-capable `execute_ifc_code` is withheld from the AI in v0.1.1 along with the rest of the geometry tier; write-capable Python still reaches the model through Plugins, which stage their diffs the same way. |
+| **Script sandbox** | `execute_ifc_query_code` runs read-only IfcOpenShell analyses. The edit-capable `execute_ifc_code` is withheld from the AI in v1.1.0 along with the rest of the geometry tier; write-capable Python still reaches the model through Plugins, which stage their diffs the same way. |
 | **Timeline** | `Shift+H` opens the Timeline: every operation with its actor (you / AI / MCP) merged with automatic git checkpoints; two-point semantic compare (ifcdiff, including property changes); restore any checkpoint. |
 | **Live sync** | Applied changes broadcast to every open viewer: metadata patches update in place; structural changes trigger a debounced, camera-preserving model refresh. |
 

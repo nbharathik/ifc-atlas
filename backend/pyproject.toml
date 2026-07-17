@@ -1,6 +1,6 @@
 [project]
 name = "ifc-atlas-backend"
-version = "0.1.1"
+version = "1.1.0"
 description = "FastAPI backend for IFC Atlas - LLM chat, tool routing, IfcOpenShell helpers, MCP server."
 license = { text = "MPL-2.0" }
 # IfcOpenShell 0.8.x segfaults under pytest collection on Windows + Python 3.13.

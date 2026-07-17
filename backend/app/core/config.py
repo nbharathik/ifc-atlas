@@ -133,7 +133,7 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # Feature toggles
-# v0.1.1: editing is ON by default (ADR 003 phased flip - the operation layer,
+# v1.1.0: editing is ON by default (ADR 003 phased flip - the operation layer,
 # dual-mode gating, verifier loop, undo/redo, and save round-trip all landed).
 # The flag gates BOTH surfaces from this single point: the human editor
 # (/operations routes return 403 when off; the frontend probes the flag at

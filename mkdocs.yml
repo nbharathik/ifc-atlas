@@ -98,7 +98,6 @@ nav:
     - Command line: user/CLI.md
     - Data storage: user/DATA_STORAGE.md
     - Troubleshooting: user/TROUBLESHOOTING.md
-  - Roadmap: ROADMAP.md
 
 validation:
   nav:

@@ -110,7 +110,7 @@ diff counts and publishes on the model-sync WebSocket (`/api/ifc/sync/ws`):
 | `pending_applied` | Always | Remove the envelope from the pending list; adopt the new model version + fingerprint. |
 | `ifc_patch` | When the diff is non-empty | Typed per-element patch list for incremental consumers. |
 | `metadata_patch` | Only renames / property changes | Patch spatial-tree names and stats in place. No geometry reload. |
-| `rebuild_started` | Any created / deleted / retyped element | Reload the model geometry while preserving camera and store state. A per-fragment delta endpoint (`GET /api/ifc/frag-delta/{edit_id}`) exists but does not yet provide complete hot-replacement data in v0.1.1, so the full reload path remains the correctness fallback. |
+| `rebuild_started` | Any created / deleted / retyped element | Reload the model geometry while preserving camera and store state. A per-fragment delta endpoint (`GET /api/ifc/frag-delta/{edit_id}`) exists but does not yet provide complete hot-replacement data in v1.1.0, so the full reload path remains the correctness fallback. |
 
 The frontend handler is the model-sync WebSocket subscriber in
 `frontend/src/App.tsx`, which feeds the store's `upsertPendingEdit` /

@@ -97,7 +97,9 @@ describe('MeasurementController construction-measurement bridge', () => {
       kind: 'height',
       value: 5,
       signedValue: 5,
-      exact: true,
+      // Two raw surface picks with no snap: the height is real but its
+      // endpoints are wherever the ray happened to land, so it is a GUIDE.
+      exact: false,
       source: 'project-y-axis',
     });
     expect(measurement.points[0]).toEqual(expect.objectContaining({ x: 2, y: 1, z: 4 }));
@@ -106,6 +108,44 @@ describe('MeasurementController construction-measurement bridge', () => {
       expect.objectContaining({ x: 8, y: 6, z: 9 }),
     );
     expect(controller.snapshot().pending).toEqual([]);
+    controller.dispose();
+  });
+
+  it('reports a height as exact only when both picks snapped to real geometry', () => {
+    const exactSnap = (point: THREE.Vector3) => ({
+      point,
+      kind: 'vertex' as const,
+      exact: true,
+      source: 'engine-point',
+    });
+    const { controller } = createController();
+    controller.setMode('height');
+    controller.handleClick(v(2, 1, 4), null, exactSnap(v(2, 1, 4)));
+    controller.handleClick(v(2, 6, 4), null, exactSnap(v(2, 6, 4)));
+
+    expect(controller.snapshot().committed[0]).toMatchObject({
+      kind: 'height',
+      value: 5,
+      exact: true,
+    });
+    controller.dispose();
+  });
+
+  it('downgrades a height to a guide when only one pick snapped', () => {
+    const { controller } = createController();
+    controller.setMode('height');
+    controller.handleClick(v(2, 1, 4), null, {
+      point: v(2, 1, 4),
+      kind: 'vertex',
+      exact: true,
+      source: 'engine-point',
+    });
+    controller.handleClick(v(8, 6, 9));
+
+    expect(controller.snapshot().committed[0]).toMatchObject({
+      kind: 'height',
+      exact: false,
+    });
     controller.dispose();
   });
 

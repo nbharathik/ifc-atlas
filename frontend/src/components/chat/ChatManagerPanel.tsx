@@ -23,6 +23,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useStore } from '../../store/useStore';
+import { STRUCTURAL_EDIT_ENABLED } from '../../config/featureFlags';
 import Icon, { type IconName } from '../ui/Icon';
 import type { SystemPromptEntry, ToolCatalogEntry, McpServerConfig, ModelEntry } from '../../types/ifc';
 import {
@@ -534,16 +535,22 @@ function AgentRosterDetail({
               </span>
             </div>
             <div className="cm-editscope-row">
-              <span className="cm-editscope-badge cm-editscope-badge--structural">Structural · beta</span>
+              <span className="cm-editscope-badge cm-editscope-badge--structural">
+                Structural · {STRUCTURAL_EDIT_ENABLED ? 'beta' : 'off'}
+              </span>
               <span>
                 Create walls / slabs, delete elements, run IFC code. Changes
-                geometry, so it <strong>reloads the 3D viewer</strong>. Enable it
-                with the scope toggle in the top edit bar.
+                geometry, so it <strong>reloads the 3D viewer</strong>.{' '}
+                {STRUCTURAL_EDIT_ENABLED
+                  ? 'Enable it with the scope toggle in the top edit bar.'
+                  : 'Turned off in this release - geometry authoring is not available yet.'}
               </span>
             </div>
             <p className="cm-editscope-hint">
-              In semantic scope the structural tools are removed from the agent
-              entirely, so property editing never triggers a reload. See
+              {STRUCTURAL_EDIT_ENABLED
+                ? 'In semantic scope the structural tools are removed from the agent entirely, so property editing never triggers a reload.'
+                : 'The structural tools are removed from the agent entirely, so editing is limited to metadata and never triggers a reload.'}
+              {' '}See
               <code> dev/docs/EDIT_SCOPES.md</code>.
             </p>
           </div>

@@ -46,27 +46,38 @@ A compact chip at the top-left of the viewport summarises the current selection:
 | **Classification browser** (`G`, left sidebar) | Lists every `IfcClassification` system. Filter by class code or name; click to highlight all members. |
 | **Model Statistics** (`Shift+S`) | Overlay panel showing element counts by IFC type and by storey. Click any row to isolate those elements. |
 | **Storey controls** (Viewer Tools → Storeys) | Click a storey pill to isolate it; Show all clears storey isolation and Ghost xray keeps the surrounding model as transparent context. |
+| **Applied filters** (bottom-right of the viewport) | One place to see and undo everything currently applied to the model: isolated/hidden elements, ghost xray, section planes, the section box, colour-by, colour overlays, highlights, measurements, and an armed measure tool. The chip carries a count, each entry has its own remove button, and **Reset all** returns the model to its as-loaded state without hunting through the panels that set it. Hidden entirely when nothing is applied, so it doubles as a status indicator. Plain selection is not listed (Esc clears it), but Reset all drops it too. |
 
 ### Measurement
 
 | Shortcut | Action |
 |---|---|
-| Toolbar ruler / `R` | Toggle the measurement history panel. |
-| Distance, then two picks | Point-to-point distance. |
+| Toolbar ruler / `R` | Arm or disarm the measurement tools. |
+| Distance, then two picks | Point-to-point distance, with the slope angle shown while you drag. |
 | Height, then two picks | Vertical difference constrained to project Y, with persistent witness geometry. |
 | Clearance, then two face picks | Exact shortest witness between the two picked mesh triangles. This is not yet whole-object/BVH clearance. |
 | Position, then one pick | Persistent World-frame X/Y/Z marker. Project georeferencing is not yet applied. |
 | Rectangle, then two picks | Rectangular area constrained to the first picked face plane. |
-| Click N points + Enter | Polygon area (Newell-normal projected shoelace). |
+| Click N points, then `Enter` / double-click / Finish | Polygon area (Newell-normal projected shoelace). |
 | `N`, then three clicks | Angle measurement (vertex → arm 1 → arm 2). |
 
-While drawing, hover and click share one 20-pixel construction resolver for
-exact vertices, edges, edge midpoints, and triangle face centers (blue marker).
-Committed measurement endpoints remain exact snap targets within 10 cm (white
-marker). The compact readout identifies the snap and marks it `EXACT` or
-`GUIDE`; history, persistent 3D labels, and CSV export retain source and snap
-provenance. Semantic grid/MEP axes and round-object centers are not live snap
-sources yet.
+Once armed, a toolbar appears at the top of the viewport: all seven tools on an
+icon rail, units, a history toggle, and a plain-language instruction for the
+active tool. The live value rides the cursor instead of sitting in a corner:
+while you drag you see the distance (plus its slope), area and perimeter, or
+angle right at the pointer, together with the snap it has latched onto.
+
+**Snapping.** While drawing, hover and click resolve snaps against the model's
+real point and line geometry through the fragments engine, which searches a
+small frustum around the cursor rather than only the triangle under it. That
+means an edge, its midpoint, or a corner snaps from anywhere near it, including
+in the middle of a large wall or slab face. Existing measurement endpoints
+compete in the same screen-space ranking, so chained dimensions stay exact
+without a nearby endpoint hijacking a vertex under the cursor. Corners are
+sticky: a vertex within a few pixels wins over the edge running through it.
+The cursor tip names the snap and marks it `EXACT` or `GUIDE`; history,
+persistent 3D labels, and CSV export retain source and snap provenance.
+Semantic grid/MEP axes and round-object centers are not live snap sources yet.
 
 ### Quantity takeoff
 
@@ -82,12 +93,21 @@ sources yet.
 | `Alt+X` | Fit one section box to the exact merged bounds of the current multi-selection (or the primary selection). |
 | Viewer Tools → Storeys → **Section storey** | After isolating a storey, fit the section box to all elements under that storey. |
 
-Up to three independent clip planes can stack. Section-box bounds are stored as
-an absolute workspace, so toggling or navigating does not silently replace a
-selection/storey crop with the full-model box. The cut surface renders as a
-solid grey cap rather than a transparent void. Editable box-face handles,
-category/model cut exclusions, and saved-view restoration of the workspace are
-not available yet.
+**Section planes** slice the model along an axis so you can look inside; move
+the cut with the slider in Viewer Tools or drag the on-screen arrow. The plane
+indicator keeps a fixed, model-sized footprint, so it stays visible and
+grabbable no matter how far you zoom in. Up to three independent planes can
+stack.
+
+**The section box** hides everything outside a crop box, which is the quickest
+way to inspect one room, floor, or element without the rest of the building in
+the way. Turn it on from Viewer Tools or `Alt+B`, shrink it around a selection
+with "Box around selection", and grow it back with "Whole model". Its bounds
+are stored as an absolute workspace, so toggling or navigating does not
+silently replace a selection or storey crop with the full-model box. The cut
+surface renders as a solid grey cap rather than a transparent void. Editable
+box-face handles, category cut exclusions, and saved-view restoration of the
+workspace are not available yet.
 
 ### Appearance
 
@@ -194,8 +214,8 @@ ops - disappears together; the frontend probes the flag at runtime).
 |---|---|
 | **Edit mode** | View/Edit toggle in the top bar. Inline-editable Name, Description, ObjectType, Tag, and existing property values in the Properties panel, with validation and instant refresh. |
 | **Operation layer** | Every mutation - human, AI, or MCP - is a named, validated, actor-attributed, logged, undoable operation over `ifcopenshell.api` (ADR 003). |
-| **Creation ops** | `create_wall` (two-point, storey work plane), `create_slab` (polygon), `create_storey`, `assign_to_storey`, `set_storey_elevation`, `delete_element` - available from the UI, the AI, the REST API, and MCP. |
-| **Wall drawing** | In Edit mode, draw walls with two clicks on the storey work plane: live preview line, length label, grid snap, height/thickness/storey controls. |
+| **Creation ops** | `create_wall` (two-point, storey work plane), `create_slab` (polygon), `create_storey`, `assign_to_storey`, `set_storey_elevation`, `delete_element` - available to the REST API and MCP. **Not exposed in the app or to the AI in v0.1.1** (see below). |
+| **Wall drawing** | Turned off for v0.1.1. Geometry authoring reloads the viewer on every applied edit, so the drawing toolbar and the semantic/structural scope toggle are hidden and the AI's geometry tools are withheld. In-app editing is metadata-only and updates in place. |
 | **Undo / redo** | `Ctrl+Z` / `Ctrl+Y` (also status-bar buttons and the Edit menu), backed by the operation log. Creation undo removes the created elements; deletion undo restores an exact pre-delete snapshot (express IDs preserved). |
 | **Save** | File → Save writes edits back to the loaded file with stable IDs; unsaved-changes badge, close guards, and a browser warning protect against data loss. Save-As still downloads a copy. |
 | **AI edits stay previewed** | Every AI write is staged in a sandbox and presented as a before/after diff with **Apply** / **Discard** - plus an automatic **verifier verdict** (model health delta + geometry sanity) so broken proposals are flagged before you apply them. |

@@ -126,6 +126,20 @@ export interface ViewerStoreState {
   };
 }
 
+/** What the engine's snapping raycast found at a pixel, plus the feature the
+ *  screen-space resolver chose. Mirrors `__ifcSnapAt` in ViewerPanel. */
+export interface SnapProbeResult {
+  hitClasses: string[];
+  edgeHits: number;
+  snap: {
+    kind: string;
+    source: string;
+    exact: boolean;
+    distancePx: number;
+    point: { x: number; y: number; z: number };
+  } | null;
+}
+
 interface ViewerDebugWindow extends Window {
   __ifcE2EProbe?: BrowserProbe;
   __ifcRenderState?: () => RenderStateSnapshot;
@@ -135,6 +149,11 @@ interface ViewerDebugWindow extends Window {
     x: number,
     y: number,
   ) => Promise<{ expressId: number; localId: number } | null>;
+  __ifcSnapAt?: (
+    x: number,
+    y: number,
+    thresholdPx?: number,
+  ) => Promise<SnapProbeResult>;
   __ifcStore?: { getState: () => ViewerStoreState };
   __ifcViewer?: {
     world?: {

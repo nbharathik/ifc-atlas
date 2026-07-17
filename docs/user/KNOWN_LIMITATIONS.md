@@ -17,10 +17,13 @@
 - Adding or removing property definitions/property sets, classification and
   material authoring, arbitrary entity retyping, and general relationship
   authoring are not yet first-class UI operations.
-- Structural editing is beta. Create/delete/spatial operations preserve IFC
-  validity through controlled IfcOpenShell operations, but they refresh the
-  complete rendered model after apply. The camera and store state are restored;
-  a brief loading transition is expected.
+- Structural (geometry) editing is turned off in the app for v0.1.1. Create /
+  delete / spatial operations preserve IFC validity through controlled
+  IfcOpenShell operations, but they refresh the complete rendered model after
+  apply, which is too disruptive to expose yet. The drawing toolbar and the
+  edit-scope toggle are hidden, and the AI cannot author geometry. The
+  operations remain available to API and MCP clients, where the reload cost
+  does not apply.
 - Geometry editing is not a general BIM authoring system. Complex profiles,
   openings, MEP routing, constraints, and parametric family editing are out of
   scope for v0.1.1.

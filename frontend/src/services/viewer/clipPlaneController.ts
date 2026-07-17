@@ -68,6 +68,7 @@ export class ClipPlaneController {
   private readonly clipper: OBC.Clipper;
   private readonly world: OBC.World;
   private readonly centre: THREE.Vector3;
+  private readonly planeSize: number;
   private readonly hooks: ClipPlaneHooks;
   private entries = new Map<string, PlaneEntry>();
 
@@ -75,13 +76,20 @@ export class ClipPlaneController {
     clipper: OBC.Clipper,
     world: OBC.World,
     centre: THREE.Vector3,
+    modelSize: THREE.Vector3,
     hooks: ClipPlaneHooks,
   ) {
     this.clipper = clipper;
     this.world = world;
     this.centre = centre.clone();
+    // Side length of the plane quad. The model diagonal covers any
+    // axis-aligned cross-section, so the indicator always spans the model.
+    this.planeSize = Math.max(1, modelSize.length() * 1.1);
     this.hooks = hooks;
     this.clipper.orthogonalY = true;
+    // OBC rescales plane helpers with camera distance by default, which makes
+    // the quad shrink to nothing as you zoom toward the cut. Fixed size instead.
+    this.clipper.autoScalePlanes = false;
     // Restyle the shared plane-helper material in place (applies to every
     // plane this clipper creates) while keeping OBC's DoubleSide + transparent
     // flags. Nothing in the app calls clipper.setup()/config, so the magenta
@@ -140,6 +148,7 @@ export class ClipPlaneController {
       const plane = this.clipper.list.get(uuid);
       if (plane) {
         plane.type = PLANE_TAG_PREFIX + next.id;
+        plane.size = this.planeSize;
         const id = next.id;
         const handler = () => {
           if (!entry.uuid) return;

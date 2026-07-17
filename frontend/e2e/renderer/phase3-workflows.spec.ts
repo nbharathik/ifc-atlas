@@ -113,22 +113,27 @@ test.describe('Phase 3 BIM workflow regression', () => {
       }
 
       await measureSection.getByRole('button', { name: 'Height', exact: true }).click();
+      // The toolbar exposes every tool as its own pressed-state button (it used
+      // to be a <select> that hid six of the seven behind a dropdown).
       const measurementToolbar = page.getByRole('toolbar', { name: 'Measurement tools' });
-      const measurementSelect = measurementToolbar.getByLabel('Measurement tool');
+      const measurementTool = (name: string) =>
+        measurementToolbar.getByRole('button', { name, exact: true });
       await expect(measurementToolbar).toBeVisible();
-      await expect(measurementSelect).toHaveValue('height');
+      await expect(measurementTool('Height')).toHaveAttribute('aria-pressed', 'true');
       await expect(measureSection.getByRole('button', { name: 'Height', exact: true }))
         .toHaveAttribute('aria-pressed', 'true');
       await expect.poll(async () => (await readPhase3ViewerState(page)).measurementMode)
         .toBe('height');
 
-      await measurementSelect.selectOption('clearance');
-      await expect(measurementSelect).toHaveValue('clearance');
+      // Switching tool is now a single click on the rail.
+      await measurementTool('Clearance').click();
+      await expect(measurementTool('Clearance')).toHaveAttribute('aria-pressed', 'true');
+      await expect(measurementTool('Height')).toHaveAttribute('aria-pressed', 'false');
       await expect(measureSection.getByRole('button', { name: 'Clearance', exact: true }))
         .toHaveAttribute('aria-pressed', 'true');
 
-      await measurementSelect.selectOption('position');
-      await expect(measurementSelect).toHaveValue('position');
+      await measurementTool('Position').click();
+      await expect(measurementTool('Position')).toHaveAttribute('aria-pressed', 'true');
       await expect(measureSection.getByText(/One click places a persistent coordinate marker/))
         .toBeVisible();
       workflowDiagnostics.measurement = await readPhase3ViewerState(page);
@@ -140,11 +145,11 @@ test.describe('Phase 3 BIM workflow regression', () => {
 
       // A section workspace is retained while clipping is disabled, then reused
       // verbatim when re-enabled. This catches the former destroy/recreate path.
-      await viewerTools.getByRole('button', { name: 'Section Box', exact: true }).click();
+      await viewerTools.getByRole('button', { name: 'Section box', exact: true }).click();
       const sectionBox = viewerTools.locator('#vtp-sectionbox');
-      const enableSection = sectionBox.getByRole('button', { name: 'Enable', exact: true });
+      const enableSection = sectionBox.getByRole('button', { name: 'Turn on', exact: true });
       await enableSection.click();
-      const disableSection = sectionBox.getByRole('button', { name: 'Disable', exact: true });
+      const disableSection = sectionBox.getByRole('button', { name: 'Turn off', exact: true });
       await expect(disableSection).toHaveAttribute('aria-pressed', 'true');
       await expect(sectionBox.getByText(/Full model section box active/)).toBeVisible();
       await expect.poll(async () => (await readPhase3ViewerState(page)).sectionWorkspace?.bounds)

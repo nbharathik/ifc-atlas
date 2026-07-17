@@ -33,6 +33,16 @@
 export const BROWSER_ONLY: boolean = import.meta.env.VITE_PUBLIC_DEMO === 'true';
 
 /**
+ * STRUCTURAL_EDIT_ENABLED - the structural edit scope (create walls / slabs,
+ * delete elements). Off for v0.1.1: geometry edits reload the viewer, too
+ * disruptive to ship. Frontend gate only; the backend keeps every structural
+ * op for API/MCP clients. Pins `editScope` to semantic (including a persisted
+ * structural pref) and hides the scope toggle, banner, and wall-draw tool.
+ * See dev/docs/EDIT_SCOPES.md.
+ */
+export const STRUCTURAL_EDIT_ENABLED: boolean = false;
+
+/**
  * RENDER_ON_DEMAND - optional manual rendering mode. It switches the viewer from the
  * engine's continuous AUTO loop (full scene render every vsync, forever) to
  * MANUAL mode driven by dirty-flag kicks (camera events, fragment flushes,

@@ -7,7 +7,7 @@ import { ViewHelper } from 'three/examples/jsm/helpers/ViewHelper.js';
 import { useStore } from '../../store/useStore';
 import type { ViewerPerformanceMode } from '../../store/useStore';
 import { apiUrl } from '../../lib/platform';
-import { BROWSER_ONLY, RENDER_ON_DEMAND } from '../../config/featureFlags';
+import { BROWSER_ONLY, RENDER_ON_DEMAND, STRUCTURAL_EDIT_ENABLED } from '../../config/featureFlags';
 import { modelService } from '../../services/ifc/ModelService';
 import { ClipPlaneController } from '../../services/viewer/clipPlaneController';
 import { SectionBoxController } from '../../services/viewer/sectionBoxController';
@@ -26,8 +26,11 @@ import {
 } from '../../services/viewer/measurementController';
 import { facePointsToVec3 } from '../../services/viewer/vertexSnapHelpers';
 import {
-  snapToTriangleFeatures,
+  engineSnapCandidates,
+  anchorSnapCandidates,
+  selectBestSnapCandidate,
   type ConstructionSnapCandidate,
+  type EngineSnapHit,
 } from '../../services/viewer/constructionSnapCandidates';
 import {
   shortestDistanceBetweenTriangles,
@@ -40,7 +43,8 @@ import HighlightBadge from './HighlightBadge';
 import SelectionSummaryChip from './SelectionSummaryChip';
 import PerformanceHud from './PerformanceHud';
 import PerformanceDashboard from './PerformanceDashboard';
-import FloatingChatDock from './FloatingChatDock';
+import FloatingChatDock, { FloatingChatPill } from './FloatingChatDock';
+import ViewerResetControl from './ViewerResetControl';
 import MeasurementControls from './MeasurementControls';
 import MeasurementLabels from './MeasurementLabels';
 import MeasurementPanel from './MeasurementPanel';
@@ -50,6 +54,9 @@ import ViewportNavControls from './ViewportNavControls';
 import ErrorBoundary from '../ui/ErrorBoundary';
 import { findIfcTypeForId, collectLeavesUnder, getSpatialNodeIndex } from '../../services/viewer/spatialTreeHelpers';
 import { setHoverTooltipData } from '../../services/viewer/hoverTooltipBridge';
+import { setMeasurementTip } from '../../services/viewer/measurementTipBridge';
+import { buildMeasurementTip } from '../../services/viewer/measurementTipContent';
+import MeasurementCursorTip from './MeasurementCursorTip';
 import {
   registerViewerBridge,
   unregisterViewerBridge,
@@ -1305,11 +1312,11 @@ export default function ViewerPanel({
 
   useEffect(() => {
     if (!viewerReady || !viewerRef.current) return;
-    const { components, world, modelCenter } = viewerRef.current;
+    const { components, world, modelCenter, modelSize } = viewerRef.current;
     const clipper = components.get(OBC.Clipper);
     const edgesService = new ClipEdgesService(components, world as unknown as OBC.World);
     clipEdgesServiceRef.current = edgesService;
-    const controller = new ClipPlaneController(clipper, world as unknown as OBC.World, modelCenter, {
+    const controller = new ClipPlaneController(clipper, world as unknown as OBC.World, modelCenter, modelSize, {
       onOffsetChanged: (id, offset) => updateClipPlane(id, { offset }),
       clipEdgesService: edgesService,
     });
@@ -1498,16 +1505,31 @@ export default function ViewerPanel({
     if (!viewerReady || !viewerRef.current) return;
     const { world, model } = viewerRef.current;
     const scene = world.scene.three as THREE.Scene;
+    // Per-move cursor updates go through the measurementTipBridge, not React.
+    // Only structural changes (mode, a point placed, a measurement committed
+    // or removed) reach the snapshot state, so hover sweeps while measuring
+    // stop reconciling the whole viewer tree.
+    const lastShape = { mode: 'off', pending: -1, committed: -1 };
     const controller = new MeasurementController(scene, model, {
-      onChange: (snap) => setMeasurementSnapshot(snap),
+      onChange: (snap) => {
+        if (
+          snap.mode === lastShape.mode
+          && snap.pending.length === lastShape.pending
+          && snap.committed.length === lastShape.committed
+        ) return;
+        lastShape.mode = snap.mode;
+        lastShape.pending = snap.pending.length;
+        lastShape.committed = snap.committed.length;
+        setMeasurementSnapshot(snap);
+      },
     });
     measurementControllerRef.current = controller;
-    // Seed the HUD with an empty snapshot.
     setMeasurementSnapshot(controller.snapshot());
     return () => {
       controller.dispose();
       measurementControllerRef.current = null;
       setMeasurementSnapshot(null);
+      setMeasurementTip(null);
       // Reset store mode so the next mount does not inherit measurement clicks.
       useStore.getState().setMeasurementMode('off');
     };
@@ -1518,6 +1540,7 @@ export default function ViewerPanel({
     if (!controller) return;
     clearanceFirstTriangleRef.current = null;
     controller.setMode(measurementMode);
+    if (measurementMode === 'off') setMeasurementTip(null);
   }, [measurementMode]);
 
   // B5 mount point: wall drawing tool (Edit mode). ViewerPanel only owns the
@@ -1526,6 +1549,7 @@ export default function ViewerPanel({
   const wallDrawControllerRef = useRef<WallDrawController | null>(null);
   const [wallDrawController, setWallDrawController] = useState<WallDrawController | null>(null);
   useEffect(() => {
+    if (!STRUCTURAL_EDIT_ENABLED) return;
     if (!viewerReady || !viewerRef.current || !editModeAvailable || !editMode) return;
     const { world } = viewerRef.current;
     const controller = new WallDrawController({
@@ -1557,11 +1581,20 @@ export default function ViewerPanel({
   }, [pickPlaneMode]);
 
   // Escape cancels pending measurement points, then exits the tool.
+  // Enter closes an area polygon once it has three or more vertices.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
       const ctrl = measurementControllerRef.current;
       if (!ctrl || ctrl.getMode() === 'off') return;
+      if (e.key === 'Enter') {
+        const snap = ctrl.snapshot();
+        if (snap.mode === 'area' && snap.pending.length >= 3) {
+          e.stopPropagation();
+          ctrl.commit();
+        }
+        return;
+      }
+      if (e.key !== 'Escape') return;
       const snap = ctrl.snapshot();
       if (snap.pending.length > 0) {
         e.stopPropagation();
@@ -2186,6 +2219,17 @@ export default function ViewerPanel({
       expressId: number;
       localId: number;
     } | null>) | null = null;
+    let devSnapAtHook: ((x: number, y: number, thresholdPx?: number) => Promise<{
+      hitClasses: string[];
+      edgeHits: number;
+      snap: {
+        kind: string;
+        source: string;
+        exact: boolean;
+        distancePx: number;
+        point: { x: number; y: number; z: number };
+      } | null;
+    }>) | null = null;
     let hoverIntentTimer: number | null = null;
     let globalSlowTimer: number | null = null;
     // Unsubscribe for the viewer-performance-mode listener.
@@ -4947,23 +4991,106 @@ export default function ViewerPanel({
         // down/up so that drag-orbits don't clear the selection: a real
         // click is defined as <= 4 px movement between down and up.
         const canvas = world.renderer!.three.domElement;
-        const constructionSnapAt = (
-          hit: FragmentRaycastHit,
+
+        /**
+         * Engine snap features around the cursor: a screen-space frustum cast
+         * against the model's real point/line primitives, so edges and corners
+         * resolve from anywhere on a large face. FACE is not requested; the
+         * plain raycast already supplies the surface point.
+         */
+        const snapRaycast = async (
+          camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
+          clientX: number,
+          clientY: number,
+        ): Promise<EngineSnapHit[]> => {
+          try {
+            const hits = await model.raycastWithSnapping({
+              camera,
+              mouse: new THREE.Vector2(clientX, clientY),
+              dom: canvas,
+              snappingClasses: [FRAGS.SnappingClass.POINT, FRAGS.SnappingClass.LINE],
+            });
+            if (!hits) return [];
+            return hits.flatMap((hit) => {
+              const cls = hit.snappingClass === FRAGS.SnappingClass.POINT
+                ? 'point' as const
+                : hit.snappingClass === FRAGS.SnappingClass.LINE
+                  ? 'line' as const
+                  : null;
+              if (!cls || !hit.point) return [];
+              return [{
+                snappingClass: cls,
+                point: new THREE.Vector3(hit.point.x, hit.point.y, hit.point.z),
+                ...(hit.snappedEdgeP1 ? { edgeStart: hit.snappedEdgeP1.clone() } : {}),
+                ...(hit.snappedEdgeP2 ? { edgeEnd: hit.snappedEdgeP2.clone() } : {}),
+              }];
+            });
+          } catch {
+            // Snapping is an enhancement - a failed cast must never block the
+            // measurement, it just falls back to the raw surface point.
+            return [];
+          }
+        };
+
+        /**
+         * Rank engine features and measurement endpoints in one pixel-space
+         * pool. The 8 px priority window makes corners sticky over the edge
+         * through them. thresholdPx mainly gates the endpoint anchors; the
+         * engine's own frustum is ~10 px (phase5-measure-snap.spec.ts).
+         */
+        const resolveSnapAt = (
+          engineHits: readonly EngineSnapHit[],
           clientX: number,
           clientY: number,
           camera: THREE.Camera,
-          thresholdPx = 20,
+          thresholdPx: number,
         ): ConstructionSnapCandidate | null => {
           const rect = canvas.getBoundingClientRect();
-          return snapToTriangleFeatures(
-            hit.facePoints,
-            new THREE.Vector2(clientX - rect.left, clientY - rect.top),
-            camera,
-            canvas.clientWidth,
-            canvas.clientHeight,
-            thresholdPx,
-          );
+          const cursorPx = new THREE.Vector2(clientX - rect.left, clientY - rect.top);
+          const width = canvas.clientWidth;
+          const height = canvas.clientHeight;
+          const anchors = measurementControllerRef.current?.getSnapAnchors() ?? [];
+          const candidates = [
+            ...engineSnapCandidates(engineHits, cursorPx, camera, width, height),
+            ...anchorSnapCandidates(anchors, cursorPx, camera, width, height),
+          ];
+          return selectBestSnapCandidate(candidates, thresholdPx, 8);
         };
+
+        /** Snap resolved on the last hover, reused by the click that follows
+         *  so the committed point is the one the preview promised. Camera
+         *  matrices are stamped because a wheel-zoom moves the camera without
+         *  moving the pointer, which would stale the resolution. */
+        let lastSnapResolve: {
+          clientX: number;
+          clientY: number;
+          candidate: ConstructionSnapCandidate | null;
+          cameraWorld: THREE.Matrix4;
+          projection: THREE.Matrix4;
+        } | null = null;
+
+        // Cursor-following readout while measuring. Writes to the tip bridge,
+        // never React state, so per-move updates cost one leaf re-render.
+        const updateMeasureTip = (clientX: number, clientY: number) => {
+          const ctrl = measurementControllerRef.current;
+          if (!ctrl || ctrl.getMode() === 'off') {
+            setMeasurementTip(null);
+            return;
+          }
+          const content = buildMeasurementTip(
+            ctrl.liveReadout(),
+            useStore.getState().measurement.unit,
+          );
+          if (!content) {
+            setMeasurementTip(null);
+            return;
+          }
+          const rect = canvas.getBoundingClientRect();
+          const x = Math.min(Math.max(clientX - rect.left + 16, 4), rect.width - 170);
+          const y = Math.min(Math.max(clientY - rect.top + 22, 4), rect.height - 60);
+          setMeasurementTip({ x, y, ...content });
+        };
+
         const hitTriangle = (hit: FragmentRaycastHit): Triangle3 | null => {
           if (!hit.facePoints || hit.facePoints.length < 9) return null;
           const points = facePointsToVec3(hit.facePoints);
@@ -5068,6 +5195,28 @@ export default function ViewerPanel({
             };
           };
           (window as any).__ifcPickAt = devPickAtHook;
+          // Companion probe for the measurement-snap regression: reports what
+          // the engine's snapping raycast actually found at a pixel, plus the
+          // feature the screen-space resolver picked out of it.
+          devSnapAtHook = async (x: number, y: number, thresholdPx = 20) => {
+            const cam = world.camera.three as THREE.PerspectiveCamera | THREE.OrthographicCamera;
+            const hits = await snapRaycast(cam, x, y);
+            const best = resolveSnapAt(hits, x, y, cam, thresholdPx);
+            return {
+              hitClasses: hits.map((h) => h.snappingClass),
+              edgeHits: hits.filter((h) => h.edgeStart && h.edgeEnd).length,
+              snap: best
+                ? {
+                  kind: best.kind,
+                  source: best.source,
+                  exact: best.exact,
+                  distancePx: best.distancePx,
+                  point: { x: best.point.x, y: best.point.y, z: best.point.z },
+                }
+                : null,
+            };
+          };
+          (window as any).__ifcSnapAt = devSnapAtHook;
         }
 
         const prefetchClickPick = (pt: { x: number; y: number }) => {
@@ -5288,19 +5437,42 @@ export default function ViewerPanel({
             // predictable and mirrors most BIM viewers).
             const measurementController = measurementControllerRef.current;
             if (measurementController && measurementController.getMode() !== 'off') {
-              if (result?.point) {
-                const camera = world.camera.three as THREE.Camera;
-                const candidate = constructionSnapAt(
-                  result,
+              const camera = world.camera.three as THREE.PerspectiveCamera | THREE.OrthographicCamera;
+              const thresholdPx = event.pointerType === 'touch' ? 28 : 20;
+              // Clearance solves between the two picked triangles, so it needs a
+              // real surface hit. A snap-only resolution (edge just off the
+              // silhouette, where the ray misses) carries no face: accepting it
+              // would record no first triangle and silently downgrade the
+              // clearance to a plain point-to-point line still labelled
+              // "clearance". Treat it as a void click instead.
+              if (measurementController.getMode() === 'clearance' && !result?.point) return;
+              // Reuse the hover-resolved snap when neither the pointer nor the
+              // camera has moved: it guarantees the committed point IS the
+              // previewed one, and costs no round-trip. Touch never hovers, so
+              // it resolves fresh.
+              const reusable = lastSnapResolve
+                && Math.abs(lastSnapResolve.clientX - event.clientX) <= 2
+                && Math.abs(lastSnapResolve.clientY - event.clientY) <= 2
+                && lastSnapResolve.cameraWorld.equals(camera.matrixWorld)
+                && lastSnapResolve.projection.equals(camera.projectionMatrix);
+              const candidate = reusable
+                ? lastSnapResolve!.candidate
+                : resolveSnapAt(
+                  await snapRaycast(camera, event.clientX, event.clientY),
                   event.clientX,
                   event.clientY,
                   camera,
-                  event.pointerType === 'touch' ? 28 : 20,
+                  thresholdPx,
                 );
-                const normal = result.normal ? result.normal.clone() : null;
+              if (disposed || requestGeneration !== clickPickGeneration) return;
+              if (result?.point || candidate) {
+                const normal = result?.normal ? result.normal.clone() : null;
+                const hitPoint = result?.point
+                  ? new THREE.Vector3(result.point.x, result.point.y, result.point.z)
+                  : candidate!.point.clone();
                 if (measurementController.getMode() === 'clearance') {
                   const pendingBefore = measurementController.snapshot().pending.length;
-                  const triangle = hitTriangle(result);
+                  const triangle = result ? hitTriangle(result) : null;
                   const firstTriangle = clearanceFirstTriangleRef.current;
                   if (pendingBefore > 0 && firstTriangle && triangle) {
                     const witness = shortestDistanceBetweenTriangles(firstTriangle, triangle);
@@ -5317,15 +5489,17 @@ export default function ViewerPanel({
                     );
                     clearanceFirstTriangleRef.current = null;
                   } else {
-                    measurementController.handleClick(result.point.clone(), normal, candidate);
+                    measurementController.handleClick(hitPoint, normal, candidate);
                     const pendingAfter = measurementController.snapshot().pending.length;
                     clearanceFirstTriangleRef.current = pendingAfter > 0
                       ? (firstTriangle ?? triangle)
                       : null;
                   }
                 } else {
-                  measurementController.handleClick(result.point.clone(), normal, candidate);
+                  measurementController.handleClick(hitPoint, normal, candidate);
                 }
+                updateMeasureTip(event.clientX, event.clientY);
+                requestViewerRender(80);
               }
               return;
             }
@@ -5510,9 +5684,13 @@ export default function ViewerPanel({
           const mouse2 = new THREE.Vector2(pt.x, pt.y);
           try {
             const cam = world.camera.three as THREE.PerspectiveCamera | THREE.OrthographicCamera;
-            const result = await trackRaycast(
-              model.raycast({ camera: cam, mouse: mouse2, dom: canvas }),
-            );
+            // While measuring, resolve snap features alongside the surface hit.
+            // Issued in parallel so snapping costs no extra round-trip, and only
+            // while the ruler is armed - normal navigation is untouched.
+            const [result, engineHits] = await Promise.all([
+              trackRaycast(model.raycast({ camera: cam, mouse: mouse2, dom: canvas })),
+              measuring ? snapRaycast(cam, pt.x, pt.y) : Promise.resolve([] as EngineSnapHit[]),
+            ]);
             // Stale: a newer pointermove fired while we were awaiting.
             if (myGen !== hoverGenRef.current) return;
 
@@ -5543,18 +5721,32 @@ export default function ViewerPanel({
             }
 
             if (ctrl && measuring) {
+              // Match the click tolerance per pointer type (28 px touch,
+              // 20 px mouse) so the preview never promises a snap the
+              // committed point cannot reproduce - and vice versa.
+              const thresholdPx = pt.isTouch ? 28 : 20;
+              const snap = resolveSnapAt(engineHits, pt.x, pt.y, cam, thresholdPx);
+              lastSnapResolve = {
+                clientX: pt.x,
+                clientY: pt.y,
+                candidate: snap,
+                cameraWorld: cam.matrixWorld.clone(),
+                projection: cam.projectionMatrix.clone(),
+              };
               if (result?.point) {
                 const worldPt = new THREE.Vector3(result.point.x, result.point.y, result.point.z);
-                // Match the click tolerance per pointer type (28 px touch,
-                // 20 px mouse) so the preview never promises a snap the
-                // committed point cannot reproduce - and vice versa.
-                const constructionSnap = constructionSnapAt(
-                  result, pt.x, pt.y, cam, pt.isTouch ? 28 : 20,
-                );
-                ctrl.handleMove(worldPt, constructionSnap);
+                ctrl.handleMove(worldPt, snap);
+              } else if (snap) {
+                // Snapping casts a frustum, not a ray, so an edge just off the
+                // silhouette still resolves when the surface raycast misses.
+                ctrl.handleMove(snap.point.clone(), snap);
               } else {
                 ctrl.handleMove(null);
               }
+              updateMeasureTip(pt.x, pt.y);
+              // Preview geometry changed: on-demand rendering needs a kick, and
+              // hovering holds no pointer button so the input kick never fires.
+              requestViewerRender(80);
             }
 
             if (hoverOn && !measuring) {
@@ -5662,6 +5854,7 @@ export default function ViewerPanel({
             moveRafHandle = 0;
           }
           clearHoverTooltip();
+          setMeasurementTip(null);
           const prevHoverLocal = hoveredLocalIdRef.current;
           const prevHoverExpress = hoveredExpressIdRef.current;
           if (prevHoverLocal === null) return;
@@ -5758,11 +5951,20 @@ export default function ViewerPanel({
           });
         };
 
+        // Double-click closes an area polygon. The second click of the pair is
+        // absorbed by the duplicate-click guard, so this only commits.
+        const onDoubleClick = () => {
+          const ctrl = measurementControllerRef.current;
+          if (!ctrl || ctrl.getMode() !== 'area') return;
+          if (ctrl.snapshot().pending.length >= 3) ctrl.commit();
+        };
+
         canvas.addEventListener('pointerdown', onPointerDown);
         canvas.addEventListener('pointerup', onPointerUp);
         canvas.addEventListener('pointermove', onPointerMove);
         canvas.addEventListener('pointerleave', onPointerLeave);
         canvas.addEventListener('contextmenu', onCanvasContextMenu);
+        canvas.addEventListener('dblclick', onDoubleClick);
         canvas.style.cursor = 'default';
 
         // Dispose the storey[0] sub-model now that the full model is loaded.
@@ -6008,6 +6210,9 @@ export default function ViewerPanel({
       contextMenuPickGuard.dispose();
       if (import.meta.env.DEV && (window as any).__ifcPickAt === devPickAtHook) {
         delete (window as any).__ifcPickAt;
+      }
+      if (import.meta.env.DEV && (window as any).__ifcSnapAt === devSnapAtHook) {
+        delete (window as any).__ifcSnapAt;
       }
       const coordinatorShutdown = renderStateCoordinatorRef.current?.shutdown()
         ?? renderStateShutdownRef.current
@@ -7008,6 +7213,21 @@ export default function ViewerPanel({
         </div>
       )}
       {viewerReady && !BROWSER_ONLY && <FloatingChatDock />}
+      {/* Bottom-right row. The applied-filters control needs the measurement
+          controller (it lives in a ref here, not the store), so it mounts from
+          ViewerPanel rather than App. */}
+      {viewerReady && (
+        <div className="viewer-br-row">
+          <ViewerResetControl
+            measurementCount={measurementSnapshot?.committed.length ?? 0}
+            onClearMeasurements={() => {
+              clearanceFirstTriangleRef.current = null;
+              measurementControllerRef.current?.clear();
+            }}
+          />
+          {!BROWSER_ONLY && <FloatingChatPill />}
+        </div>
+      )}
       <HighlightBadge />
       {viewerReady && <SelectionSummaryChip />}
       {/* Bottom-center tool row: nav/visibility pill + ghost-mode toggle
@@ -7067,6 +7287,7 @@ export default function ViewerPanel({
       )}
       {/* Element name tooltip on hover - leaf component fed by hoverTooltipBridge */}
       <ViewerHoverTooltip />
+      <MeasurementCursorTip />
       {/* Touch-friendly zoom controls (+/- buttons) */}
       {viewerReady && (
         <div className="viewer-zoom-controls" aria-label="Zoom controls">
@@ -7108,7 +7329,6 @@ export default function ViewerPanel({
           clearanceFirstTriangleRef.current = null;
           measurementControllerRef.current?.clear();
         }}
-        onRemove={(id) => measurementControllerRef.current?.remove(id)}
       />
       <MeasurementLabels
         snapshot={measurementSnapshot}

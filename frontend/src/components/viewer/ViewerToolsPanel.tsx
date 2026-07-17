@@ -410,10 +410,13 @@ export default function ViewerToolsPanel() {
         )}
 
         {/* ── Section planes ── */}
-        <VtpSection id="sections" label="Sections" defaultOpen={enabledPlanes.length > 0} icon={<Icon name="section" size={13} />}>
+        <VtpSection id="sections" label="Section planes" defaultOpen={enabledPlanes.length > 0} icon={<Icon name="section" size={13} />}>
+          <p className="vtp-section-desc">
+            Slice the model along an axis to look inside. Drag the slider to move the cut.
+          </p>
           <div className="vtp-section-actions">
             {enabledPlanes.length < MAX_CLIP_PLANES && (
-              <button className="vtp-action-btn" onClick={addClipPlane} title={`Add section plane (max ${MAX_CLIP_PLANES})`}>
+              <button className="vtp-action-btn" onClick={addClipPlane} title={`Add a section plane (up to ${MAX_CLIP_PLANES})`}>
                 <Icon name="plus" size={11} />
                 Add plane
               </button>
@@ -423,7 +426,10 @@ export default function ViewerToolsPanel() {
             )}
           </div>
           {enabledPlanes.length === 0 && (
-            <p className="vtp-empty">No section planes active. Press <kbd>X</kbd> or use Add plane.</p>
+            <p className="vtp-empty">
+              No planes yet. Click Add plane, press <kbd>X</kbd>, or <kbd>Shift+X</kbd> then
+              click a surface to cut along it.
+            </p>
           )}
           {enabledPlanes.map((plane, i) => (
             <ClipPlaneRow key={plane.id} plane={plane} index={i} />
@@ -431,16 +437,20 @@ export default function ViewerToolsPanel() {
         </VtpSection>
 
         {/* ── Section box ── */}
-        <VtpSection id="sectionbox" label="Section Box" defaultOpen={sectionBoxEnabled} icon={<Icon name="box" size={13} />}>
+        <VtpSection id="sectionbox" label="Section box" defaultOpen={sectionBoxEnabled} icon={<Icon name="box" size={13} />}>
+          <p className="vtp-section-desc">
+            Hides everything outside a crop box, so you can inspect one room, floor,
+            or element without the rest of the building in the way.
+          </p>
           <div className="vtp-section-actions">
             <button
               className={`vtp-action-btn${sectionBoxEnabled ? ' active' : ''}`}
               onClick={toggleSectionBox}
               aria-pressed={sectionBoxEnabled}
-              title={sectionBoxEnabled ? 'Disable AABB crop (Alt+B)' : 'Enable AABB crop fitted to model bounds (Alt+B)'}
+              title={sectionBoxEnabled ? 'Turn the crop box off (Alt+B)' : 'Turn the crop box on (Alt+B)'}
             >
               <Icon name={sectionBoxEnabled ? 'eye-off' : 'box'} size={11} />
-              {sectionBoxEnabled ? 'Disable' : 'Enable'}
+              {sectionBoxEnabled ? 'Turn off' : 'Turn on'}
             </button>
             <button
               className="vtp-action-btn"
@@ -456,19 +466,15 @@ export default function ViewerToolsPanel() {
                 || (selectedIds.length > 0 ? !clipToElementsFn : !clipToElementFn)
               }
               title={
-                selectedIds.length > 0 && !clipToElementsFn
-                  ? 'Load a model first'
-                  : selectedIds.length === 0 && !clipToElementFn
-                  ? 'Load a model first'
-                  : sectionSelectionIds.length === 0
-                  ? 'Select an element first'
+                sectionSelectionIds.length === 0
+                  ? 'Select an element first, then shrink the box around it'
                   : sectionSelectionIds.length > 1
-                  ? `Fit one section box around ${sectionSelectionIds.length} selected elements`
-                  : `Clip section box to element #${sectionSelectionIds[0]}`
+                  ? `Shrink the box around the ${sectionSelectionIds.length} selected elements`
+                  : 'Shrink the box around the selected element'
               }
             >
               <Icon name="crop" size={11} />
-              Clip to selection
+              Box around selection
             </button>
             <button
               className="vtp-action-btn"
@@ -476,20 +482,16 @@ export default function ViewerToolsPanel() {
                 setSectionWorkspace(null);
                 setSectionBoxEnabled(true);
               }}
-              title="Reset the section box to full model bounds"
+              title="Grow the box back to the whole model"
             >
               <Icon name="maximize" size={11} />
-              Fit model
+              Whole model
             </button>
           </div>
-          {sectionBoxEnabled ? (
+          {sectionBoxEnabled && (
             <p className="vtp-empty" style={{ marginTop: 4 }}>
-              {sectionWorkspace?.name ?? 'Full model section box'} active.
-              {' '}Use <kbd>Alt+B</kbd> to toggle off without losing its bounds.
-            </p>
-          ) : (
-            <p className="vtp-empty">
-              Crops the model to an axis-aligned bounding box. Press <kbd>Alt+B</kbd> or click Enable.
+              {sectionWorkspace?.name ?? 'Full model section box'} active. <kbd>Alt+B</kbd> toggles
+              it off without losing its size.
             </p>
           )}
         </VtpSection>
@@ -544,8 +546,9 @@ export default function ViewerToolsPanel() {
           </div>
           {mode !== 'off' && (
             <div className="vtp-measure-hint">
-              Click surfaces in the 3D view to place points.
-              {mode === 'area' && ' Use Finish in the readout bar to close the polygon.'}
+              Click surfaces in the 3D view to place points. The live value follows
+              your cursor.
+              {mode === 'area' && ' Press Enter or double-click to close the polygon.'}
               {mode === 'height' && ' Height follows the project Y axis.'}
               {mode === 'clearance' && ' Snap to both witness targets for an exact result.'}
               {mode === 'position' && ' One click places a persistent coordinate marker.'}

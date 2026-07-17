@@ -57,7 +57,7 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { key: 'Shift+F', label: 'Shift+F', description: 'Element property filter panel', category: 'Panels' },
   { key: 'Shift+S', label: 'Shift+S', description: 'Model statistics panel', category: 'Panels' },
   // Measurement
-  { key: 'r', label: 'R', description: 'Toggle measurement panel', category: 'Measurement' },
+  { key: 'r', label: 'R', description: 'Start or stop measuring', category: 'Measurement' },
   { key: 'n', label: 'N', description: 'Toggle angle measurement mode', category: 'Measurement' },
   { key: 'l', label: 'L', description: 'Toggle measurement labels (while measurements exist; otherwise focuses activity log)', category: 'Measurement' },
   // Capture

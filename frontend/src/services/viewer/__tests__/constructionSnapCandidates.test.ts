@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 
 import {
+  anchorSnapCandidates,
   axisSnapCandidate,
   boundsAxisSnapCandidates,
   circumcircleFromThreePoints,
   closestScreenPointOnWorldSegment,
+  engineSnapCandidates,
   faceNormalAxisSnapCandidate,
   projectWorldPoint,
   roundCenterSnapCandidate,
@@ -13,6 +15,7 @@ import {
   snapToTriangleFeatures,
   triangleSnapCandidates,
   type ConstructionSnapCandidate,
+  type EngineSnapHit,
 } from '../constructionSnapCandidates';
 
 const WIDTH = 800;
@@ -276,5 +279,197 @@ describe('axis and round-center candidate sources', () => {
       source: 'inferred-round',
       exact: false,
     });
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Engine-sourced snaps. These come from the fragments worker's snapping
+// raycast, which searches a screen-space frustum against the model's real
+// point/line primitives - so unlike triangleSnapCandidates they are not
+// limited to the corners of the one triangle under the cursor.
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('engine snap candidates', () => {
+  // Ortho camera: world (x, y) maps to screen (400 + x, 300 - y).
+  const edgeHit = (start: THREE.Vector3, end: THREE.Vector3, point: THREE.Vector3): EngineSnapHit => ({
+    snappingClass: 'line',
+    point,
+    edgeStart: start,
+    edgeEnd: end,
+  });
+
+  it('turns a point hit into an exact vertex candidate', () => {
+    const candidates = engineSnapCandidates(
+      [{ snappingClass: 'point', point: v(10, 0, 0) }],
+      new THREE.Vector2(410, 300),
+      makeOrthoCamera(),
+      WIDTH,
+      HEIGHT,
+    );
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({ kind: 'vertex', source: 'engine-point', exact: true });
+    expect(candidates[0].distancePx).toBeCloseTo(0, 5);
+  });
+
+  it('derives edge, midpoint and both endpoints from one line hit', () => {
+    const candidates = engineSnapCandidates(
+      [edgeHit(v(-100, 0, 0), v(100, 0, 0), v(0, 0, 0))],
+      new THREE.Vector2(400, 300),
+      makeOrthoCamera(),
+      WIDTH,
+      HEIGHT,
+    );
+    expect(candidates.map((c) => c.kind).sort()).toEqual(['edge', 'midpoint', 'vertex', 'vertex']);
+    expect(candidates.every((c) => c.exact && c.source === 'engine-line')).toBe(true);
+  });
+
+  it('ignores face hits - the face point is the cursor itself, not a feature', () => {
+    // A face point projects ~0 px from the cursor, so admitting it as a
+    // candidate would let it beat every real snap feature.
+    expect(engineSnapCandidates(
+      [{ snappingClass: 'face', point: v(0, 0, 0) }],
+      new THREE.Vector2(400, 300),
+      makeOrthoCamera(),
+      WIDTH,
+      HEIGHT,
+    )).toEqual([]);
+  });
+
+  it('falls back to an edge candidate when a line hit reports no edge', () => {
+    const candidates = engineSnapCandidates(
+      [{ snappingClass: 'line', point: v(0, 0, 0) }],
+      new THREE.Vector2(400, 300),
+      makeOrthoCamera(),
+      WIDTH,
+      HEIGHT,
+    );
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].kind).toBe('edge');
+  });
+
+  it('snaps to a wall edge from mid-face, where triangle snapping cannot', () => {
+    // The regression that made measuring feel broken: on a large face the hit
+    // triangle's corners are far outside tolerance, so nothing snapped at all.
+    // The engine reports the nearby edge regardless of where the ray landed.
+    // Cursor sits 4 px off the edge and ~50 px down it, clear of the midpoint.
+    const camera = makeOrthoCamera();
+    const best = selectBestSnapCandidate(
+      engineSnapCandidates(
+        [edgeHit(v(0, -100, 0), v(0, 100, 0), v(0, -50, 0))],
+        new THREE.Vector2(404, 350),
+        camera,
+        WIDTH,
+        HEIGHT,
+      ),
+      20,
+      8,
+    );
+    expect(best?.kind).toBe('edge');
+    expect(best?.point.x).toBeCloseTo(0, 5);
+    expect(best?.point.y).toBeCloseTo(-50, 5);
+  });
+
+  it('prefers an edge midpoint over the edge when the cursor is on it', () => {
+    const camera = makeOrthoCamera();
+    const best = selectBestSnapCandidate(
+      engineSnapCandidates(
+        [edgeHit(v(0, -100, 0), v(0, 100, 0), v(0, 0, 0))],
+        new THREE.Vector2(404, 300),
+        camera,
+        WIDTH,
+        HEIGHT,
+      ),
+      20,
+      8,
+    );
+    expect(best?.kind).toBe('midpoint');
+    expectVector(best!.point, v(0, 0, 0));
+  });
+
+  it('prefers a vertex over the edge running through it within the priority window', () => {
+    // Sticky corners: hovering 5 px from an endpoint should latch the endpoint,
+    // even though the edge itself is 0 px away.
+    const camera = makeOrthoCamera();
+    const best = selectBestSnapCandidate(
+      engineSnapCandidates(
+        [edgeHit(v(-100, 0, 0), v(100, 0, 0), v(95, 0, 0))],
+        new THREE.Vector2(495, 300),
+        camera,
+        WIDTH,
+        HEIGHT,
+      ),
+      20,
+      8,
+    );
+    expect(best?.kind).toBe('vertex');
+    expect(best?.point.x).toBeCloseTo(100, 5);
+  });
+
+  it('keeps the edge when every point feature is outside the priority window', () => {
+    // 2 px off the edge, but ~50 px from the midpoint and from both endpoints.
+    const camera = makeOrthoCamera();
+    const best = selectBestSnapCandidate(
+      engineSnapCandidates(
+        [edgeHit(v(-100, 0, 0), v(100, 0, 0), v(50, 0, 0))],
+        new THREE.Vector2(450, 302),
+        camera,
+        WIDTH,
+        HEIGHT,
+      ),
+      20,
+      8,
+    );
+    expect(best?.kind).toBe('edge');
+    expect(best?.point.x).toBeCloseTo(50, 5);
+  });
+});
+
+describe('measurement endpoint anchors', () => {
+  it('ranks endpoints above raw geometry at comparable screen distance', () => {
+    // Chaining dimensions must stay exact: an endpoint and a vertex a couple of
+    // pixels apart should resolve to the endpoint.
+    const camera = makeOrthoCamera();
+    const cursor = new THREE.Vector2(400, 300);
+    const best = selectBestSnapCandidate(
+      [
+        ...engineSnapCandidates(
+          [{ snappingClass: 'point', point: v(1, 0, 0) }],
+          cursor, camera, WIDTH, HEIGHT,
+        ),
+        ...anchorSnapCandidates([v(-2, 0, 0)], cursor, camera, WIDTH, HEIGHT),
+      ],
+      20,
+      8,
+    );
+    expect(best).toMatchObject({ kind: 'endpoint', source: 'measurement-endpoint', exact: true });
+  });
+
+  it('does not let a far endpoint steal a vertex under the cursor', () => {
+    // The old world-space rule snapped to any endpoint within 10 cm regardless
+    // of zoom, so a distant endpoint beat an exact vertex on the pixel.
+    const camera = makeOrthoCamera();
+    const cursor = new THREE.Vector2(400, 300);
+    const best = selectBestSnapCandidate(
+      [
+        ...engineSnapCandidates(
+          [{ snappingClass: 'point', point: v(0, 0, 0) }],
+          cursor, camera, WIDTH, HEIGHT,
+        ),
+        ...anchorSnapCandidates([v(15, 0, 0)], cursor, camera, WIDTH, HEIGHT),
+      ],
+      20,
+      8,
+    );
+    expect(best?.kind).toBe('vertex');
+  });
+
+  it('drops endpoints outside the pixel tolerance entirely', () => {
+    const camera = makeOrthoCamera();
+    const cursor = new THREE.Vector2(400, 300);
+    expect(selectBestSnapCandidate(
+      anchorSnapCandidates([v(200, 0, 0)], cursor, camera, WIDTH, HEIGHT),
+      20,
+      8,
+    )).toBeNull();
   });
 });

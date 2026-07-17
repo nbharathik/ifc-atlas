@@ -141,7 +141,7 @@ export default function MeasurementPanel({ measurements, unit, onRemove, onClear
           )}
           <button
             onClick={() => useStore.getState().setMeasurementPanelOpen(false)}
-            title="Close (R)"
+            title="Close"
             style={{
               background: 'none',
               border: 'none',
@@ -263,7 +263,7 @@ export default function MeasurementPanel({ measurements, unit, onRemove, onClear
           flexShrink: 0,
         }}
       >
-        Press <kbd style={{ fontFamily: 'monospace', fontSize: '10px' }}>R</kbd> to toggle
+        Remove entries with their x button. Toggle this list from the measure toolbar.
       </div>
     </div>
   );

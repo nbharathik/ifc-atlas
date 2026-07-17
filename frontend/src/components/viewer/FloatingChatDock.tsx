@@ -2,10 +2,40 @@ import { useStore } from '../../store/useStore';
 import ChatPanel from '../chat/ChatPanel';
 import Icon from '../ui/Icon';
 
+/**
+ * The minimised "Ask AI" pill. Split out from the expanded dock below so it can
+ * sit as a flex child of the bottom-right row (next to ViewerResetControl),
+ * while the dock stays absolutely positioned against the viewer. Rendering both
+ * from one component would force the dock to anchor to the row instead.
+ */
+export function FloatingChatPill() {
+  const chatLoading = useStore((s) => s.chatLoading);
+  const rightSidebarOpen = useStore((s) => s.rightSidebarOpen);
+  const rightActiveTab = useStore((s) => s.rightActiveTab);
+  const minimized = useStore((s) => s.floatingChatMinimized);
+  const setMinimized = useStore((s) => s.setFloatingChatMinimized);
+
+  const sidebarChatActive = rightSidebarOpen && rightActiveTab === 'chat';
+  if (sidebarChatActive || !minimized) return null;
+
+  return (
+    <button
+      className="floating-chat-pill"
+      onClick={() => setMinimized(false)}
+      title="Open AI chat  Ctrl+/"
+      aria-label="Open AI chat"
+    >
+      <Icon name="sparkle" size={13} />
+      <span className="floating-chat-pill-label">Ask AI</span>
+      <kbd className="floating-chat-pill-kbd">Ctrl /</kbd>
+      {chatLoading && <span className="floating-chat-pill-dot" aria-hidden="true" />}
+    </button>
+  );
+}
+
 export default function FloatingChatDock() {
   const chatProvider = useStore((s) => s.chatProvider);
   const chatModel = useStore((s) => s.chatModel);
-  const chatLoading = useStore((s) => s.chatLoading);
   const clearChat = useStore((s) => s.clearChat);
   const focusRightTab = useStore((s) => s.focusRightTab);
   const rightSidebarOpen = useStore((s) => s.rightSidebarOpen);
@@ -14,23 +44,7 @@ export default function FloatingChatDock() {
   const setMinimized = useStore((s) => s.setFloatingChatMinimized);
 
   const sidebarChatActive = rightSidebarOpen && rightActiveTab === 'chat';
-  if (sidebarChatActive) return null;
-
-  if (minimized) {
-    return (
-      <button
-        className="floating-chat-pill"
-        onClick={() => setMinimized(false)}
-        title="Open AI chat  Ctrl+/"
-        aria-label="Open AI chat"
-      >
-        <Icon name="sparkle" size={13} />
-        <span className="floating-chat-pill-label">Ask AI</span>
-        <kbd className="floating-chat-pill-kbd">Ctrl /</kbd>
-        {chatLoading && <span className="floating-chat-pill-dot" aria-hidden="true" />}
-      </button>
-    );
-  }
+  if (sidebarChatActive || minimized) return null;
 
   const providerLabel = chatProvider === 'openai' ? 'GPT' : 'Claude';
   const modelLabel = chatModel.replace(/^claude-/, '').replace(/-(\d{8})$/, '');

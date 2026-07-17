@@ -57,7 +57,7 @@ Press **`?`** anywhere in the viewer to open the interactive shortcut overlay. S
 | `C` | Focus the AI Chat tab |
 | `B` | Focus the Viewpoints tab |
 | `L` | Focus the Activity Log tab |
-| `R` | Toggle the Measurement history panel |
+| `R` | Start or stop measuring |
 | `M` | Toggle the Performance HUD |
 | `Shift+M` | Toggle the Performance Dashboard |
 | `Shift+Q` | Toggle the Model Health panel |
@@ -79,10 +79,10 @@ Start a measurement from the toolbar ruler icon, the command palette, or the sho
 | Key | Action |
 |---|---|
 | Click | Add a vertex point |
-| Double-click / Enter | Commit a linear or polygon measurement |
-| `R` | Toggle the measurement history panel |
+| Double-click / `Enter` | Close a polygon area measurement |
+| `R` | Start or stop measuring (distance tool) |
 | `N` | Toggle angle-measurement mode (vertex → arm 1 → arm 2) |
-| `Esc` | Cancel a pending measurement |
+| `Esc` | Cancel the pending points, then exit the tool |
 
 ---
 

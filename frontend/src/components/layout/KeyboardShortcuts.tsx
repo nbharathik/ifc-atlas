@@ -63,8 +63,6 @@ export default function KeyboardShortcuts({
   const floatingChatMinimized = useStore((s) => s.floatingChatMinimized);
   const rightActiveTab = useStore((s) => s.rightActiveTab);
   const setFloatingChatMinimized = useStore((s) => s.setFloatingChatMinimized);
-  const measurementPanelOpen = useStore((s) => s.measurementPanelOpen);
-  const setMeasurementPanelOpen = useStore((s) => s.setMeasurementPanelOpen);
   const undoLastEdit = useStore((s) => s.undoLastEdit);
   const redoLastEdit = useStore((s) => s.redoLastEdit);
   const isUndoing = useStore((s) => s.isUndoing);
@@ -304,17 +302,17 @@ export default function KeyboardShortcuts({
           }
           break;
         case 'r':
-        case 'R':
+        case 'R': {
           e.preventDefault();
-          setMeasurementPanelOpen(!measurementPanelOpen);
+          const cur = useStore.getState().measurement.mode;
+          useStore.getState().setMeasurementMode(cur === 'off' ? 'linear' : 'off');
           break;
+        }
         case 'n':
         case 'N': {
           e.preventDefault();
           const curMode = useStore.getState().measurement.mode;
-          const nextMode = curMode === 'angle' ? 'off' : 'angle';
-          useStore.getState().setMeasurementMode(nextMode);
-          if (nextMode === 'angle') useStore.getState().setMeasurementPanelOpen(true);
+          useStore.getState().setMeasurementMode(curMode === 'angle' ? 'off' : 'angle');
           break;
         }
         case 'b':
@@ -495,7 +493,6 @@ export default function KeyboardShortcuts({
       setIsolatedIds, addHiddenIds, clearVisibility,
       setCommandPaletteOpen, setSettingsOpen, setPerfHudVisible,
       toggleClipPlane,
-      measurementPanelOpen, setMeasurementPanelOpen,
       undoLastEdit, redoLastEdit, isUndoing,
       navigateSelectionHistory,
       onCameraView, onFitModel, onScreenshot, onSaveViewpoint,

@@ -46,21 +46,18 @@ undoable.
 
 ## Draw building elements
 
-With Edit mode on, use the drawing toolbar in the viewport:
+**Not available in this release.** Geometry authoring (drawing walls, placing
+slabs, deleting elements) reloads the 3D viewer on every applied edit, which is
+too disruptive to ship outside beta, so the whole surface is turned off in the
+app: there is no drawing toolbar, no edit-scope toggle, and the AI cannot create
+or delete geometry. Editing is limited to metadata, which updates in place with
+no reload.
 
-- **Draw wall**: set height/thickness and the target storey, then click two
-  points on the storey work plane. A preview line with a live length label
-  follows the cursor; the second click creates the wall (Escape cancels).
-  Drawing stays active so you can chain walls.
-
-Walls, slabs, storeys, spatial moves, and deletions are also available to
-the AI and to API/MCP clients as operations (`create_wall`, `create_slab`,
-`create_storey`, `assign_to_storey`, `set_storey_elevation`,
-`delete_element`).
-
-After any structural change the viewer reloads the affected model
-automatically (camera preserved). Metadata edits update in place without a
-reload.
+Walls, slabs, storeys, spatial moves, and deletions remain available to
+API/MCP clients as operations (`create_wall`, `create_slab`, `create_storey`,
+`assign_to_storey`, `set_storey_elevation`, `delete_element`) - the server side
+is unchanged. Expect the in-app surface back once geometry edits stop requiring
+a full reload.
 
 ## Use AI assistance
 

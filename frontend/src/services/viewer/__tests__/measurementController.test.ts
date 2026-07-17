@@ -387,33 +387,130 @@ function makeController(): MeasurementController {
   return new MeasurementController(new THREE.Scene(), model, { onChange: () => {} });
 }
 
-describe('MeasurementController endpoint snap priority', () => {
-  it('first click commits the committed-endpoint snap the preview showed, not the external candidate', () => {
+describe('MeasurementController snap priority', () => {
+  /** Commit one measurement so its endpoints become snap anchors. */
+  function withCommittedMeasurement(): MeasurementController {
     const controller = makeController();
     controller.setMode('linear');
-
-    // Commit a first measurement so its endpoints become snap candidates.
     controller.handleClick(v(0, 0, 0));
     controller.handleClick(v(1, 0, 0));
     expect(controller.snapshot().committed).toHaveLength(1);
+    return controller;
+  }
 
-    // Hover near the committed endpoint with an external triangle-vertex
-    // candidate also in range: the preview must show the endpoint snap.
+  it('exposes pending and committed endpoints as snap anchors', () => {
+    // The viewer ranks these in screen space alongside real geometry, so they
+    // have to be reachable from outside.
+    const controller = withCommittedMeasurement();
+    const anchors = controller.getSnapAnchors();
+    expect(anchors.some((a) => a.equals(v(0, 0, 0)))).toBe(true);
+    expect(anchors.some((a) => a.equals(v(1, 0, 0)))).toBe(true);
+  });
+
+  it('defers to the caller-resolved snap instead of re-snapping in world space', () => {
+    // The caller resolves snaps in SCREEN space against geometry and our own
+    // anchors, so it already knows whether an endpoint should win. Overriding
+    // it here is what let an endpoint 10 cm away steal an exact vertex sitting
+    // under the cursor - and 10 cm is sub-pixel zoomed out, half the screen
+    // zoomed in.
+    const controller = withCommittedMeasurement();
     const candidate = {
       point: v(0.05, 0, 0.05),
       kind: 'vertex' as const,
       exact: true,
-      source: 'triangle-vertex',
+      source: 'engine-point',
+    };
+    controller.handleMove(v(0.02, 0, 0), candidate);
+    expect(controller.snapshot().snapFeedback?.kind).toBe('vertex');
+
+    controller.handleClick(v(0.02, 0, 0), null, candidate);
+    const pending = controller.snapshot().pending;
+    expect(pending).toHaveLength(1);
+    expect(pending[0].equals(v(0.05, 0, 0.05))).toBe(true);
+  });
+
+  it('still honours an endpoint when the caller ranks one as the winner', () => {
+    // Chaining dimensions and closing polygons must stay exact - the anchor
+    // just competes on screen distance now rather than trumping everything.
+    const controller = withCommittedMeasurement();
+    const candidate = {
+      point: v(0, 0, 0),
+      kind: 'endpoint' as const,
+      exact: true,
+      source: 'measurement-endpoint',
     };
     controller.handleMove(v(0.02, 0, 0), candidate);
     expect(controller.snapshot().snapFeedback?.kind).toBe('endpoint');
 
-    // The click at the same location must commit the previewed endpoint,
-    // not the supplied external candidate.
     controller.handleClick(v(0.02, 0, 0), null, candidate);
-    const pending = controller.snapshot().pending;
-    expect(pending).toHaveLength(1);
-    expect(pending[0].equals(v(0, 0, 0))).toBe(true);
+    expect(controller.snapshot().pending[0].equals(v(0, 0, 0))).toBe(true);
+  });
+
+  it('falls back to a world-space endpoint snap when the caller resolves nothing', () => {
+    const controller = withCommittedMeasurement();
+    controller.handleMove(v(0.02, 0, 0));
+    expect(controller.snapshot().snapFeedback?.kind).toBe('endpoint');
+
+    controller.handleClick(v(0.02, 0, 0));
+    expect(controller.snapshot().pending[0].equals(v(0, 0, 0))).toBe(true);
+  });
+
+  it('does not treat the in-flight start point as a snap anchor', () => {
+    // Otherwise a second click inside the (screen-space) snap radius of the
+    // first snaps back onto it, the duplicate-click guard eats the click, and
+    // a short measurement can never be placed at all.
+    const controller = makeController();
+    controller.setMode('linear');
+    controller.handleClick(v(5, 0, 0));
+    expect(controller.getSnapAnchors()).toEqual([]);
+
+    controller.handleClick(v(5.01, 0, 0));
+    expect(controller.snapshot().committed).toHaveLength(1);
+    expect(controller.snapshot().committed[0].value).toBeCloseTo(0.01, 6);
+  });
+
+  it('ignores a stale preview when the caller explicitly resolved no snap', () => {
+    // snapTarget lags the cursor whenever a hover raycast is skipped (camera
+    // settling, quality gating, coalesced moves). Inheriting it on click would
+    // commit the corner the user hovered a moment ago instead of the bare face
+    // they actually clicked.
+    const controller = withCommittedMeasurement();
+    controller.handleMove(v(0.02, 0, 0), {
+      point: v(0, 0, 0),
+      kind: 'endpoint',
+      exact: true,
+      source: 'measurement-endpoint',
+    });
+    expect(controller.snapshot().snapFeedback?.kind).toBe('endpoint');
+
+    // Cursor moved to bare geometry; the viewer resolved and found nothing.
+    controller.handleClick(v(9, 0, 9), null, null);
+    expect(controller.snapshot().pending[0].equals(v(9, 0, 9))).toBe(true);
+  });
+
+  it('does not re-snap in world space when the caller resolved nothing', () => {
+    // The committed endpoint at the origin is 2 cm away - inside the old
+    // world-metre threshold - but the caller already ranked it in screen space
+    // and rejected it, so it must not be resurrected here.
+    const controller = withCommittedMeasurement();
+    controller.handleClick(v(0.02, 0, 0), null, null);
+    expect(controller.snapshot().pending[0].equals(v(0.02, 0, 0))).toBe(true);
+  });
+
+  it('commits exactly the point the preview showed', () => {
+    // The invariant that matters to users: the dot you see is the point you get.
+    const controller = withCommittedMeasurement();
+    const candidate = {
+      point: v(0.05, 0, 0.05),
+      kind: 'vertex' as const,
+      exact: true,
+      source: 'engine-point',
+    };
+    controller.handleMove(v(0.02, 0, 0), candidate);
+    const previewed = controller.snapshot().snapFeedback?.point.clone();
+    controller.handleClick(v(0.02, 0, 0), null, candidate);
+    expect(previewed).toBeDefined();
+    expect(controller.snapshot().pending[0].equals(previewed!)).toBe(true);
   });
 });
 

@@ -1,4 +1,5 @@
 import { useStore } from '../../store/useStore';
+import { STRUCTURAL_EDIT_ENABLED } from '../../config/featureFlags';
 import Icon from '../ui/Icon';
 import type { IconName } from '../ui/Icon';
 
@@ -66,10 +67,10 @@ export default function Topbar({
   const hasHidden = isolatedIds.length > 0 || hiddenIds.length > 0;
   const isMultiSelect = selectedIds.length > 1;
 
-  const cycleMeasure = () => {
-    if (measurementMode === 'off') setMeasurementMode('linear');
-    else if (measurementMode === 'linear') setMeasurementMode('area');
-    else setMeasurementMode('off');
+  // Arm / disarm only. Tool choice belongs to the measurement toolbar's rail,
+  // which shows all seven; cycling here could only ever reach two of them.
+  const toggleMeasure = () => {
+    setMeasurementMode(measurementMode === 'off' ? 'linear' : 'off');
   };
 
   const actions: ActionSpec[] = [
@@ -101,9 +102,9 @@ export default function Topbar({
       id: 'measure',
       icon: 'ruler',
       tip: measurementMode === 'off'
-        ? 'Measure: click to start (line → area → off)'
-        : `Measure: ${measurementMode} (click to cycle)`,
-      onClick: cycleMeasure,
+        ? 'Measure (R) - pick a tool from the toolbar once armed'
+        : `Measure: ${measurementMode} - click to turn off`,
+      onClick: toggleMeasure,
       disabled: !modelLoaded,
       active: measurementMode !== 'off',
     },
@@ -235,24 +236,28 @@ export default function Topbar({
               >
                 <Icon name="redo" size={14} />
               </button>
-              {/* Edit scope: semantic (no reload) vs structural (reloads). */}
-              <div className="edit-scope-seg" role="group" aria-label="Edit scope">
-                <button
-                  className={`edit-scope-opt${editScope === 'semantic' ? ' active' : ''}`}
-                  onClick={() => setEditScope('semantic')}
-                  title="Semantic edits: names, properties, classifications. Updates the viewer in place - no reload."
-                >
-                  Semantic
-                </button>
-                <button
-                  className={`edit-scope-opt${editScope === 'structural' ? ' active' : ''}`}
-                  onClick={() => setEditScope('structural')}
-                  title="Structural edits (beta): create walls / slabs, delete elements. Reloads the 3D viewer."
-                >
-                  Structural
-                  <span className="edit-scope-beta">beta</span>
-                </button>
-              </div>
+              {/* Edit scope: semantic (no reload) vs structural (reloads).
+                  Hidden while STRUCTURAL_EDIT_ENABLED is off - the scope is
+                  pinned to semantic, so a toggle would have nothing to switch. */}
+              {STRUCTURAL_EDIT_ENABLED && (
+                <div className="edit-scope-seg" role="group" aria-label="Edit scope">
+                  <button
+                    className={`edit-scope-opt${editScope === 'semantic' ? ' active' : ''}`}
+                    onClick={() => setEditScope('semantic')}
+                    title="Semantic edits: names, properties, classifications. Updates the viewer in place - no reload."
+                  >
+                    Semantic
+                  </button>
+                  <button
+                    className={`edit-scope-opt${editScope === 'structural' ? ' active' : ''}`}
+                    onClick={() => setEditScope('structural')}
+                    title="Structural edits (beta): create walls / slabs, delete elements. Reloads the 3D viewer."
+                  >
+                    Structural
+                    <span className="edit-scope-beta">beta</span>
+                  </button>
+                </div>
+              )}
             </>
           )}
         </div>

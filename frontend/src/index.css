@@ -5162,10 +5162,9 @@ html[data-theme='light'] .floating-chat-pill-kbd {
   min-height: 0;
 }
 
+/* Positioned by .viewer-br-row, not itself - it shares that row with the
+   applied-filters control. The expanded .floating-chat-dock stays absolute. */
 .floating-chat-pill {
-  position: absolute;
-  right: 14px;
-  bottom: 14px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -5179,7 +5178,7 @@ html[data-theme='light'] .floating-chat-pill-kbd {
   letter-spacing: -0.005em;
   box-shadow: var(--shadow-md);
   cursor: pointer;
-  z-index: 40;
+  flex: none;
   transition: background 140ms ease, border-color 140ms ease, transform 100ms ease;
 }
 
@@ -5209,6 +5208,227 @@ html[data-theme='light'] .floating-chat-pill-kbd {
   border-radius: 50%;
   background: var(--acc);
   box-shadow: 0 0 5px var(--acc-glow);
+}
+
+/* ===== Bottom-right row: applied-filters control + Ask AI pill =====
+   The only collision-free band in this corner - every transient panel
+   (measurement history 60px, perf dashboard 48px, expanded chat dock 46px)
+   starts above it. */
+.viewer-br-row {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 40;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.viewer-reset {
+  position: relative;
+  display: flex;
+}
+
+.viewer-reset-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 8px 0 9px;
+  background: var(--s-2);
+  border: 1px solid var(--b-3);
+  border-radius: var(--r-lg);
+  color: var(--f-0);
+  font: 500 11.5px var(--font-ui);
+  letter-spacing: -0.005em;
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+  flex: none;
+  transition: background 140ms ease, border-color 140ms ease, transform 100ms ease;
+}
+
+.viewer-reset-pill:hover {
+  background: var(--s-3);
+  border-color: var(--acc-bord);
+  transform: translateY(-1px);
+}
+
+.viewer-reset-pill.active {
+  background: var(--acc-dim);
+  border-color: var(--acc-bord);
+  color: var(--acc);
+}
+
+html[data-theme='light'] .viewer-reset-pill {
+  background: var(--s-4);
+  border-color: var(--b-2);
+  box-shadow: var(--shadow-sm);
+  color: var(--f-0);
+}
+
+html[data-theme='light'] .viewer-reset-pill:hover {
+  background: var(--s-5);
+  border-color: var(--acc-bord);
+}
+
+.viewer-reset-pill-label {
+  line-height: 1;
+}
+
+.viewer-reset-count {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 7.5px;
+  background: var(--acc);
+  color: #fff;
+  font: 600 9.5px var(--font-ui);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.viewer-reset-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  width: 264px;
+  background: rgba(22, 23, 28, 0.82);
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  border: 1px solid var(--b-3);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+html[data-theme='light'] .viewer-reset-pop {
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.viewer-reset-pop-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 10px;
+  border-bottom: 1px solid var(--b-2);
+}
+
+.viewer-reset-pop-title {
+  flex: 1;
+  font: 600 10.5px var(--font-ui);
+  color: var(--f-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.viewer-reset-pop-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  border-radius: var(--r-sm);
+  color: var(--f-2);
+  cursor: pointer;
+}
+
+.viewer-reset-pop-close:hover {
+  background: var(--s-3);
+  color: var(--f-0);
+}
+
+.viewer-reset-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 246px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.viewer-reset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 5px 5px 6px;
+  border-radius: var(--r-sm);
+}
+
+.viewer-reset-row:hover {
+  background: var(--s-3);
+}
+
+.viewer-reset-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.viewer-reset-row-label {
+  font: 500 11.5px var(--font-ui);
+  color: var(--f-0);
+  line-height: 1.25;
+}
+
+.viewer-reset-row-detail {
+  font: 10.5px var(--font-ui);
+  color: var(--f-2);
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viewer-reset-row-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--r-sm);
+  color: var(--f-2);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.viewer-reset-row-btn:hover {
+  background: var(--danger-dim, rgba(239, 68, 68, 0.14));
+  border-color: var(--danger, #ef4444);
+  color: var(--danger, #ef4444);
+}
+
+.viewer-reset-all {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-top: 1px solid var(--b-2);
+  background: transparent;
+  color: var(--f-1);
+  font: 500 11.5px var(--font-ui);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.viewer-reset-all:hover {
+  background: var(--acc-dim);
+  color: var(--acc);
 }
 
 /* ===== Performance HUD - floating glass pill at top-right ===== */
@@ -6605,11 +6825,12 @@ html[data-theme="light"] .colour-by-dropdown {
 .measurement-toolbar {
   position: absolute;
   top: 10px;
-  right: 12px;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 6px;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 8px;
   background: rgba(22, 23, 28, 0.82);
   backdrop-filter: blur(18px) saturate(1.3);
   -webkit-backdrop-filter: blur(18px) saturate(1.3);
@@ -6618,14 +6839,28 @@ html[data-theme="light"] .colour-by-dropdown {
   box-shadow: var(--shadow-md);
   font: 500 11px/1.2 var(--font-ui);
   color: var(--f-1);
-  z-index: 6;
-  max-width: calc(100% - 32px);
-  flex-wrap: nowrap;
-  white-space: nowrap;
+  z-index: 7;
+  max-width: calc(100% - 24px);
 }
 
-.measurement-toolbar.idle {
-  opacity: 0.78;
+.measurement-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.measurement-row-status {
+  font-size: 10.5px;
+  color: var(--f-2);
+  min-height: 18px;
+}
+
+.measurement-step {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 html[data-theme="light"] .measurement-toolbar {
@@ -6634,103 +6869,56 @@ html[data-theme="light"] .measurement-toolbar {
   border-color: var(--b-1);
 }
 
-.measurement-modes {
+/* Tool rail: every measurement tool visible and one click away. Replaced a
+   <select> that hid six of the seven behind a two-click trip. */
+.measurement-tools {
   display: flex;
+  align-items: center;
   gap: 1px;
   padding: 1px;
   border-radius: 3px;
   background: var(--s-5);
 }
 
-.measurement-tool-select {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  height: 20px;
-  padding-left: 5px;
-  border: 1px solid var(--b-2);
-  border-radius: 3px;
-  background: var(--s-5);
-  color: var(--f-2);
-  overflow: hidden;
-}
-
-.measurement-tool-select > span {
-  font: 700 8px/1 var(--font-mono);
-  letter-spacing: 0.08em;
-  color: var(--acc-hi);
-  pointer-events: none;
-}
-
-.measurement-tool-select select {
-  appearance: none;
-  height: 100%;
-  min-width: 82px;
-  padding: 0 17px 0 5px;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--f-0);
-  font: 600 10px/1 var(--font-ui);
-  cursor: pointer;
-}
-
-.measurement-tool-select::after {
-  content: '⌄';
-  position: absolute;
-  right: 5px;
-  top: 2px;
-  color: var(--f-2);
-  font-size: 10px;
-  pointer-events: none;
-}
-
-.measurement-tool-select:focus-within {
-  border-color: var(--accent-primary);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 35%, transparent);
-}
-
-.measurement-mode-btn {
+.measurement-tool-btn {
   appearance: none;
   border: none;
   background: transparent;
   color: var(--f-2);
-  font: 600 10px/1 var(--font-ui);
-  min-width: 26px;
-  padding: 3px 6px;
-  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
   border-radius: 2px;
   cursor: pointer;
   transition: background 120ms, color 120ms;
 }
 
-.measurement-mode-btn:hover {
+.measurement-tool-btn:hover {
   background: var(--s-4);
   color: var(--f-0);
 }
 
-/* Atlas: near-white fill marks the active tool, like a segmented control. */
-.measurement-mode-btn.active {
+.measurement-tool-btn.active {
   background: var(--accent-primary);
   color: var(--text-inverse);
 }
 
-.measurement-live {
-  font: 600 10.5px/1 var(--font-mono);
-  color: var(--f-0);
-  padding: 3px 6px;
-  background: var(--s-5);
-  border-radius: 3px;
-  font-variant-numeric: tabular-nums;
-  min-width: 92px;
-  text-align: center;
+.measurement-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 1px;
+  background: var(--b-2);
 }
 
-.measurement-live-sub {
-  margin-left: 4px;
-  color: var(--f-2);
-  font-weight: 500;
-  font-size: 9.5px;
+/* Name of the active tool sits above the live value so the readout says what
+   it is measuring, not just a bare number. */
+.measurement-tool-name {
+  font: 700 8px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--acc-hi);
 }
 
 .measurement-btn {
@@ -6768,6 +6956,68 @@ html[data-theme="light"] .measurement-toolbar {
   filter: brightness(1.08);
 }
 
+.measurement-btn.active {
+  background: var(--acc-dim);
+  border-color: var(--acc-bord);
+  color: var(--acc);
+}
+
+/* ===== Cursor-following measurement tip (MeasurementCursorTip.tsx) =====
+ * Rides the pointer while a measure tool is armed: live value, slope or
+ * perimeter, snap under the cursor, and the next-step hint. */
+.measure-tip {
+  position: absolute;
+  z-index: 30;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 4px 8px;
+  background: rgba(22, 23, 28, 0.88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--b-3);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.measure-tip-value {
+  font: 600 12px/1 var(--font-mono);
+  color: var(--f-0);
+  font-variant-numeric: tabular-nums;
+}
+
+.measure-tip-sub {
+  font: 500 10px/1 var(--font-mono);
+  color: var(--f-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.measure-tip-hint {
+  font: 500 11px/1 var(--font-ui);
+  color: var(--f-1);
+}
+
+.measure-tip-snap {
+  font: 600 9px/1 var(--font-ui);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: rgba(255, 176, 32, 0.14);
+  color: #ffb020;
+}
+
+.measure-tip-snap.exact {
+  background: rgba(84, 214, 123, 0.14);
+  color: #54d67b;
+}
+
+html[data-theme='light'] .measure-tip {
+  background: rgba(255, 255, 255, 0.92);
+}
+
 .measurement-units {
   display: flex;
   gap: 1px;
@@ -6798,40 +7048,6 @@ html[data-theme="light"] .measurement-toolbar {
 .measurement-unit-btn.active {
   background: var(--accent-primary);
   color: var(--text-inverse);
-}
-
-.measurement-history {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  padding-left: 5px;
-  border-left: 1px solid var(--b-3);
-}
-
-.measurement-history-chip {
-  appearance: none;
-  border: 1px solid var(--b-3);
-  background: var(--s-5);
-  color: var(--f-1);
-  font: 500 10px/1 var(--font-mono);
-  padding: 2px 5px;
-  height: 18px;
-  border-radius: 3px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-variant-numeric: tabular-nums;
-  transition: background 120ms, border-color 120ms;
-}
-
-.measurement-history-chip:hover {
-  background: var(--s-4);
-  border-color: var(--acc-hi);
-}
-
-.measurement-history-val {
-  color: var(--f-1);
 }
 
 /* ===== Screen-space measurement labels (MeasurementLabels.tsx) =====
@@ -9962,7 +10178,7 @@ html[data-theme="light"] .slash-menu-hint { color: #a1a1aa; }
 .vtp-panel {
   display: flex;
   flex-direction: column;
-  width: 220px;
+  width: 256px;
   max-height: calc(100% - 32px);
   overflow: hidden;
 }
@@ -10135,6 +10351,10 @@ html[data-theme="light"] .slash-menu-hint { color: #a1a1aa; }
   font-size: 11px;
   cursor: pointer;
   transition: background 0.1s, color 0.1s, border-color 0.1s;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .vtp-chip:hover { background: var(--s-3, #222); color: var(--f-1, #e8e8e8); }
 .vtp-chip.active {
@@ -10174,6 +10394,7 @@ html[data-theme="light"] .slash-menu-hint { color: #a1a1aa; }
 .vtp-section-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 6px;
 }
@@ -10190,8 +10411,27 @@ html[data-theme="light"] .slash-menu-hint { color: #a1a1aa; }
   font-size: 11px;
   cursor: pointer;
   transition: background 0.1s, color 0.1s;
+  max-width: 100%;
+  white-space: nowrap;
 }
 .vtp-action-btn:hover { background: var(--s-3, #222); color: var(--f-1, #e8e8e8); }
+.vtp-action-btn.active {
+  background: var(--accent, #3b82f6);
+  border-color: var(--accent, #3b82f6);
+  color: #fff;
+}
+.vtp-action-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* One-line plain-language description under a section header. */
+.vtp-section-desc {
+  font-size: 11px;
+  color: var(--f-3, #666);
+  line-height: 1.45;
+  margin: 0 0 7px;
+}
 
 .vtp-count-badge {
   font-size: 10px;
@@ -11990,74 +12230,13 @@ html[data-theme="light"] .stats-type-row.active { background: rgba(37, 99, 235, 
   grid-template-rows: var(--h-menubar) var(--h-topbar) auto minmax(0, 1fr) var(--h-status);
 }
 
-.measurement-snap-feedback {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  height: 18px;
-  padding: 0 5px;
-  border: 1px solid var(--b-2);
-  border-radius: 3px;
-  background: var(--s-5);
-  color: var(--f-1);
-  font: 700 8px/1 var(--font-mono);
-  letter-spacing: 0.04em;
-}
-
-.measurement-snap-feedback.exact {
-  border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--b-2));
-  color: var(--acc-hi);
-}
-
-.measurement-snap-feedback small {
-  color: var(--f-3);
-  font: 700 7px/1 var(--font-mono);
-  letter-spacing: 0.08em;
-}
-
-.measurement-snap-glyph {
-  position: relative;
-  width: 8px;
-  height: 8px;
-  border: 1px solid currentColor;
-  border-radius: 50%;
-}
-
-.measurement-snap-glyph::before,
-.measurement-snap-glyph::after {
-  content: '';
-  position: absolute;
-  background: currentColor;
-}
-
-.measurement-snap-glyph::before {
-  width: 10px;
-  height: 1px;
-  left: -2px;
-  top: 3px;
-}
-
-.measurement-snap-glyph::after {
-  width: 1px;
-  height: 10px;
-  left: 3px;
-  top: -2px;
-}
-
 @media (max-width: 760px) {
   .measurement-toolbar {
-    left: 8px;
-    right: 8px;
-    max-width: none;
+    max-width: calc(100% - 16px);
   }
 
-  .measurement-history,
-  .measurement-tool-select > span {
+  .measurement-step {
     display: none;
-  }
-
-  .measurement-tool-select {
-    padding-left: 0;
   }
 }
 

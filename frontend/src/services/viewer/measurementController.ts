@@ -138,6 +138,23 @@ export interface MeasurementSnapshot {
   committed: CommittedMeasurement[];
 }
 
+/** Cheap per-move readout for the cursor tip. Numbers only, no clones. */
+export interface MeasurementLiveReadout {
+  mode: MeasurementMode;
+  pendingCount: number;
+  hasCursor: boolean;
+  /** Distance, area, or angle depending on mode. Null until enough points. */
+  value: number | null;
+  perimeter: number | null;
+  angleDeg: number | null;
+  /** Linear mode only: segment slope versus the horizontal plane, degrees. */
+  slopeDeg: number | null;
+  /** Cursor hit position as plain numbers, for the position-mode readout. */
+  cursorWorld: { x: number; y: number; z: number } | null;
+  snapKind: MeasurementSnapKind | null;
+  snapExact: boolean;
+}
+
 export interface MeasurementHooks {
   /** Fired whenever the visible state changes so the HUD can re-render. */
   onChange: (snapshot: MeasurementSnapshot) => void;
@@ -195,7 +212,10 @@ function displayCoordinateValue(metres: number, unit: MeasurementUnit): string {
   }
 }
 
-export function formatCoordinate(point: THREE.Vector3, unit: MeasurementUnit): string {
+export function formatCoordinate(
+  point: { x: number; y: number; z: number },
+  unit: MeasurementUnit,
+): string {
   const suffix = unit;
   return `X ${displayCoordinateValue(point.x, unit)} · Y ${displayCoordinateValue(point.y, unit)} · Z ${displayCoordinateValue(point.z, unit)} ${suffix}`;
 }
@@ -560,7 +580,10 @@ export class MeasurementController {
     this.emit();
   }
 
-  /** Remove every committed + pending measurement and reset mode to `off`. */
+  /** Remove every committed + pending measurement. The mode is deliberately
+   *  left alone: the store owns it and syncs it back in, so clearing it here
+   *  would only desync until the next render. Callers that want the tool
+   *  disarmed set `measurement.mode` on the store. */
   clear(): void {
     this.pending = [];
     this.pendingSnaps = [];
@@ -625,21 +648,26 @@ export class MeasurementController {
       this.emit();
       return;
     }
-    // Endpoint snap takes priority over the external construction feature.
-    const endpointSnap = this.computeSnap(world);
-    if (endpointSnap) {
-      this.cursor = endpointSnap.clone();
-      this.setActiveSnap({
-        point: endpointSnap,
-        kind: 'endpoint',
-        exact: true,
-        source: 'measurement-endpoint',
-      });
+    // The caller's screen-space snap wins. An explicit null means it resolved
+    // and found nothing, so no fallback; undefined means the caller does not
+    // resolve snaps at all, and only then does the world-space fallback apply.
+    const externalSnap = normaliseSnapInput(snapInput);
+    if (externalSnap) {
+      this.cursor = externalSnap.point.clone();
+      this.setActiveSnap(externalSnap);
+    } else if (snapInput !== undefined) {
+      this.cursor = world.clone();
+      this.setActiveSnap(null);
     } else {
-      const externalSnap = normaliseSnapInput(snapInput);
-      if (externalSnap) {
-        this.cursor = externalSnap.point.clone();
-        this.setActiveSnap(externalSnap);
+      const endpointSnap = this.computeSnap(world);
+      if (endpointSnap) {
+        this.cursor = endpointSnap.clone();
+        this.setActiveSnap({
+          point: endpointSnap,
+          kind: 'endpoint',
+          exact: true,
+          source: 'measurement-endpoint',
+        });
       } else {
         this.cursor = world.clone();
         this.setActiveSnap(null);
@@ -650,16 +678,26 @@ export class MeasurementController {
     this.emit();
   }
 
-  /** Build candidate list for snap: first pending vertex + all committed
-   *  endpoints. Returns the nearest within threshold, or null. */
-  private computeSnap(world: THREE.Vector3): THREE.Vector3 | null {
-    const candidates: THREE.Vector3[] = [];
-    if (this.pending.length > 0) candidates.push(this.pending[0]);
+  /**
+   * Both ends of every committed measurement, so new picks can chain exactly.
+   * The viewer ranks these in the same screen-space pool as geometry snaps.
+   * The in-flight `pending[0]` is deliberately NOT an anchor: snapping back to
+   * it only produces a rejected duplicate click, which zoomed out makes short
+   * measurements impossible to place.
+   */
+  getSnapAnchors(): THREE.Vector3[] {
+    const anchors: THREE.Vector3[] = [];
     for (const m of this.committed) {
-      if (m.points.length > 0) candidates.push(m.points[0]);
-      if (m.points.length > 1) candidates.push(m.points[m.points.length - 1]);
+      if (m.points.length > 0) anchors.push(m.points[0].clone());
+      if (m.points.length > 1) anchors.push(m.points[m.points.length - 1].clone());
     }
-    return snapToNearest(world, candidates, SNAP_THRESHOLD_METRES);
+    return anchors;
+  }
+
+  /** World-space endpoint fallback for callers that resolve no snaps (tests,
+   *  headless callers). The viewer's screen-space ranking is the real path. */
+  private computeSnap(world: THREE.Vector3): THREE.Vector3 | null {
+    return snapToNearest(world, this.getSnapAnchors(), SNAP_THRESHOLD_METRES);
   }
 
   private setActiveSnap(feedback: MeasurementSnapFeedback | null): void {
@@ -726,7 +764,11 @@ export class MeasurementController {
     if (this.mode === 'off') return false;
 
     const suppliedSnap = normaliseSnapInput(snapInput);
-    const previewedSnap = this.snapTarget && this.snapKind
+    // An explicit null means the caller resolved and found nothing; it must
+    // not inherit a stale preview, because snapTarget lags the cursor whenever
+    // a hover raycast is skipped. Only undefined falls back to the preview.
+    const callerResolvedSnap = snapInput !== undefined;
+    const previewedSnap = !callerResolvedSnap && this.snapTarget && this.snapKind
       ? {
           point: this.snapTarget.clone(),
           kind: this.snapKind,
@@ -766,11 +808,9 @@ export class MeasurementController {
       return true;
     }
 
-    // Apply snap with handleMove's priority: an endpoint candidate within
-    // threshold of the raw click wins over the external construction snap,
-    // even on the first click, so the committed point always matches the
-    // previewed endpoint dot and polygons can close precisely.
-    const endpointSnap = this.computeSnap(world);
+    // Mirrors handleMove: the caller's screen-space resolution is final, so
+    // the world-space endpoint fallback only runs when no caller resolved.
+    const endpointSnap = (activeSnap || callerResolvedSnap) ? null : this.computeSnap(world);
     const snapped = endpointSnap ?? interactionPoint;
     const committedSnap = endpointSnap
       ? {
@@ -904,7 +944,10 @@ export class MeasurementController {
         height.dimensionEnd,
         {
           ...this.pendingSnapOptions(),
-          exact: this.pendingSnaps.every((snap) => snap?.exact ?? true),
+          // A pick with no snap is not exact. `?? true` here used to let two
+          // arbitrary surface clicks report a height as EXACT, so the GUIDE
+          // badge never appeared on height dimensions. Matches linear/clearance.
+          exact: this.pendingSnaps.every((snap) => snap?.exact ?? false),
           source: 'project-y-axis',
         },
         {
@@ -1013,11 +1056,11 @@ export class MeasurementController {
   }
 
   /** Build a read-only snapshot of the current state. */
-  snapshot(): MeasurementSnapshot {
-    const pendingWithCursor: THREE.Vector3[] = this.cursor
-      ? [...this.pending, this.cursor]
-      : this.pending.slice();
-
+  private computePendingValues(pendingWithCursor: THREE.Vector3[]): {
+    pendingValue: number | null;
+    pendingPerimeter: number | null;
+    pendingAngleDeg: number | null;
+  } {
     let pendingValue: number | null = null;
     let pendingPerimeter: number | null = null;
     let pendingAngleDeg: number | null = null;
@@ -1051,6 +1094,56 @@ export class MeasurementController {
       pendingValue = pendingAngleDeg;
     }
 
+    return { pendingValue, pendingPerimeter, pendingAngleDeg };
+  }
+
+  /**
+   * Plain-number view of the in-flight measurement for the cursor tip.
+   * No vector clones, so it is safe to call on every pointer move without
+   * feeding the React snapshot path.
+   */
+  liveReadout(): MeasurementLiveReadout {
+    const pendingWithCursor: THREE.Vector3[] = this.cursor
+      ? [...this.pending, this.cursor]
+      : this.pending;
+    const { pendingValue, pendingPerimeter, pendingAngleDeg } =
+      this.computePendingValues(pendingWithCursor);
+
+    let slopeDeg: number | null = null;
+    if (this.mode === 'linear' && pendingWithCursor.length >= 2) {
+      const a = pendingWithCursor[0];
+      const b = pendingWithCursor[1];
+      const run = Math.hypot(b.x - a.x, b.z - a.z);
+      const rise = Math.abs(b.y - a.y);
+      if (run > 1e-6 || rise > 1e-6) {
+        slopeDeg = (Math.atan2(rise, run) * 180) / Math.PI;
+      }
+    }
+
+    return {
+      mode: this.mode,
+      pendingCount: this.pending.length,
+      hasCursor: this.cursor !== null,
+      value: pendingValue,
+      perimeter: pendingPerimeter,
+      angleDeg: pendingAngleDeg,
+      slopeDeg,
+      cursorWorld: this.cursor
+        ? { x: this.cursor.x, y: this.cursor.y, z: this.cursor.z }
+        : null,
+      snapKind: this.snapTarget ? this.snapKind : null,
+      snapExact: this.snapExact,
+    };
+  }
+
+  snapshot(): MeasurementSnapshot {
+    const pendingWithCursor: THREE.Vector3[] = this.cursor
+      ? [...this.pending, this.cursor]
+      : this.pending.slice();
+
+    const { pendingValue, pendingPerimeter, pendingAngleDeg } =
+      this.computePendingValues(pendingWithCursor);
+
     return {
       mode: this.mode,
       pending: this.pending.slice(),
@@ -1080,19 +1173,31 @@ export class MeasurementController {
   /** Tear down: remove group, free materials/geometries, clear listeners. */
   dispose(): void {
     this.scene.remove(this.group);
+    // Collect first, dispose once: preview materials are shared and cached,
+    // and cached ones may not be mounted right now.
+    const materials = new Set<THREE.Material>(this.previewMaterials.values());
     this.group.traverse((obj) => {
-      const mesh = obj as THREE.Mesh | THREE.Line | THREE.Points;
-      const anyMesh = mesh as unknown as { geometry?: THREE.BufferGeometry; material?: THREE.Material | THREE.Material[] };
+      const anyMesh = obj as unknown as {
+        geometry?: THREE.BufferGeometry;
+        material?: THREE.Material | THREE.Material[];
+      };
       if (anyMesh.geometry) anyMesh.geometry.dispose();
-      if (anyMesh.material) {
-        if (Array.isArray(anyMesh.material)) anyMesh.material.forEach((m) => m.dispose());
-        else anyMesh.material.dispose();
-      }
+      if (!anyMesh.material) return;
+      if (Array.isArray(anyMesh.material)) anyMesh.material.forEach((m) => materials.add(m));
+      else materials.add(anyMesh.material);
     });
+    materials.forEach((material) => material.dispose());
+    this.previewMaterials.clear();
     this.pending = [];
     this.pendingSnaps = [];
     this.cursor = null;
     this.committed = [];
+    // Null the handles so nothing reads disposed geometry as a live preview.
+    this.previewLine = null;
+    this.previewCloseLine = null;
+    this.snapDot = null;
+    this.snapTarget = null;
+    this.snapKind = null;
   }
 
   // ───────────────────── internals ─────────────────────
@@ -1207,20 +1312,34 @@ export class MeasurementController {
     this.refreshPreview();
   }
 
+  /** Preview line materials, created once and reused. refreshPreview runs per
+   *  pointer move, and allocating a material each time churns the renderer's
+   *  program cache. Committed visuals keep their own disposable materials. */
+  private previewMaterials = new Map<string, THREE.Material>();
+
+  private sharedPreviewMaterial(opts: { dashed?: boolean; colour?: number } = {}): THREE.Material {
+    const colour = opts.colour ?? 0xffcc33;
+    const key = `${opts.dashed ? 'dashed' : 'solid'}:${colour}`;
+    let material = this.previewMaterials.get(key);
+    if (!material) {
+      material = lineMaterial(opts);
+      this.previewMaterials.set(key, material);
+    }
+    return material;
+  }
+
   /** Rebuild the preview (rubber-band) line + optional close edge. Called
-   *  on every pointer move and every pending-points mutation. Previews are
-   *  cheap to rebuild, just 1-2 `Line` objects, so no need to diff. */
+   *  on every pointer move and every pending-points mutation. Only the
+   *  geometry is rebuilt; materials come from `sharedPreviewMaterial`. */
   private refreshPreview(): void {
     if (this.previewLine) {
       this.group.remove(this.previewLine);
       this.previewLine.geometry.dispose();
-      (this.previewLine.material as THREE.Material).dispose();
       this.previewLine = null;
     }
     if (this.previewCloseLine) {
       this.group.remove(this.previewCloseLine);
       this.previewCloseLine.geometry.dispose();
-      (this.previewCloseLine.material as THREE.Material).dispose();
       this.previewCloseLine = null;
     }
     if (this.mode === 'off' || this.pending.length === 0 || !this.cursor) return;
@@ -1230,7 +1349,7 @@ export class MeasurementController {
       const corners = buildBoxCorners(this.pending[0], this.cursor, this.boxNormal);
       const loop = [...corners, corners[0]];
       const geom = new THREE.BufferGeometry().setFromPoints(loop);
-      this.previewLine = new THREE.Line(geom, lineMaterial({ dashed: true, colour: 0xffcc33 }));
+      this.previewLine = new THREE.Line(geom, this.sharedPreviewMaterial({ dashed: true, colour: 0xffcc33 }));
       this.previewLine.computeLineDistances();
       this.previewLine.renderOrder = 999;
       this.group.add(this.previewLine);
@@ -1246,7 +1365,7 @@ export class MeasurementController {
       ]);
       this.previewLine = new THREE.Line(
         dimensionGeometry,
-        lineMaterial({ colour: 0xffa040 }),
+        this.sharedPreviewMaterial({ colour: 0xffa040 }),
       );
       this.previewLine.renderOrder = 999;
       this.group.add(this.previewLine);
@@ -1257,7 +1376,7 @@ export class MeasurementController {
       ]);
       this.previewCloseLine = new THREE.Line(
         witnessGeometry,
-        lineMaterial({ dashed: true, colour: 0xffa040 }),
+        this.sharedPreviewMaterial({ dashed: true, colour: 0xffa040 }),
       );
       this.previewCloseLine.computeLineDistances();
       this.previewCloseLine.renderOrder = 999;
@@ -1270,7 +1389,10 @@ export class MeasurementController {
         // Arm1 not placed yet: rubber-band from vertex to cursor.
         const vertex = this.pending[0];
         const geom = new THREE.BufferGeometry().setFromPoints([vertex, this.cursor]);
-        this.previewLine = new THREE.Line(geom, lineMaterial({ dashed: true, colour: 0xffcc33 }));
+        this.previewLine = new THREE.Line(geom, this.sharedPreviewMaterial({ dashed: true, colour: 0xffcc33 }));
+        // Without lineDistances the dash shader reads 0 for every vertex, so
+        // the whole segment falls inside the first dash and renders solid.
+        this.previewLine.computeLineDistances();
         this.previewLine.renderOrder = 999;
         this.group.add(this.previewLine);
       } else if (this.pending.length === 2) {
@@ -1278,12 +1400,12 @@ export class MeasurementController {
         const vertex = this.pending[0];
         const arm1 = this.pending[1];
         const solidGeom = new THREE.BufferGeometry().setFromPoints([vertex, arm1]);
-        this.previewCloseLine = new THREE.Line(solidGeom, lineMaterial({ colour: 0xffcc33 }));
+        this.previewCloseLine = new THREE.Line(solidGeom, this.sharedPreviewMaterial({ colour: 0xffcc33 }));
         this.previewCloseLine.renderOrder = 999;
         this.group.add(this.previewCloseLine);
 
         const dashGeom = new THREE.BufferGeometry().setFromPoints([vertex, this.cursor]);
-        this.previewLine = new THREE.Line(dashGeom, lineMaterial({ dashed: true, colour: 0xffcc33 }));
+        this.previewLine = new THREE.Line(dashGeom, this.sharedPreviewMaterial({ dashed: true, colour: 0xffcc33 }));
         this.previewLine.computeLineDistances();
         this.previewLine.renderOrder = 999;
         this.group.add(this.previewLine);
@@ -1294,7 +1416,7 @@ export class MeasurementController {
     // Rubber-band from the last placed vertex to the cursor.
     const last = this.pending[this.pending.length - 1];
     const geom = new THREE.BufferGeometry().setFromPoints([last, this.cursor]);
-    this.previewLine = new THREE.Line(geom, lineMaterial({ dashed: false, colour: 0xffcc33 }));
+    this.previewLine = new THREE.Line(geom, this.sharedPreviewMaterial({ dashed: false, colour: 0xffcc33 }));
     this.previewLine.renderOrder = 999;
     this.group.add(this.previewLine);
 
@@ -1303,7 +1425,7 @@ export class MeasurementController {
     if (this.mode === 'area' && this.pending.length >= 2) {
       const first = this.pending[0];
       const closeGeom = new THREE.BufferGeometry().setFromPoints([this.cursor, first]);
-      const mat = lineMaterial({ dashed: true, colour: 0xffcc33 });
+      const mat = this.sharedPreviewMaterial({ dashed: true, colour: 0xffcc33 });
       this.previewCloseLine = new THREE.Line(closeGeom, mat);
       (this.previewCloseLine as THREE.Line).computeLineDistances();
       this.previewCloseLine.renderOrder = 999;

@@ -45,6 +45,7 @@ import {
   type RelativeClipPlaneState,
   type SectionWorkspaceDefinition,
 } from '../services/viewer/sectionWorkspace';
+import { STRUCTURAL_EDIT_ENABLED } from '../config/featureFlags';
 
 /**
  * Snapshot of AI backend warm-up state held in the store.
@@ -798,6 +799,9 @@ interface AppState {
   setPickPlaneMode: (enabled: boolean) => void;
   /** Remove a clip plane by id. */
   removeClipPlane: (id: string) => void;
+  /** Drop every clip plane (and leave pick-plane mode). Clears the persisted
+   *  pref, unlike `reset()`, which keeps planes across model unloads. */
+  clearClipPlanes: () => void;
   /** Partial merge patch for a plane by id. Switching axis resets offset to 0. */
   updateClipPlane: (id: string, patch: Partial<Omit<ClipPlaneState, 'id'>>) => void;
   /** Compat shim - patches the first (primary) plane. */
@@ -953,6 +957,16 @@ function writePref(key: string, value: unknown) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* ignore */ }
 }
 
+/**
+ * Pin the edit scope to `semantic` while STRUCTURAL_EDIT_ENABLED is off.
+ * Applied on read as well as on write: `pref.editScope` persists, so a user who
+ * selected `structural` in an earlier build would otherwise stay in it forever
+ * with no toggle left to switch back.
+ */
+function coerceEditScope(scope: 'semantic' | 'structural'): 'semantic' | 'structural' {
+  return STRUCTURAL_EDIT_ENABLED ? scope : 'semantic';
+}
+
 const VIEWPOINTS_STORAGE_KEY = 'pref.viewpoints.v1';
 
 function readAllViewpoints(): Record<string, SavedViewpoint[]> {
@@ -1047,7 +1061,7 @@ const initialState = {
   pendingEditOutcomes: {} as Record<string, 'applied' | 'discarded' | 'error'>,
   editMode: false,
   editModeAvailable: false,
-  editScope: readPref<'semantic' | 'structural'>('pref.editScope', 'semantic'),
+  editScope: coerceEditScope(readPref<'semantic' | 'structural'>('pref.editScope', 'semantic')),
   modelDirty: false,
   detailRefreshSerial: 0,
   canRedo: false,
@@ -1572,7 +1586,11 @@ export const useStore = create<AppState>()(
     },
     setEditMode: (v) => set({ editMode: v }),
     toggleEditMode: () => set((s) => ({ editMode: !s.editMode })),
-    setEditScope: (scope) => { writePref('pref.editScope', scope); set({ editScope: scope }); },
+    setEditScope: (scope) => {
+      const next = coerceEditScope(scope);
+      writePref('pref.editScope', next);
+      set({ editScope: next });
+    },
     applyOperation: async (operation, params) => {
       try {
         const result = await apiExecuteOperation(operation, params);
@@ -1822,6 +1840,13 @@ export const useStore = create<AppState>()(
       const next = s.clipPlanes.filter(p => p.id !== id);
       writePref('pref.clipPlanes.v2', next);
       return { clipPlanes: next };
+    }),
+    clearClipPlanes: () => set(() => {
+      // Must write the pref too: clip planes persist across reloads, and
+      // reset() deliberately keeps them, so dropping state alone would let
+      // every plane resurrect on the next load.
+      writePref('pref.clipPlanes.v2', []);
+      return { clipPlanes: [], pickPlaneMode: false };
     }),
     updateClipPlane: (id, patch) => set((s) => {
       const next = s.clipPlanes.map(p => {

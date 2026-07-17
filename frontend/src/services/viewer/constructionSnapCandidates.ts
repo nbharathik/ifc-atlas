@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { facePointsToVec3 } from './vertexSnapHelpers';
 
 export type ConstructionSnapKind =
+  | 'endpoint'
   | 'vertex'
   | 'round-center'
   | 'midpoint'
@@ -12,6 +13,9 @@ export type ConstructionSnapKind =
 
 export type ConstructionSnapSource =
   | 'hit-triangle'
+  | 'engine-point'
+  | 'engine-line'
+  | 'measurement-endpoint'
   | 'explicit-axis'
   | 'face-normal-axis'
   | 'bounds-axis'
@@ -58,6 +62,9 @@ export interface TriangleSnapOptions {
 }
 
 const PRIORITY: Record<ConstructionSnapKind, number> = {
+  // An existing measurement endpoint outranks raw geometry: chaining dimensions
+  // and closing polygons exactly matters more than the vertex underneath it.
+  endpoint: 110,
   vertex: 100,
   'round-center': 95,
   midpoint: 90,
@@ -203,7 +210,13 @@ function segmentCandidate(
   };
 }
 
-/** Generate vertex, edge, midpoint, and triangle-centroid candidates. */
+/**
+ * Generate vertex, edge, midpoint, and triangle-centroid candidates.
+ *
+ * SUPERSEDED by `engineSnapCandidates` for the live snap path: this only sees
+ * one triangle (no snap on large faces), and `facePoints` is sometimes a full
+ * N-gon face profile, so slicing three points invents a fake triangle.
+ */
 export function triangleSnapCandidates(
   facePoints: Float32Array | undefined,
   cursorPx: THREE.Vector2,
@@ -259,6 +272,97 @@ export function triangleSnapCandidates(
     );
     if (candidate) candidates.push(candidate);
   }
+  return candidates;
+}
+
+/** One hit from the fragments engine's snapping raycast, already in world space. */
+export interface EngineSnapHit {
+  /** Which primitive the engine matched. `face` carries no snap feature. */
+  snappingClass: 'point' | 'line' | 'face';
+  point: THREE.Vector3;
+  /** Endpoints of the matched edge. Present on `line` hits. */
+  edgeStart?: THREE.Vector3;
+  edgeEnd?: THREE.Vector3;
+}
+
+/**
+ * Snap candidates from the engine's `raycastWithSnapping`, which matches the
+ * model's real point/line primitives in a frustum around the cursor. This is
+ * what makes snapping work on large faces. `face` hits are skipped: their
+ * point is the cursor's own surface projection (~0 px), so as a candidate it
+ * would beat every real feature.
+ */
+export function engineSnapCandidates(
+  hits: readonly EngineSnapHit[],
+  cursorPx: THREE.Vector2,
+  camera: THREE.Camera,
+  canvasWidth: number,
+  canvasHeight: number,
+): ConstructionSnapCandidate[] {
+  const candidates: ConstructionSnapCandidate[] = [];
+  hits.forEach((hit, index) => {
+    if (hit.snappingClass === 'point') {
+      const candidate = pointCandidate(
+        'vertex', hit.point, cursorPx, camera, canvasWidth, canvasHeight,
+        'engine-point', true, `engine-vertex-${index}`,
+      );
+      if (candidate) candidates.push(candidate);
+      return;
+    }
+    if (hit.snappingClass !== 'line') return;
+    const { edgeStart, edgeEnd } = hit;
+    if (!edgeStart || !edgeEnd) {
+      // Line class with no reported edge: the hit point is still on an edge.
+      const candidate = pointCandidate(
+        'edge', hit.point, cursorPx, camera, canvasWidth, canvasHeight,
+        'engine-line', true, `engine-edge-point-${index}`,
+      );
+      if (candidate) candidates.push(candidate);
+      return;
+    }
+    // A real edge yields three CAD features: the two endpoints, its midpoint,
+    // and the sliding closest-point along it.
+    const along = segmentCandidate(
+      'edge', edgeStart, edgeEnd, cursorPx, camera, canvasWidth, canvasHeight,
+      'engine-line', true, `engine-edge-${index}`,
+    );
+    if (along) candidates.push(along);
+    const midpoint = pointCandidate(
+      'midpoint', edgeStart.clone().lerp(edgeEnd, 0.5), cursorPx, camera,
+      canvasWidth, canvasHeight, 'engine-line', true, `engine-midpoint-${index}`,
+    );
+    if (midpoint) candidates.push(midpoint);
+    [edgeStart, edgeEnd].forEach((end, endIndex) => {
+      const candidate = pointCandidate(
+        'vertex', end, cursorPx, camera, canvasWidth, canvasHeight,
+        'engine-line', true, `engine-edge-end-${index}-${endIndex}`,
+      );
+      if (candidate) candidates.push(candidate);
+    });
+  });
+  return candidates;
+}
+
+/**
+ * Existing measurement endpoints as pixel-space candidates, ranked in the same
+ * pool as geometry. A separate world-metre threshold was zoom-dependent and let
+ * a far endpoint steal the snap from a vertex under the cursor.
+ */
+export function anchorSnapCandidates(
+  anchors: readonly THREE.Vector3[],
+  cursorPx: THREE.Vector2,
+  camera: THREE.Camera,
+  canvasWidth: number,
+  canvasHeight: number,
+): ConstructionSnapCandidate[] {
+  const candidates: ConstructionSnapCandidate[] = [];
+  anchors.forEach((anchor, index) => {
+    const candidate = pointCandidate(
+      'endpoint', anchor, cursorPx, camera, canvasWidth, canvasHeight,
+      'measurement-endpoint', true, `anchor-${index}`,
+    );
+    if (candidate) candidates.push(candidate);
+  });
   return candidates;
 }
 

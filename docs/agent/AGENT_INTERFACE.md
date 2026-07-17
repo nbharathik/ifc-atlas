@@ -23,7 +23,7 @@ For agents: if a tool returns `{warming: true, …}`, pause for `retry_after_ms`
 
 ### Mode
 
-The chat panel starts in **Ask** mode: the agent can search, inspect, validate, and highlight, but write tools are blocked at the API layer. **Edit** mode exposes sandboxed semantic edits and beta geometry tools. The Edit pill is hidden only when the backend reports `EDIT_MODE_ENABLED=0`.
+The chat panel starts in **Ask** mode: the agent can search, inspect, validate, and highlight, but write tools are blocked at the API layer. **Edit** mode exposes sandboxed semantic edits (names, safe text attributes, existing property values, classifications). The Edit pill is hidden only when the backend reports `EDIT_MODE_ENABLED=0`.
 
 ### Model dropdown
 

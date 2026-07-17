@@ -9,7 +9,7 @@ IFC Atlas ships an AI chat workspace that lets you query and inspect IFC models 
 - **Validate against IDS**: full buildingSMART IDS 1.0 validation with per-specification failure reports.
 - **Run IfcOpenShell code** in a read-only sandbox via `execute_ifc_query_code` for custom analyses.
 
-The **Edit Assistant** stages model edits (names, safe text attributes, existing property values, and beta geometry operations) through a sandboxed approval loop. Ask mode cannot write, and deployments can disable editing globally with `EDIT_MODE_ENABLED=0`.
+The **Edit Assistant** stages model edits (names, safe text attributes, existing property values, and classifications) through a sandboxed approval loop. Ask mode cannot write, and deployments can disable editing globally with `EDIT_MODE_ENABLED=0`.
 
 ## Pages in this section
 

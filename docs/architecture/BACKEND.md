@@ -179,7 +179,7 @@ Env vars are read from the shell and from `~/.ifc-atlas/.env` (the backend does 
 | `BACKEND_VERBOSE` | `0` | `1` = DEBUG logs + per-request timing. |
 | `MCP_SERVER_TOKEN` | (unset) | Require bearer auth on `/mcp/*`. |
 | `MCP_ALLOW_WRITES` | unset | `1` exposes the MCP write tier. |
-| `EDIT_MODE_ENABLED` | `0` | Enables the chat write-tool tier (must flip with the frontend flag). |
+| `EDIT_MODE_ENABLED` | `1` | Enables the chat write-tool tier. Set `0` for a read-only deployment; the frontend probes it at runtime via `/api/ifc/edit-state`. |
 | `SIDECAR_DIR` / `SIDECAR_PORT` / `SIDECAR_HOST` / `SIDECAR_SPAWN_TIMEOUT_S` | auto | Advanced: native-parser sidecar overrides. |
 
 ---

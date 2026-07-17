@@ -4,8 +4,8 @@ IFC Atlas ships from a single repository as three editions that share the same f
 
 | Edition | Target | Backend | Chat | Edit |
 |---|---|---|---|---|
-| **Cloud (self-host)** | Hosted SaaS or self-host on a VM | FastAPI + IfcOpenShell + Node sidecar | Full | Off by default (`EDIT_MODE_ENABLED`) |
-| **Tauri desktop** | Windows / macOS / Linux installer | PyInstaller-frozen FastAPI as Tauri sidecar | Full | Off by default (`EDIT_MODE_ENABLED`) |
+| **Cloud (self-host)** | Hosted SaaS or self-host on a VM | FastAPI + IfcOpenShell + Node sidecar | Full | Semantic, on by default (`EDIT_MODE_ENABLED=0` to disable) |
+| **Tauri desktop** | Windows / macOS / Linux installer | PyInstaller-frozen FastAPI as Tauri sidecar | Full | Semantic, on by default (`EDIT_MODE_ENABLED=0` to disable) |
 | **GitHub Pages demo** | Static public site | None | Disabled | Disabled |
 
 The companion docs:

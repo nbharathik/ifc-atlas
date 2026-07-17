@@ -1,4 +1,4 @@
-# IFC Atlas
+# ![IFC Atlas](assets/brand/wordmark-dark.svg#only-dark){ width="300" }![IFC Atlas](assets/brand/wordmark-light.svg#only-light){ width="300" }
 
 **An AI-assisted IFC workspace for exploring, understanding, validating, and editing BIM models.**
 

@@ -1,0 +1,3818 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for IFC Atlas, an open-source IFC viewer with a built-in multi-LLM agent.">
+      
+      
+        <meta name="author" content="IFC Atlas contributors">
+      
+      
+        <link rel="canonical" href="https://nbharathik.github.io/ifc-atlas/agent/TOOLS_REFERENCE/">
+      
+      
+        <link rel="prev" href="../CUSTOM_AGENTS/">
+      
+      
+        <link rel="next" href="../MCP_CLIENTS/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/brand/favicon.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Tools reference - IFC Atlas - Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#tools-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="IFC Atlas - Documentation" class="md-header__button md-logo" aria-label="IFC Atlas - Documentation" data-md-component="logo">
+      
+  <img src="../../assets/brand/mark.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            IFC Atlas - Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Tools reference
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/nbharathik/ifc-atlas" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nbharathik/ifc-atlas
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../user/GETTING_STARTED/" class="md-tabs__link">
+          
+  
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  AI Agent Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../api/" class="md-tabs__link">
+          
+  
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../user/DEPLOY_YOUR_OWN/" class="md-tabs__link">
+          
+  
+  
+  Deploy & Operate
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="IFC Atlas - Documentation" class="md-nav__button md-logo" aria-label="IFC Atlas - Documentation" data-md-component="logo">
+      
+  <img src="../../assets/brand/mark.svg" alt="logo">
+
+    </a>
+    IFC Atlas - Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/nbharathik/ifc-atlas" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    nbharathik/ifc-atlas
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user/GETTING_STARTED/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user/FEATURES/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Features
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user/USE_CASES/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Practical workflows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user/EDITING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Editing models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user/KNOWN_LIMITATIONS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Known limitations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user/KEYBOARD_SHORTCUTS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Keyboard shortcuts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI Agent Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI Agent Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user/AI_AGENT_GUIDE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using the agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AGENT_INTERFACE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent interface
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../AGENT_PRESETS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent presets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../CUSTOM_AGENTS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom agents
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools reference
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#read-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read - Model
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Read - Model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#get_project_info" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_project_info
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_model_stats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_model_stats
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#search_elements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        search_elements
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_element_details" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_element_details
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_elements_by_type" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_elements_by_type
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_elements_by_storey" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_elements_by_storey
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_storeys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_storeys
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#search_by_property" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        search_by_property
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#search_elements_semantic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        search_elements_semantic
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_all_property_names" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_all_property_names
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_quantities_summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_quantities_summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_edit_history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_edit_history
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#execute_ifc_query_code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        execute_ifc_query_code
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#search_document_index" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        search_document_index
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_connected_elements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_connected_elements
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_element_material" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_element_material
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_openings_for_element" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_openings_for_element
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#find_elements_by_type_name" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        find_elements_by_type_name
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#find_nearby_elements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        find_nearby_elements
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#filter_by_property_value" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        filter_by_property_value
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_cost_summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_cost_summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_carbon_summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_carbon_summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_element_relationships" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_element_relationships
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#read-viewer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read - Viewer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Read - Viewer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#highlight_elements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        highlight_elements
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#select_element" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        select_element
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#isolate_elements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        isolate_elements
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#show_all_elements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        show_all_elements
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#clip_section_box_to_element" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        clip_section_box_to_element
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validate
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Validate">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#run_model_health_check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_model_health_check
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ids_validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ids_validate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#highlight_ids_failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        highlight_ids_failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run_model_audit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_model_audit
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#write-edit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Write - Edit
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Write - Edit">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#rename_element" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rename_element
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#update_property_value" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        update_property_value
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#update_element_attribute" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        update_element_attribute
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rename_elements_batch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rename_elements_batch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#update_properties_batch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        update_properties_batch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#undo_last_edit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        undo_last_edit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#propose_edit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        propose_edit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#execute_ifc_code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        execute_ifc_code
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#create_wall_from_ends" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        create_wall_from_ends
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#delete_element" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        delete_element
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#read-knowledge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read - Knowledge
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Read - Knowledge">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#bsdd_search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        bsdd_search
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bsdd_get_class" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        bsdd_get_class
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bsdd_get_properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        bsdd_get_properties
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_docs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_docs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../MCP_CLIENTS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/REST/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    REST
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/WEBSOCKET/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WebSocket
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deploy & Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Deploy & Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user/DEPLOY_YOUR_OWN/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Self-hosting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user/RUNNING_TAURI/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Desktop (Tauri)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user/CLI/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command line
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user/DATA_STORAGE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user/TROUBLESHOOTING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#read-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read - Model
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Read - Model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#get_project_info" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_project_info
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_model_stats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_model_stats
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#search_elements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        search_elements
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_element_details" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_element_details
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_elements_by_type" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_elements_by_type
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_elements_by_storey" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_elements_by_storey
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_storeys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_storeys
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#search_by_property" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        search_by_property
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#search_elements_semantic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        search_elements_semantic
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_all_property_names" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_all_property_names
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_quantities_summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_quantities_summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_edit_history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_edit_history
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#execute_ifc_query_code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        execute_ifc_query_code
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#search_document_index" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        search_document_index
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_connected_elements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_connected_elements
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_element_material" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_element_material
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_openings_for_element" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_openings_for_element
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#find_elements_by_type_name" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        find_elements_by_type_name
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#find_nearby_elements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        find_nearby_elements
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#filter_by_property_value" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        filter_by_property_value
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_cost_summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_cost_summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_carbon_summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_carbon_summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_element_relationships" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_element_relationships
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#read-viewer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read - Viewer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Read - Viewer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#highlight_elements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        highlight_elements
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#select_element" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        select_element
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#isolate_elements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        isolate_elements
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#show_all_elements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        show_all_elements
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#clip_section_box_to_element" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        clip_section_box_to_element
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validate
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Validate">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#run_model_health_check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_model_health_check
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ids_validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ids_validate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#highlight_ids_failures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        highlight_ids_failures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run_model_audit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        run_model_audit
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#write-edit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Write - Edit
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Write - Edit">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#rename_element" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rename_element
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#update_property_value" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        update_property_value
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#update_element_attribute" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        update_element_attribute
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rename_elements_batch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rename_elements_batch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#update_properties_batch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        update_properties_batch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#undo_last_edit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        undo_last_edit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#propose_edit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        propose_edit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#execute_ifc_code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        execute_ifc_code
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#create_wall_from_ends" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        create_wall_from_ends
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#delete_element" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        delete_element
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#read-knowledge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read - Knowledge
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Read - Knowledge">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#bsdd_search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        bsdd_search
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bsdd_get_class" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        bsdd_get_class
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bsdd_get_properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        bsdd_get_properties
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get_docs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_docs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="tools-reference">Tools Reference<a class="headerlink" href="#tools-reference" title="Permanent link">&para;</a></h1>
+<div class="admonition info">
+<p class="admonition-title">Auto-generated</p>
+<p>This page is regenerated automatically by <code>scripts/generate_tools_doc.py</code>
+Do not edit manually - changes will be overwritten.
+To add a new tool, update <code>TOOL_DEFINITIONS</code> in <code>backend/app/services/tools.py</code>.</p>
+</div>
+<hr />
+<h2 id="read-model">Read - Model<a class="headerlink" href="#read-model" title="Permanent link">&para;</a></h2>
+<p>Tools in this tier query the loaded IFC model. They are safe for read-only access and are always exposed via the MCP server.</p>
+<h3 id="get_project_info"><code>get_project_info</code><a class="headerlink" href="#get_project_info" title="Permanent link">&para;</a></h3>
+<p>Get metadata about the loaded IFC project including name, schema version, author, and organization.</p>
+<div class="admonition note">
+<p class="admonition-title">Client-side</p>
+<p>This tool executes in the browser (metadata worker). Results arrive via the tool_result WS event.</p>
+</div>
+<p><strong>Parameters:</strong></p>
+<p><em>No parameters.</em></p>
+<hr />
+<h3 id="get_model_stats"><code>get_model_stats</code><a class="headerlink" href="#get_model_stats" title="Permanent link">&para;</a></h3>
+<p>Get statistics about the loaded IFC model: total element count, elements grouped by IFC type, list of storeys, and list of materials.</p>
+<div class="admonition note">
+<p class="admonition-title">Client-side</p>
+<p>This tool executes in the browser (metadata worker). Results arrive via the tool_result WS event.</p>
+</div>
+<p><strong>Parameters:</strong></p>
+<p><em>No parameters.</em></p>
+<hr />
+<h3 id="search_elements"><code>search_elements</code><a class="headerlink" href="#search_elements" title="Permanent link">&para;</a></h3>
+<p>Search for IFC elements by name, type, or GlobalId. Returns matching elements with their Express ID, name, type, and storey.</p>
+<div class="admonition note">
+<p class="admonition-title">Client-side</p>
+<p>This tool executes in the browser (metadata worker). Results arrive via the tool_result WS event.</p>
+</div>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>query</code></td>
+<td>string</td>
+<td>✓</td>
+<td>Search text to match against element name, IFC type, or GlobalId.</td>
+</tr>
+<tr>
+<td><code>ifc_type</code></td>
+<td>string</td>
+<td></td>
+<td>Optional IFC type filter (e.g. 'IfcWall', 'IfcDoor', 'IfcWindow').</td>
+</tr>
+<tr>
+<td><code>storey</code></td>
+<td>string</td>
+<td></td>
+<td>Optional storey name filter.</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>integer</td>
+<td></td>
+<td>Max results to return (default 50).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="get_element_details"><code>get_element_details</code><a class="headerlink" href="#get_element_details" title="Permanent link">&para;</a></h3>
+<p>Get full details for a specific IFC element by its Express ID, including properties, materials, quantities, and type information.</p>
+<div class="admonition note">
+<p class="admonition-title">Client-side</p>
+<p>This tool executes in the browser (metadata worker). Results arrive via the tool_result WS event.</p>
+</div>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>element_id</code></td>
+<td>integer</td>
+<td>✓</td>
+<td>The IFC Express ID of the element.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="get_elements_by_type"><code>get_elements_by_type</code><a class="headerlink" href="#get_elements_by_type" title="Permanent link">&para;</a></h3>
+<p>Get all elements of a specific IFC type (e.g. IfcWall, IfcDoor, IfcSlab, IfcBeam, IfcColumn, IfcWindow, IfcStair, etc.).</p>
+<div class="admonition note">
+<p class="admonition-title">Client-side</p>
+<p>This tool executes in the browser (metadata worker). Results arrive via the tool_result WS event.</p>
+</div>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ifc_type</code></td>
+<td>string</td>
+<td>✓</td>
+<td>The IFC type to filter by (e.g. 'IfcWall', 'IfcDoor').</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="get_elements_by_storey"><code>get_elements_by_storey</code><a class="headerlink" href="#get_elements_by_storey" title="Permanent link">&para;</a></h3>
+<p>Get all elements contained in a specific building storey by storey Express ID.</p>
+<div class="admonition note">
+<p class="admonition-title">Client-side</p>
+<p>This tool executes in the browser (metadata worker). Results arrive via the tool_result WS event.</p>
+</div>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>storey_id</code></td>
+<td>integer</td>
+<td>✓</td>
+<td>The Express ID of the building storey.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="get_storeys"><code>get_storeys</code><a class="headerlink" href="#get_storeys" title="Permanent link">&para;</a></h3>
+<p>List all building storeys in the model with their Express IDs and names.</p>
+<div class="admonition note">
+<p class="admonition-title">Client-side</p>
+<p>This tool executes in the browser (metadata worker). Results arrive via the tool_result WS event.</p>
+</div>
+<p><strong>Parameters:</strong></p>
+<p><em>No parameters.</em></p>
+<hr />
+<h3 id="search_by_property"><code>search_by_property</code><a class="headerlink" href="#search_by_property" title="Permanent link">&para;</a></h3>
+<p>Search for IFC elements that have a specific property name and optionally a specific value. Useful for finding elements by their custom properties like FireRating, IsExternal, LoadBearing, etc.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>property_name</code></td>
+<td>string</td>
+<td>✓</td>
+<td>Name of the property to search for (e.g. 'FireRating', 'IsExternal', 'LoadBearing').</td>
+</tr>
+<tr>
+<td><code>property_value</code></td>
+<td>string</td>
+<td></td>
+<td>Optional value to match (e.g. 'True', '60', 'REI90'). If omitted, returns all elements with that property.</td>
+</tr>
+<tr>
+<td><code>pset_name</code></td>
+<td>string</td>
+<td></td>
+<td>Optional property set name to narrow the search (e.g. 'Pset_WallCommon').</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>integer</td>
+<td></td>
+<td>Max results to return (default 50).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="search_elements_semantic"><code>search_elements_semantic</code><a class="headerlink" href="#search_elements_semantic" title="Permanent link">&para;</a></h3>
+<p>Semantic search for IFC elements using natural-language descriptions. More powerful than search_elements for intent-based queries like 'load-bearing walls', 'fire-rated partitions', or 'elements on the ground floor'. Falls back to BM25 keyword search if the model index is not yet built. Returns the same shape as search_elements.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>query</code></td>
+<td>string</td>
+<td>✓</td>
+<td>Natural-language query describing the elements to find.</td>
+</tr>
+<tr>
+<td><code>top_k</code></td>
+<td>integer</td>
+<td></td>
+<td>Maximum number of results to return (default 10, max 50).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="get_all_property_names"><code>get_all_property_names</code><a class="headerlink" href="#get_all_property_names" title="Permanent link">&para;</a></h3>
+<p>Get a list of all property set names and their property names available in the model. Useful for discovering what properties exist before searching.</p>
+<p><strong>Parameters:</strong></p>
+<p><em>No parameters.</em></p>
+<hr />
+<h3 id="get_quantities_summary"><code>get_quantities_summary</code><a class="headerlink" href="#get_quantities_summary" title="Permanent link">&para;</a></h3>
+<p>Aggregate IfcElementQuantity values (lengths, areas, volumes, weights, counts) across the model. Use this for totals like 'total wall area', 'concrete volume per storey', 'gross floor area', or 'total length of pipes'.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>group_by</code></td>
+<td>string</td>
+<td></td>
+<td>How to group the totals. Defaults to 'ifc_type'.</td>
+</tr>
+<tr>
+<td><code>ifc_type</code></td>
+<td>string</td>
+<td></td>
+<td>Optional IFC type filter (e.g. 'IfcWall'). When set, only that type contributes.</td>
+</tr>
+<tr>
+<td><code>storey</code></td>
+<td>string</td>
+<td></td>
+<td>Optional storey name filter. When set, only elements on that storey contribute.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="get_edit_history"><code>get_edit_history</code><a class="headerlink" href="#get_edit_history" title="Permanent link">&para;</a></h3>
+<p>List recent edits that can be undone, newest first. Shows up to 20 entries with edit_id, description, and timestamp.</p>
+<p><strong>Parameters:</strong></p>
+<p><em>No parameters.</em></p>
+<hr />
+<h3 id="execute_ifc_query_code"><code>execute_ifc_query_code</code><a class="headerlink" href="#execute_ifc_query_code" title="Permanent link">&para;</a></h3>
+<p>Run read-only Python against a sandboxed COPY of the IFC model for analysis and question answering. Use this in Ask mode when the structured read tools are not expressive enough. Available names in the sandbox: <code>model</code> / <code>ifc</code> (the open ifcopenshell.file handle), <code>ifcopenshell</code>, <code>ifcopenshell.api</code>, <code>ifcopenshell.util.element</code>, plus <code>math</code>, <code>statistics</code>, <code>re</code>, <code>json</code>, <code>collections</code>, <code>uuid</code>. Assign to a <code>result</code> variable if you want a value back in the chat summary; print output is also captured. If the code produces structural model changes, the sandbox is discarded and the call returns an error. Use <code>execute_ifc_code</code> in Edit mode when you intend to stage edits.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>code</code></td>
+<td>string</td>
+<td>✓</td>
+<td>Python source to execute read-only. See the tool description for the names available in scope. Max 100000 chars.</td>
+</tr>
+<tr>
+<td><code>timeout_s</code></td>
+<td>number</td>
+<td></td>
+<td>Wall-clock budget in seconds. Default 240, min 1, max 240.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="search_document_index"><code>search_document_index</code><a class="headerlink" href="#search_document_index" title="Permanent link">&para;</a></h3>
+<p>Search the user's uploaded document index (PDFs, Markdown specs, standards, notes) using BM25 keyword matching. Returns the top matching passages with source document names and relevance scores. Use this when the user asks a question that might be answered by an uploaded specification or standard, e.g. 'does this model comply with the uploaded BIM standard?' or 'what does the spec say about fire ratings?'. Returns empty results when no documents have been indexed yet.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>query</code></td>
+<td>string</td>
+<td>✓</td>
+<td>Natural-language or keyword query to search the document index.</td>
+</tr>
+<tr>
+<td><code>top_k</code></td>
+<td>integer</td>
+<td></td>
+<td>Maximum number of passages to return (default 5, max 20).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="get_connected_elements"><code>get_connected_elements</code><a class="headerlink" href="#get_connected_elements" title="Permanent link">&para;</a></h3>
+<p>Return the wall or slab neighbours that are path-connected to a given element via IfcRelConnectsPathElements. Useful for questions like 'which walls meet at this corner?' or 'what does this wall connect to?'. Returns a list of connected elements with their IFC type and connection type.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>element_id</code></td>
+<td>integer</td>
+<td>✓</td>
+<td>Express ID of the element to find connections for.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="get_element_material"><code>get_element_material</code><a class="headerlink" href="#get_element_material" title="Permanent link">&para;</a></h3>
+<p>Return the material assignment of an IFC element - material name, layer set, layer thicknesses (in mm), and total wall thickness. Useful for questions like 'what material is this wall made of?' or 'how thick is the insulation layer?'.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>element_id</code></td>
+<td>integer</td>
+<td>✓</td>
+<td>Express ID of the element.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="get_openings_for_element"><code>get_openings_for_element</code><a class="headerlink" href="#get_openings_for_element" title="Permanent link">&para;</a></h3>
+<p>Return the doors and windows that are hosted by (cut into) a given element. Uses IfcRelVoidsElement to find openings and IfcRelFillsElement to find the door/window that fills each opening. Useful for questions like 'which windows are in the north wall?' or 'does this slab have any openings?'.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>element_id</code></td>
+<td>integer</td>
+<td>✓</td>
+<td>Express ID of the host element (typically a wall or slab).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="find_elements_by_type_name"><code>find_elements_by_type_name</code><a class="headerlink" href="#find_elements_by_type_name" title="Permanent link">&para;</a></h3>
+<p>Search for elements whose IfcTypeObject name contains a given substring (case-insensitive). Complements get_elements_by_type (which matches exact IFC class names) with human-friendly type names like 'Exterior Wall', 'Double Door', or 'Paroc'. Returns matching elements with their storey. Useful for questions like 'find all Paroc walls' or 'show Basic Wall type'.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>substring</code></td>
+<td>string</td>
+<td>✓</td>
+<td>Substring to match against IfcTypeObject.Name (case-insensitive).</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>integer</td>
+<td></td>
+<td>Maximum results to return (default 50).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="find_nearby_elements"><code>find_nearby_elements</code><a class="headerlink" href="#find_nearby_elements" title="Permanent link">&para;</a></h3>
+<p>Find IFC elements within a given radius (in metres) of a reference element, sorted by distance ascending. When the model's real-geometry AABB cache is warm, distances are box-to-box surface distances (result carries geometry: 'aabb'; 0.0 means the elements touch or overlap). Before that cache finishes computing, the tool falls back to Euclidean distance between IfcLocalPlacement origins (result carries geometry: 'placement_origin' plus a note) - origin distances are approximate for large or off-origin elements, so mention that caveat when it applies. Useful for questions like 'what elements are near door #123?', 'find all elements within 3 m of this column', or 'which walls are adjacent to this room?'. Filter by ifc_types to limit to specific element categories.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>element_id</code></td>
+<td>integer</td>
+<td>✓</td>
+<td>Express ID of the reference element.</td>
+</tr>
+<tr>
+<td><code>radius_m</code></td>
+<td>number</td>
+<td></td>
+<td>Search radius in metres (default 5.0).</td>
+</tr>
+<tr>
+<td><code>ifc_types</code></td>
+<td>array[string]</td>
+<td></td>
+<td>Optional IFC class filter, e.g. ['IfcWall', 'IfcColumn']. Omit to include all element types.</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>integer</td>
+<td></td>
+<td>Maximum results to return (default 20).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="filter_by_property_value"><code>filter_by_property_value</code><a class="headerlink" href="#filter_by_property_value" title="Permanent link">&para;</a></h3>
+<p>Filter elements by a property value condition. Supports string and numeric comparisons. Operators: eq (equals), neq (not equals), contains (substring), startswith, gt (greater than), lt (less than), gte (&gt;=), lte (&lt;=). Returns matching element IDs for highlight + detailed element list. Useful for questions like 'find all walls with FireRating = 2h', 'show rooms with area &gt; 20 m²', or 'which doors have IsExternal = true'. After calling this, call highlight_elements with the returned element_ids.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>property_name</code></td>
+<td>string</td>
+<td>✓</td>
+<td>Name of the IFC property (e.g. 'FireRating', 'IsExternal', 'Area').</td>
+</tr>
+<tr>
+<td><code>operator</code></td>
+<td>string</td>
+<td>✓</td>
+<td>Comparison operator.</td>
+</tr>
+<tr>
+<td><code>value</code></td>
+<td>string</td>
+<td>✓</td>
+<td>Value to compare against (always a string; numeric operators coerce both sides).</td>
+</tr>
+<tr>
+<td><code>ifc_type</code></td>
+<td>string</td>
+<td></td>
+<td>Optional IFC class filter (e.g. 'IfcWall'). Omit for all types.</td>
+</tr>
+<tr>
+<td><code>storey</code></td>
+<td>string</td>
+<td></td>
+<td>Optional storey name filter. Omit for all storeys.</td>
+</tr>
+<tr>
+<td><code>pset_name</code></td>
+<td>string</td>
+<td></td>
+<td>Optional property set name filter (e.g. 'Pset_WallCommon'). Omit to search all psets.</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>integer</td>
+<td></td>
+<td>Maximum results to return (default 100).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="get_cost_summary"><code>get_cost_summary</code><a class="headerlink" href="#get_cost_summary" title="Permanent link">&para;</a></h3>
+<p>Priced bill of quantities (5D cost estimate) for the loaded model. Runs the quantity takeoff grouped by IFC class (plus optional extra dimensions), prices each row from the editable rate library, and returns rows sorted by amount descending with the grand total and priced/unpriced coverage. IMPORTANT: rates come from the user-editable cost rate library and the shipped defaults are illustrative placeholders, NOT market prices - always present amounts as estimates and mention that rates are editable in the Cost panel. Use for questions like 'what does this building cost?', 'cost breakdown per storey', or 'which element types drive the cost?'.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>group_by</code></td>
+<td>array[string]</td>
+<td></td>
+<td>Optional extra grouping dimensions applied after the implicit ifc_class (e.g. ['storey'] for a per-storey cost breakdown).</td>
+</tr>
+<tr>
+<td><code>top_rows</code></td>
+<td>integer</td>
+<td></td>
+<td>Maximum rows to return, sorted by amount descending (default 25, max 100). Totals always cover ALL rows.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="get_carbon_summary"><code>get_carbon_summary</code><a class="headerlink" href="#get_carbon_summary" title="Permanent link">&para;</a></h3>
+<p>Embodied-carbon estimate for the loaded model, grouped by material (plus optional extra dimensions). Multiplies quantity takeoff values by emission factors (kgCO2e per unit) from the editable factor library, with keyword fallbacks for common materials (concrete, steel, timber, glass, ...). Returns rows sorted by carbon descending with totals in kg and tonnes plus factored/unfactored coverage. IMPORTANT: the default factors are illustrative cradle-to-gate placeholders, NOT a certified LCA - always present figures as rough estimates and mention that factors are editable in the Carbon panel. Use for questions like 'what is the embodied carbon of this building?' or 'which material drives the CO2 footprint?'.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>group_by</code></td>
+<td>array[string]</td>
+<td></td>
+<td>Optional extra grouping dimensions applied after the implicit material (e.g. ['storey'] for a per-storey carbon breakdown).</td>
+</tr>
+<tr>
+<td><code>top_rows</code></td>
+<td>integer</td>
+<td></td>
+<td>Maximum rows to return, sorted by carbon descending (default 25, max 100). Totals always cover ALL rows.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="get_element_relationships"><code>get_element_relationships</code><a class="headerlink" href="#get_element_relationships" title="Permanent link">&para;</a></h3>
+<p>Full relationship map for one element: spatial containment chain (storey / building / site / project), aggregation parent and children, openings the element hosts and what fills them (doors / windows), the opening + host the element itself fills, path-connected neighbours, its type object with the instance count, and property-set sharing stats. Every reference includes the Express ID, GlobalId, name and IFC type so you can narrate the context. Use for questions like 'where is this element?', 'which wall hosts this door?', 'what belongs to this wall?', or 'how is this element related to the rest of the model?'.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>element_id</code></td>
+<td>integer</td>
+<td>✓</td>
+<td>Express ID of the element to map relationships for.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="read-viewer">Read - Viewer<a class="headerlink" href="#read-viewer" title="Permanent link">&para;</a></h2>
+<p>Tools in this tier control what is visible in the 3D viewport. They execute client-side in the browser and are <strong>not</strong> exposed via the MCP server.</p>
+<h3 id="highlight_elements"><code>highlight_elements</code><a class="headerlink" href="#highlight_elements" title="Permanent link">&para;</a></h3>
+<p>Highlight specific elements in the 3D viewer by their Express IDs. Use this when the user asks to show, highlight, or point out elements.</p>
+<div class="admonition note">
+<p class="admonition-title">Client-side</p>
+<p>This tool executes in the browser (metadata worker). Results arrive via the tool_result WS event.</p>
+</div>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>element_ids</code></td>
+<td>array[integer]</td>
+<td>✓</td>
+<td>List of Express IDs to highlight in the viewer.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="select_element"><code>select_element</code><a class="headerlink" href="#select_element" title="Permanent link">&para;</a></h3>
+<p>Select a single element in the 3D viewer and open its properties panel. Use when the user asks to focus on, inspect, or open one specific element.</p>
+<div class="admonition note">
+<p class="admonition-title">Client-side</p>
+<p>This tool executes in the browser (metadata worker). Results arrive via the tool_result WS event.</p>
+</div>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>element_id</code></td>
+<td>integer</td>
+<td>✓</td>
+<td>The IFC Express ID of the element to select.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="isolate_elements"><code>isolate_elements</code><a class="headerlink" href="#isolate_elements" title="Permanent link">&para;</a></h3>
+<p>Isolate specific elements in the 3D viewer (hide everything else). Useful when the user asks to focus on a subset, e.g. 'isolate level 2' or 'show me only doors'.</p>
+<div class="admonition note">
+<p class="admonition-title">Client-side</p>
+<p>This tool executes in the browser (metadata worker). Results arrive via the tool_result WS event.</p>
+</div>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>element_ids</code></td>
+<td>array[integer]</td>
+<td>✓</td>
+<td>List of Express IDs to keep visible. Pass an empty array to clear isolation.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="show_all_elements"><code>show_all_elements</code><a class="headerlink" href="#show_all_elements" title="Permanent link">&para;</a></h3>
+<p>Restore full visibility in the 3D viewer (clear any isolation/hiding). Use when the user asks to see everything again.</p>
+<div class="admonition note">
+<p class="admonition-title">Client-side</p>
+<p>This tool executes in the browser (metadata worker). Results arrive via the tool_result WS event.</p>
+</div>
+<p><strong>Parameters:</strong></p>
+<p><em>No parameters.</em></p>
+<hr />
+<h3 id="clip_section_box_to_element"><code>clip_section_box_to_element</code><a class="headerlink" href="#clip_section_box_to_element" title="Permanent link">&para;</a></h3>
+<p>Fit the 3D section-box crop to a single element's bounding box (AABB) with 10 % padding. Useful when the user asks to 'zoom into', 'section', 'cut to', or 'focus the section box on' a specific element. Combines a section-box enable with an element-centred crop in one step.</p>
+<div class="admonition note">
+<p class="admonition-title">Client-side</p>
+<p>This tool executes in the browser (metadata worker). Results arrive via the tool_result WS event.</p>
+</div>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>element_id</code></td>
+<td>integer</td>
+<td>✓</td>
+<td>Express ID of the element to clip the section box to.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="validate">Validate<a class="headerlink" href="#validate" title="Permanent link">&para;</a></h2>
+<p>Tools in this tier validate the model against external specifications such as IDS.</p>
+<h3 id="run_model_health_check"><code>run_model_health_check</code><a class="headerlink" href="#run_model_health_check" title="Permanent link">&para;</a></h3>
+<p>Run a set of deterministic IFC model quality rules and return a structured JSON report including total issue counts, per-severity breakdown, and per-rule issue records with element names and Express IDs. Seven rules are checked: (1) missing_global_id - elements without a GUID (severity: error); (2) duplicate_global_id - elements sharing a GUID (severity: error); (3) missing_name - structural elements with blank Name (severity: warning); (4) empty_property_sets - IfcPropertySet with no properties (severity: warning); (5) no_storey_assignment - walls/slabs/columns/beams not assigned to any building storey (severity: warning); (6) duplicate_name_in_type - same Name used for multiple instances of the same door/window/space type (severity: info); (7) large_element_count - informational flag when the model has more than 10 000 elements. Use this tool when the user asks about model quality, data integrity, BIM health, QA/QC audits, or missing data issues. The response includes duration_ms so you can report how long the check took.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>limit_per_rule</code></td>
+<td>integer</td>
+<td></td>
+<td>Max issue records to return per rule (default 50). Use 10-20 for a quick summary, 100+ for deep audits.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="ids_validate"><code>ids_validate</code><a class="headerlink" href="#ids_validate" title="Permanent link">&para;</a></h3>
+<p>Validate the loaded IFC model against a buildingSMART IDS (Information Delivery Specification) XML document. The IDS payload is supplied as base64 (typically from a chat file attachment with kind='ids'). Returns per-specification pass/fail counts and a list of offending Express IDs with reasons. Prefer this over manual property searches when the user asks to audit the model against a spec.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ids_base64</code></td>
+<td>string</td>
+<td>✓</td>
+<td>Base64-encoded IDS XML. The chat attachment pipeline exposes one as {kind:'ids', data_base64}; pass that data_base64 through unchanged.</td>
+</tr>
+<tr>
+<td><code>limit_per_spec</code></td>
+<td>integer</td>
+<td></td>
+<td>Max failing elements to enumerate per spec (default 25).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="highlight_ids_failures"><code>highlight_ids_failures</code><a class="headerlink" href="#highlight_ids_failures" title="Permanent link">&para;</a></h3>
+<p>Highlight in the 3D viewer all IFC elements that failed an IDS specification. Re-runs the IDS validation and highlights only the failing elements for the given spec (or all specs if spec_name is omitted). Call after ids_validate when the user asks to see non-compliant elements in the model.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ids_base64</code></td>
+<td>string</td>
+<td>✓</td>
+<td>Same base64-encoded IDS XML used in ids_validate.</td>
+</tr>
+<tr>
+<td><code>spec_name</code></td>
+<td>string</td>
+<td></td>
+<td>Name of a single specification to highlight (from the 'name' field in ids_validate results). If omitted, all failing elements across all specs are highlighted.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="run_model_audit"><code>run_model_audit</code><a class="headerlink" href="#run_model_audit" title="Permanent link">&para;</a></h3>
+<p>THE tool for 'audit this model', 'is this model ready?', or any overall quality-and-readiness question. One call chains five checks into a structured report: (1) rule-based model health (GUIDs, names, storey assignment, empty psets), (2) quantity-takeoff coverage (how many elements carry base quantities), (3) 5D cost pricing coverage, (4) embodied-carbon factor coverage, and (5) a summary of the last cached IDS validation run for this model when one exists. Returns {sections: [{name, status: ok|warnings|issues, findings, stats}], summary} - narrate it section by section, leading with the overall summary status and any 'issues' sections. Cost and carbon figures rely on the editable placeholder rate/factor libraries, so flag them as estimates.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>limit_per_rule</code></td>
+<td>integer</td>
+<td></td>
+<td>Max issue examples per health rule (default 10). Raise for deep audits.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="write-edit">Write - Edit<a class="headerlink" href="#write-edit" title="Permanent link">&para;</a></h2>
+<p>Tools in this tier modify the IFC model. They require the <strong>Edit</strong> pill to be active in the chat panel. Write tools are off by default in the MCP server (enable with <code>MCP_ALLOW_WRITES=1</code>).</p>
+<h3 id="rename_element"><code>rename_element</code><a class="headerlink" href="#rename_element" title="Permanent link">&para;</a></h3>
+<p>Rename an IFC element by changing its Name attribute. Chat-agent calls are staged in an IFC sandbox for approval before apply. Always confirm the element_id with get_element_details first.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>element_id</code></td>
+<td>integer</td>
+<td>✓</td>
+<td>The IFC Express ID of the element to rename.</td>
+</tr>
+<tr>
+<td><code>new_name</code></td>
+<td>string</td>
+<td>✓</td>
+<td>The new name string. Must be non-empty.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="update_property_value"><code>update_property_value</code><a class="headerlink" href="#update_property_value" title="Permanent link">&para;</a></h3>
+<p>Update a single property value on an IFC element's property set. Chat-agent calls are staged in an IFC sandbox for approval before apply. Use get_element_details first to confirm the property set and property name.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>element_id</code></td>
+<td>integer</td>
+<td>✓</td>
+<td>The IFC Express ID of the element.</td>
+</tr>
+<tr>
+<td><code>property_name</code></td>
+<td>string</td>
+<td>✓</td>
+<td>Exact name of the IfcPropertySingleValue to update.</td>
+</tr>
+<tr>
+<td><code>new_value</code></td>
+<td>any</td>
+<td>✓</td>
+<td>New value. Provide as a string, number, or boolean to match the existing property type.</td>
+</tr>
+<tr>
+<td><code>pset_name</code></td>
+<td>string</td>
+<td></td>
+<td>Optional: name of the IfcPropertySet that contains the property. Required if multiple psets share the same property name.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="update_element_attribute"><code>update_element_attribute</code><a class="headerlink" href="#update_element_attribute" title="Permanent link">&para;</a></h3>
+<p>Update one safe IFC text attribute without changing geometry. Supported attributes: Description, ObjectType, Tag, LongName. The edit is sandboxed for approval, validated, logged, and updates the viewer in place. Use get_element_details first to confirm the element and current value.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>element_id</code></td>
+<td>integer</td>
+<td>✓</td>
+<td>IFC Express ID of the element.</td>
+</tr>
+<tr>
+<td><code>attribute</code></td>
+<td>string</td>
+<td>✓</td>
+<td>The controlled IFC text attribute to update.</td>
+</tr>
+<tr>
+<td><code>new_value</code></td>
+<td>string</td>
+<td>✓</td>
+<td>New text, or an empty string to clear the optional attribute.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="rename_elements_batch"><code>rename_elements_batch</code><a class="headerlink" href="#rename_elements_batch" title="Permanent link">&para;</a></h3>
+<p>Rename multiple IFC elements in a single atomic operation. All renames share ONE undo entry, so undo_last_edit rolls back the whole batch at once. Partial failures (element not found, missing Name) are recorded in 'results' but don't abort the remaining renames. Prefer this over looping rename_element when renaming more than one element.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>renames</code></td>
+<td>array[object]</td>
+<td>✓</td>
+<td>List of {element_id, new_name} rename operations.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="update_properties_batch"><code>update_properties_batch</code><a class="headerlink" href="#update_properties_batch" title="Permanent link">&para;</a></h3>
+<p>Update property values on multiple IFC elements in a single atomic operation. All updates share ONE undo entry, so undo_last_edit rolls back the whole batch at once. Items where the property is not found or fails are recorded in 'results' but don't abort the remaining updates. Prefer this over looping update_property_value when changing more than one element.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>updates</code></td>
+<td>array[object]</td>
+<td>✓</td>
+<td>List of property update operations.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="undo_last_edit"><code>undo_last_edit</code><a class="headerlink" href="#undo_last_edit" title="Permanent link">&para;</a></h3>
+<p>Undo the most recent rename_element, update_property_value, rename_elements_batch, or update_properties_batch operation. Can be called repeatedly to walk back through the edit history (up to 20 edits).</p>
+<p><strong>Parameters:</strong></p>
+<p><em>No parameters.</em></p>
+<hr />
+<h3 id="propose_edit"><code>propose_edit</code><a class="headerlink" href="#propose_edit" title="Permanent link">&para;</a></h3>
+<p>Propose a batch of edits for USER APPROVAL before they touch the live model. The backend runs the ops in an isolated sandbox, computes a structural diff (renamed / property-changed / deleted), and returns a pending-edit envelope. The user clicks Apply or Discard in the UI - nothing mutates until they do. Prefer this over rename_element / update_property_value when the change is larger than one element or when the user asked you to 'preview' / 'show me the diff'. Supports ops: {'op':'set_name','element_id':int,'new_name':str}, {'op':'set_property','element_id':int,'property_name':str,'new_value':any,'pset_name':str?}.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ops</code></td>
+<td>array[object]</td>
+<td>✓</td>
+<td>Ordered list of edit ops to stage.</td>
+</tr>
+<tr>
+<td><code>summary</code></td>
+<td>string</td>
+<td></td>
+<td>Optional one-line human summary shown in the preview.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="execute_ifc_code"><code>execute_ifc_code</code><a class="headerlink" href="#execute_ifc_code" title="Permanent link">&para;</a></h3>
+<p>Run edit-capable Python against a sandboxed COPY of the IFC model - the full sandbox-then-apply edit path. Use this from Edit mode when the change doesn't fit the enumerable op vocabulary of propose_edit (e.g. batch geometry moves, custom algorithms, relationship rewiring, psets created/deleted programmatically). Available names in the sandbox: <code>model</code> / <code>ifc</code> (the open ifcopenshell.file handle), <code>ifcopenshell</code>, <code>ifcopenshell.api</code>, <code>ifcopenshell.util.element</code>, plus <code>math</code>, <code>statistics</code>, <code>re</code>, <code>json</code>, <code>collections</code>, <code>uuid</code>. Assign to a <code>result</code> variable if you want a value back in the chat summary (its repr is returned, capped at 2 KB). Any <code>print(...)</code> output is also captured. The code runs in a subprocess with a wall-clock timeout and no network / filesystem access outside the sandbox file. If the code mutates the model, a diff envelope is returned and the user must click Apply in the UI - nothing touches the live handle until they do. If the hash is unchanged, the call is treated as read-only and returns the captured stdout + <code>result</code> repr.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>code</code></td>
+<td>string</td>
+<td>✓</td>
+<td>Python source to execute. See the tool description for the names available in scope. Max 100000 chars.</td>
+</tr>
+<tr>
+<td><code>summary</code></td>
+<td>string</td>
+<td></td>
+<td>Optional one-line human summary shown in the Apply preview (ignored for pure reads).</td>
+</tr>
+<tr>
+<td><code>timeout_s</code></td>
+<td>number</td>
+<td></td>
+<td>Wall-clock budget in seconds. Default 240, min 1, max 240.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="create_wall_from_ends"><code>create_wall_from_ends</code><a class="headerlink" href="#create_wall_from_ends" title="Permanent link">&para;</a></h3>
+<p>Create a new IfcWallStandardCase between two XY endpoint coordinates on a given building storey. The wall geometry is built from a swept rectangular profile using IfcOpenShell's ShapeBuilder. The result goes through the standard sandbox → diff-preview envelope: the user sees a 'New element' row in the Diff Preview panel and must click Apply before the wall is committed to the live model.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>start</code></td>
+<td>array[number]</td>
+<td>✓</td>
+<td>Start point [x, y] or [x, y, z] in metres.</td>
+</tr>
+<tr>
+<td><code>end</code></td>
+<td>array[number]</td>
+<td>✓</td>
+<td>End point [x, y] or [x, y, z] in metres.</td>
+</tr>
+<tr>
+<td><code>height</code></td>
+<td>number</td>
+<td></td>
+<td>Wall height in metres (default 3.0).</td>
+</tr>
+<tr>
+<td><code>thickness</code></td>
+<td>number</td>
+<td></td>
+<td>Wall thickness in metres (default 0.2).</td>
+</tr>
+<tr>
+<td><code>storey_name</code></td>
+<td>string</td>
+<td></td>
+<td>Name of the target building storey (e.g. 'Ground Floor'). Omit to use the first storey in the model.</td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td>string</td>
+<td></td>
+<td>Name for the new wall element (default 'Wall').</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="delete_element"><code>delete_element</code><a class="headerlink" href="#delete_element" title="Permanent link">&para;</a></h3>
+<p>Delete an IfcProduct element from the model by its Express ID. Only IfcProduct subclasses (walls, slabs, doors, windows, columns, beams, spaces, etc.) can be deleted via this tool. The deletion goes through the sandbox → diff-preview envelope: the user sees a 'Deleted element' row in the Diff Preview panel and must click Apply to commit the deletion. This is irreversible after Apply - the undo stack covers simple property edits but not structural deletions. Warn the user before proposing large-scale deletions.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>element_id</code></td>
+<td>integer</td>
+<td>✓</td>
+<td>Express ID of the IfcProduct to delete.</td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td>string</td>
+<td></td>
+<td>Optional short reason for the deletion (shown in the diff summary).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="read-knowledge">Read - Knowledge<a class="headerlink" href="#read-knowledge" title="Permanent link">&para;</a></h2>
+<h3 id="bsdd_search"><code>bsdd_search</code><a class="headerlink" href="#bsdd_search" title="Permanent link">&para;</a></h3>
+<p>Search the buildingSMART Data Dictionary (bSDD) for IFC classifications and properties by free text. bSDD is the authoritative online dictionary of building classification systems (Uniclass, IFC, DIN, etc.). Use it to find the right classification for an element, discover standard property definitions, or answer 'what classification/property should this have?'. Works WITHOUT a loaded model. Returns matching classes/properties with their bSDD URIs - pass a URI to bsdd_get_class / bsdd_get_properties.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>query</code></td>
+<td>string</td>
+<td>✓</td>
+<td>Free-text search, e.g. 'exterior wall' or 'fire rating'.</td>
+</tr>
+<tr>
+<td><code>dictionary_uri</code></td>
+<td>string</td>
+<td></td>
+<td>Optional bSDD dictionary URI to scope the search.</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>integer</td>
+<td></td>
+<td>Maximum results (default 20, max 50).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="bsdd_get_class"><code>bsdd_get_class</code><a class="headerlink" href="#bsdd_get_class" title="Permanent link">&para;</a></h3>
+<p>Fetch the full bSDD definition of one classification by its URI - definition, parent class, and associated properties. Get the URI from bsdd_search first. Works WITHOUT a loaded model.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uri</code></td>
+<td>string</td>
+<td>✓</td>
+<td>The bSDD class URI (from bsdd_search results).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="bsdd_get_properties"><code>bsdd_get_properties</code><a class="headerlink" href="#bsdd_get_properties" title="Permanent link">&para;</a></h3>
+<p>List the standard properties a bSDD classification defines, by class URI - the correct property set + property names and datatypes the classification expects. Get the URI from bsdd_search. No model needed.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uri</code></td>
+<td>string</td>
+<td>✓</td>
+<td>The bSDD class URI whose properties to list.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="get_docs"><code>get_docs</code><a class="headerlink" href="#get_docs" title="Permanent link">&para;</a></h3>
+<p>Look up reference documentation. Sources: 'ifcopenshell' (the IfcOpenShell Python API - consult BEFORE writing execute_ifc_code so the calls are correct), 'bsdd' (buildingSMART classifications / properties), 'user' (documents the user uploaded), 'ifc-schema' (IFC entity / attribute reference). Returns the most relevant passages with their source. Works WITHOUT a loaded model. If a source isn't indexed yet the result says so and how to index it.</p>
+<p><strong>Parameters:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>source</code></td>
+<td>string</td>
+<td>✓</td>
+<td>Which knowledge source to query.</td>
+</tr>
+<tr>
+<td><code>query</code></td>
+<td>string</td>
+<td>✓</td>
+<td>Natural-language question or keywords.</td>
+</tr>
+<tr>
+<td><code>symbol</code></td>
+<td>string</td>
+<td></td>
+<td>Optional exact symbol to prioritise, e.g. 'ifcopenshell.api.geometry.edit_object_placement' or a bSDD class URI.</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>integer</td>
+<td></td>
+<td>Maximum passages to return (default 5, max 15).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<p><em>Last regenerated: 2026-07-17. Run <code>python scripts/generate_tools_doc.py</code> to refresh.</em></p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2026 IFC Atlas contributors - Mozilla Public License 2.0
+    </div>
+  
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/nbharathik/ifc-atlas" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.share", "content.code.annotate", "content.code.copy", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

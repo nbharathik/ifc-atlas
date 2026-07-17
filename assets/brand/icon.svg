@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="IFC Atlas">
+<rect x="0" y="0" width="512" height="512" rx="113.766" fill="#000000"/>
+<rect x="222.208" y="87.04" width="67.584" height="33.792" fill="#ffffff"/>
+<rect x="188.416" y="120.832" width="135.168" height="33.792" fill="#f7f7f7"/>
+<rect x="154.624" y="154.624" width="67.584" height="33.792" fill="#eeeeee"/>
+<rect x="289.792" y="154.624" width="67.584" height="33.792" fill="#eeeeee"/>
+<rect x="154.624" y="188.416" width="67.584" height="33.792" fill="#e6e6e6"/>
+<rect x="289.792" y="188.416" width="67.584" height="33.792" fill="#e6e6e6"/>
+<rect x="120.832" y="222.208" width="67.584" height="33.792" fill="#dedede"/>
+<rect x="188.416" y="222.208" width="135.168" height="33.792" fill="#0070f3"/>
+<rect x="323.584" y="222.208" width="67.584" height="33.792" fill="#dedede"/>
+<rect x="120.832" y="256" width="67.584" height="33.792" fill="#d5d5d5"/>
+<rect x="188.416" y="256" width="135.168" height="33.792" fill="#0070f3"/>
+<rect x="323.584" y="256" width="67.584" height="33.792" fill="#d5d5d5"/>
+<rect x="120.832" y="289.792" width="67.584" height="33.792" fill="#cdcdcd"/>
+<rect x="323.584" y="289.792" width="67.584" height="33.792" fill="#cdcdcd"/>
+<rect x="120.832" y="323.584" width="67.584" height="33.792" fill="#c5c5c5"/>
+<rect x="323.584" y="323.584" width="67.584" height="33.792" fill="#c5c5c5"/>
+<rect x="120.832" y="357.376" width="67.584" height="33.792" fill="#bcbcbc"/>
+<rect x="323.584" y="357.376" width="67.584" height="33.792" fill="#bcbcbc"/>
+<rect x="120.832" y="391.168" width="67.584" height="33.792" fill="#b4b4b4"/>
+<rect x="323.584" y="391.168" width="67.584" height="33.792" fill="#b4b4b4"/>
+</svg>

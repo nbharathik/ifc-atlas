@@ -1,0 +1,17 @@
+/* IFC Atlas mkdocs-material extra styles */
+
+:root {
+  --md-primary-fg-color: #3d5afe;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: #0a0a0a;
+  --md-code-bg-color: #111111;
+}
+
+/* Tighter admonition padding on mobile */
+@media screen and (max-width: 76.1875em) {
+  .md-admonition {
+    padding: 0.6rem 0.8rem;
+  }
+}

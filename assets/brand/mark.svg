@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 80" width="64" height="80" role="img" aria-label="IFC Atlas">
+<rect x="24" y="0" width="16" height="8" fill="#ffffff"/>
+<rect x="16" y="8" width="32" height="8" fill="#f7f7f7"/>
+<rect x="8" y="16" width="16" height="8" fill="#eeeeee"/>
+<rect x="40" y="16" width="16" height="8" fill="#eeeeee"/>
+<rect x="8" y="24" width="16" height="8" fill="#e6e6e6"/>
+<rect x="40" y="24" width="16" height="8" fill="#e6e6e6"/>
+<rect x="0" y="32" width="16" height="8" fill="#dedede"/>
+<rect x="16" y="32" width="32" height="8" fill="#0070f3"/>
+<rect x="48" y="32" width="16" height="8" fill="#dedede"/>
+<rect x="0" y="40" width="16" height="8" fill="#d5d5d5"/>
+<rect x="16" y="40" width="32" height="8" fill="#0070f3"/>
+<rect x="48" y="40" width="16" height="8" fill="#d5d5d5"/>
+<rect x="0" y="48" width="16" height="8" fill="#cdcdcd"/>
+<rect x="48" y="48" width="16" height="8" fill="#cdcdcd"/>
+<rect x="0" y="56" width="16" height="8" fill="#c5c5c5"/>
+<rect x="48" y="56" width="16" height="8" fill="#c5c5c5"/>
+<rect x="0" y="64" width="16" height="8" fill="#bcbcbc"/>
+<rect x="48" y="64" width="16" height="8" fill="#bcbcbc"/>
+<rect x="0" y="72" width="16" height="8" fill="#b4b4b4"/>
+<rect x="48" y="72" width="16" height="8" fill="#b4b4b4"/>
+</svg>

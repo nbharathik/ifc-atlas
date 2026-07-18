@@ -3238,6 +3238,48 @@ html[data-theme="light"] .prop-relations-error {
   margin-bottom: 8px;
 }
 
+/* GFM tables in chat (remark-gfm). The wrapper scrolls a wide table
+   horizontally instead of overflowing the bubble. */
+.chat-table-wrap {
+  overflow-x: auto;
+  margin: 6px 0;
+  border: 1px solid var(--b-2);
+  border-radius: 4px;
+}
+.chat-bubble table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.chat-bubble th,
+.chat-bubble td {
+  padding: 4px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--b-1);
+  border-right: 1px solid var(--b-1);
+  white-space: nowrap;
+}
+.chat-bubble th:last-child,
+.chat-bubble td:last-child {
+  border-right: none;
+}
+.chat-bubble thead th {
+  background: var(--s-0);
+  color: var(--f-2);
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--b-2);
+}
+.chat-bubble tbody tr:last-child td {
+  border-bottom: none;
+}
+.chat-bubble tbody tr:nth-child(even) td {
+  background: var(--s-0);
+}
+
 /* Tool call display in chat */
 /* ── Tool call cards (chat) - modern, shadcn-style ─────────────────────────
    Rendered interleaved with assistant text in transcript order. */
@@ -4480,6 +4522,155 @@ html[data-theme="light"] .selection-history-pos { color: #6b7280; }
   font-size: 11px;
   color: var(--text-muted);
   font-style: italic;
+}
+
+/* ===== Settings: info hints, rows and destructive actions ===== */
+/* A control row that keeps a label (or checkbox) and its "i" info icon on one
+   line so the long descriptions can move into a hover bubble and the page
+   stays scannable. */
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.setting-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--f-0);
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+.setting-check input { cursor: pointer; flex: 0 0 auto; }
+.setting-label-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* "i" info icon + hover/focus bubble. The bubble is position:fixed (positioned
+   in JS from the icon rect) so it is never clipped by the scroll pane. */
+.setting-info-wrap { display: inline-flex; align-items: center; line-height: 0; }
+.setting-info-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--b-3);
+  background: transparent;
+  color: var(--f-3);
+  font: italic 700 10px/1 Georgia, 'Times New Roman', serif;
+  cursor: help;
+  flex: 0 0 auto;
+  transition: color 120ms, border-color 120ms, background-color 120ms;
+}
+.setting-info-icon:hover,
+.setting-info-icon:focus-visible {
+  color: var(--acc-hi);
+  border-color: var(--acc);
+  background: var(--acc-dim);
+  outline: none;
+}
+.setting-info-bubble {
+  z-index: 1200;
+  box-sizing: border-box;
+  max-width: 300px;
+  padding: 9px 11px;
+  border-radius: 7px;
+  background: var(--s-3);
+  color: var(--f-1);
+  border: 1px solid var(--b-1);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  font: 400 11.5px/1.5 var(--font-ui);
+  letter-spacing: 0;
+  text-transform: none;
+  pointer-events: none;
+  animation: settingInfoFade 90ms ease-out;
+}
+.setting-info-bubble code {
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  background: var(--s-0);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+.setting-info-bubble strong { color: var(--f-0); font-weight: 600; }
+@keyframes settingInfoFade { from { opacity: 0; } to { opacity: 1; } }
+
+/* Shared settings action button (clear caches, apply cap, copy path, reset). */
+.settings-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 5px;
+  border: 1px solid var(--b-2);
+  background: var(--s-0);
+  color: var(--f-1);
+  font: 550 11.5px/1.2 var(--font-ui);
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.settings-btn:hover:not(:disabled) { background: var(--s-3); border-color: var(--b-3); color: var(--f-0); }
+.settings-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.settings-btn.compact { padding: 3px 9px; font-size: 10.5px; }
+.settings-btn.danger {
+  border-color: color-mix(in srgb, var(--danger, #ef4444) 45%, var(--b-2));
+  color: var(--danger, #ef4444);
+}
+.settings-btn.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger, #ef4444) 12%, transparent);
+  border-color: var(--danger, #ef4444);
+  color: var(--danger, #ef4444);
+}
+
+/* Per-scope data rows in Privacy & data: name + size on the left, an explicit
+   "Clear <scope>" action on the right, so no button is ever unlabelled. */
+.data-scope-list { display: grid; gap: 6px; margin-top: 10px; }
+.data-scope-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--b-2);
+  border-radius: 6px;
+  background: var(--s-2);
+}
+.data-scope-meta { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.data-scope-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--f-0);
+}
+.data-scope-sub { font-size: 10.5px; color: var(--f-3); font-family: var(--font-mono, monospace); }
+.data-scope-path {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  border: 1px dashed var(--b-2);
+  border-radius: 6px;
+  margin-top: 8px;
+}
+.data-scope-path code {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--f-2);
 }
 
 /* ===== Keyboard Shortcuts Help ===== */
@@ -12331,6 +12522,129 @@ html[data-theme="light"] .stats-type-row.active { background: rgba(37, 99, 235, 
   .demo-mode-banner-title::after {
     content: ': ';
   }
+}
+
+/* ── Desktop auto-update prompt (UpdateBanner) ──
+   Floating bottom-right card. Non-modal and position:fixed on purpose: unlike
+   the top banners it must NOT participate in the .app-shell grid, so it never
+   shifts the canvas. Sits above panels but below modal dialogs / command
+   palette (z 999+). Colours use theme tokens, so it adapts to light/dark. */
+.update-card {
+  position: fixed;
+  right: var(--space-4);
+  /* Clear the bottom status bar (--h-status) with a small gap above it. */
+  bottom: calc(var(--h-status) + var(--space-3));
+  z-index: 900;
+  width: 320px;
+  max-width: calc(100vw - 2 * var(--space-4));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-3) var(--space-3);
+  background: var(--s-4);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  animation: update-card-in 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .update-card {
+    animation: none;
+  }
+}
+
+@keyframes update-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.update-card-skip {
+  position: absolute;
+  top: var(--space-1h);
+  right: var(--space-1h);
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  border: none;
+  border-radius: var(--r-full);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+.update-card-skip:hover:not(:disabled),
+.update-card-skip:focus-visible:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  outline: none;
+}
+.update-card-skip:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.update-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  /* Leave room for the absolutely-positioned skip button. */
+  padding-right: var(--space-4);
+}
+
+.update-card-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--acc-hi);
+  margin-top: 1px;
+}
+
+.update-card-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.update-card-title {
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.update-card-version {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.update-card-notes {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.update-card-error {
+  margin: 0;
+  color: var(--danger);
+  word-break: break-word;
+}
+
+.update-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
 }
 
 /* ── Properties panel loading skeleton (fast first properties) ── */

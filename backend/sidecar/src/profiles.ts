@@ -169,9 +169,12 @@ export function getWebIfcSettingsForProfile(
     };
   }
   if (profile === 'performance') {
+    // Mirror of frontend parseProfiles.ts: 10 segments cuts round-element
+    // triangles ~30 % vs 14; the stable-geometry viewer draws the whole
+    // model every frame, so convert-time tessellation is the triangle budget.
     return {
       COORDINATE_TO_ORIGIN: true,
-      CIRCLE_SEGMENTS: 14,
+      CIRCLE_SEGMENTS: 10,
       MEMORY_LIMIT: 384 * 1024 * 1024,
       TAPE_SIZE: 96 * 1024 * 1024,
       PLANE_REFIT_ITERATIONS: 5,
@@ -183,8 +186,11 @@ export function getWebIfcSettingsForProfile(
       CIRCLE_SEGMENTS: 24,
     };
   }
+  // Mirror of frontend parseProfiles.ts: balanced uses the web-ifc default
+  // tessellation (12) - the lean IFC-Lite-style budget for a viewer that
+  // renders every element every frame with no camera-driven culling.
   return {
     COORDINATE_TO_ORIGIN: true,
-    CIRCLE_SEGMENTS: 18,
+    CIRCLE_SEGMENTS: 12,
   };
 }

@@ -113,7 +113,6 @@ import {
   resolveLodTier,
   resolveModelGraphicsQuality,
   shouldAttachNavigationLod,
-  shouldPinAllVisible,
   type LodTier,
 } from '../../services/viewer/lodTierPolicy';
 import { solveCameraFrame } from '../../services/viewer/frameCameraMath';
@@ -4268,22 +4267,26 @@ export default function ViewerPanel({
           };
         };
 
-        // Small and medium models pin ALL_VISIBLE so no element ever pops in
-        // or out with camera distance; only large models keep the worker's
-        // coverage classifier (see lodTierPolicy.ts for the tier contract).
+        // Stable-geometry policy (the IFCLite / Dalux approach): every model,
+        // at every size, renders ONE static representation. ALL_VISIBLE
+        // disables the fragments worker's camera-driven pipeline outright -
+        // no screen-coverage cull, no frustum cull, no wireframe swap - so
+        // nothing ever pops in/out or changes detail during orbit, zoom,
+        // click, or after the camera rests. The worker initializes every
+        // model to LodMode.DEFAULT (which DOES cull and swap), so set the
+        // mode SYNCHRONOUSLY before any camera-driven core.update can
+        // classify a frame. The triangle budget is controlled at conversion
+        // time instead (parseProfiles.ts) plus the opt-in decimated
+        // navigation proxy below.
+        if (typeof model.setLodMode === 'function') {
+          void model.setLodMode(FRAGS.LodMode.ALL_VISIBLE);
+        }
         void (async () => {
           try {
             const ids = await model.getLocalIds();
             if (disposed || ids.length === 0) return;
             const tier = resolveLodTier(ids.length);
             modelLodTiers.set(modelId, tier);
-            if (typeof model.setLodMode === 'function') {
-              await model.setLodMode(
-                shouldPinAllVisible(tier)
-                  ? FRAGS.LodMode.ALL_VISIBLE
-                  : FRAGS.LodMode.DEFAULT,
-              );
-            }
             if (disposed) return;
             // A second fragments model is worthwhile only for genuinely large
             // models. Medium fixtures use worker LOD and avoid duplicate GPU /

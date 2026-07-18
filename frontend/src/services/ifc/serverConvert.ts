@@ -117,7 +117,35 @@ function logServerConvertInfo(message: string, payload?: unknown): void {
   else console.info(message, payload);
 }
 
+/** Delay before the single bounded probe retry (see probeServerCapabilities). */
+const CAPABILITY_PROBE_RETRY_DELAY_MS = 1_200;
+
+/**
+ * One probe attempt, then on a TRANSPORT-LEVEL failure a single delayed
+ * retry. Rationale: a dev-proxy hiccup or a just-restarted backend can answer
+ * the first probe with an aborted fetch, a network error, or an HTML error
+ * page - and the HTML case is classified hard-unrecoverable ("static host
+ * without backend"), which silently demotes every load in the session to the
+ * minutes-long in-browser parse. Confirm transport failures twice before
+ * reporting them. An authoritative JSON envelope from the backend (even
+ * `server_convert: false`) is trusted as-is and never retried.
+ */
 async function probeServerCapabilities(): Promise<ServerConvertCapabilities> {
+  const first = await probeServerCapabilitiesOnce();
+  if (first.caps.server_convert || first.authoritative) return first.caps;
+  await new Promise((res) => globalThis.setTimeout(res, CAPABILITY_PROBE_RETRY_DELAY_MS));
+  return (await probeServerCapabilitiesOnce()).caps;
+}
+
+interface CapabilityProbeAttempt {
+  caps: ServerConvertCapabilities;
+  /** True when the backend answered with a parsed JSON envelope; false for
+   *  transport-level failures (HTTP error status, non-JSON body, abort,
+   *  network error) that a retry may resolve. */
+  authoritative: boolean;
+}
+
+async function probeServerCapabilitiesOnce(): Promise<CapabilityProbeAttempt> {
   const controller = new AbortController();
   const timeoutId = globalThis.setTimeout(() => {
     controller.abort();
@@ -131,23 +159,31 @@ async function probeServerCapabilities(): Promise<ServerConvertCapabilities> {
     });
     if (!resp.ok) {
       return {
-        server_convert: false,
-        available: false,
-        recoverable: resp.status >= 500,
-        reason: `HTTP ${resp.status}`,
+        authoritative: false,
+        caps: {
+          server_convert: false,
+          available: false,
+          recoverable: resp.status >= 500,
+          reason: `HTTP ${resp.status}`,
+        },
       };
     }
     // Static hosts with SPA rewrites answer /api/* with 200 + index.html.
     // Treating that as a recoverable error would send the full IFC body to a
     // /api/ifc/convert that doesn't exist - an HTML answer means there is no
-    // backend at this origin, so mark it hard-unrecoverable.
+    // backend at this origin, so mark it hard-unrecoverable. (A dev-proxy
+    // error page looks the same, which is why the caller re-probes once
+    // before trusting this.)
     const contentType = resp.headers.get('content-type') ?? '';
     if (!contentType.toLowerCase().includes('application/json')) {
       return {
-        server_convert: false,
-        available: false,
-        recoverable: false,
-        reason: `non-JSON response (${contentType || 'no content-type'}) - static host without backend?`,
+        authoritative: false,
+        caps: {
+          server_convert: false,
+          available: false,
+          recoverable: false,
+          reason: `non-JSON response (${contentType || 'no content-type'}) - static host without backend?`,
+        },
       };
     }
     const caps = (await resp.json()) as ServerConvertCapabilities;
@@ -156,17 +192,20 @@ async function probeServerCapabilities(): Promise<ServerConvertCapabilities> {
       ...caps,
       elapsedMs: Math.round(performance.now() - started),
     });
-    return caps;
+    return { authoritative: true, caps };
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
       console.warn('[serverConvert] /api/ifc/features aborted', {
         elapsedMs: Math.round(performance.now() - started),
       });
       return {
-        server_convert: false,
-        available: false,
-        recoverable: true,
-        reason: `capability probe aborted after ${CAPABILITY_FETCH_TIMEOUT_MS} ms`,
+        authoritative: false,
+        caps: {
+          server_convert: false,
+          available: false,
+          recoverable: true,
+          reason: `capability probe aborted after ${CAPABILITY_FETCH_TIMEOUT_MS} ms`,
+        },
       };
     }
     const reason = err instanceof Error ? err.message : String(err);
@@ -175,10 +214,13 @@ async function probeServerCapabilities(): Promise<ServerConvertCapabilities> {
       elapsedMs: Math.round(performance.now() - started),
     });
     return {
-      server_convert: false,
-      available: false,
-      recoverable: true,
-      reason,
+      authoritative: false,
+      caps: {
+        server_convert: false,
+        available: false,
+        recoverable: true,
+        reason,
+      },
     };
   } finally {
     globalThis.clearTimeout(timeoutId);

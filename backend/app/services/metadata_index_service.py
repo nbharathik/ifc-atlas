@@ -100,6 +100,10 @@ class MetadataIndexService:
 
     def write_to_disk(self, sha: str, index: MetadataIndex) -> None:
         path = self.cache_path(sha)
+        # The cache dir is created at import time, but a runtime cache flush
+        # (DELETE /api/system/cache scope=data|all) removes child directories
+        # under DATA_DIR, so re-assert it before every write.
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(index.model_dump(by_alias=True), separators=(",", ":")),
             encoding="utf-8",
@@ -134,7 +138,17 @@ class MetadataIndexService:
             ifc_bytes, model_id=sha[:12]
         )
         index = MetadataIndex.model_validate(raw_index)
-        self.write_to_disk(sha, index)
+        try:
+            self.write_to_disk(sha, index)
+        except OSError:
+            # The disk cache is an optimization. Never discard a successful
+            # sidecar parse because the cache write failed (e.g. the directory
+            # was removed by a cache flush mid-session).
+            logger.exception(
+                "Failed to persist metadata index cache for sha=%s "
+                "(continuing with the in-memory index)",
+                sha[:12],
+            )
         with self._lock:
             self._current = index
             self._current_sha = sha

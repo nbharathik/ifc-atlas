@@ -185,6 +185,11 @@ export function useIfcUpload() {
                 kind: 'info',
                 summary: 'Backend persisted model (version sync ready).',
               });
+              // The authoritative /elements/{id} route works from this moment.
+              // Re-run the properties fetch for the current selection so a
+              // click that raced the upload (400 -> "Properties are
+              // unavailable") self-heals instead of requiring a re-click.
+              state.bumpDetailRefresh();
             })
             .catch((e) => {
               if (!isCurrentUpload(generation)) return;

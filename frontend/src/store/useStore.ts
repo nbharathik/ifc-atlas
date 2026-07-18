@@ -904,6 +904,11 @@ interface AppState {
    *  If the currently-selected element is in the set, clears selectedElement
    *  so PropertiesPanel re-fetches on next render. */
   invalidateElementDetails: (changedIds: number[]) => void;
+  /** Re-run PropertiesPanel's fetch for the current selection WITHOUT
+   *  evicting any cached details. Fired when a backend readiness milestone
+   *  lands (upload persisted, native index ready) so a click that raced the
+   *  backend and stuck on "Properties are unavailable" self-heals. */
+  bumpDetailRefresh: () => void;
   clearChat: () => void;
   reset: () => void;
 }
@@ -1991,6 +1996,13 @@ export const useStore = create<AppState>()(
         return {};
       });
     },
+
+    bumpDetailRefresh: () => set((s) => {
+      // Only useful while something is selected; cached successes re-render
+      // from the cache peek, so this is free except for the stuck-null case.
+      if (s.selectedElementId === null) return {};
+      return { detailRefreshSerial: s.detailRefreshSerial + 1 };
+    }),
 
     clearChat: () => set({ chatMessages: [], chatLoading: false, chatHistoryRestored: false }),
 

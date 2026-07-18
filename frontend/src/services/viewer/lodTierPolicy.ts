@@ -1,29 +1,29 @@
 /**
- * Tiered LOD / per-model graphics-quality policy.
+ * Model-size tiers + per-model graphics-quality policy.
  *
- * Background (engine contract, verified against @thatopen/fragments 3.4.0):
- * the worker's screen-coverage classifier scales its pixel thresholds by
- * `factor = -1.5 * model.graphicsQuality + 2`, read from the PER-MODEL field
- * on every view refresh. LOWER quality means a HIGHER factor, i.e. wider
- * cull/wire bands and MORE elements vanishing or degrading to wire boxes.
- * `core.settings.graphicsQuality` is only a load-time seed (copied onto the
- * model once); writing it at runtime does nothing for loaded models.
+ * Stable-geometry contract (the IFCLite / Dalux approach): EVERY model, at
+ * every size, renders ONE static representation - LodMode.ALL_VISIBLE. The
+ * fragments worker's camera-driven pipeline (screen-coverage cull, frustum
+ * cull, wireframe LOD swap) is disabled outright, so no element ever pops
+ * in/out or changes detail during orbit, zoom, click, or after the camera
+ * rests. ViewerPanel sets ALL_VISIBLE synchronously at model load.
  *
- * The floor rule: the interaction ladder drops quality to 0.6 during
- * navigation, which maps to a ~1.5x wider cull band than the idle 0.85.
- * Wiring that drop naively to every model would make elements visibly
- * vanish during orbit on exactly the models users care about.
+ * The triangle/memory budget is controlled where it cannot cause pop:
+ *   - at CONVERSION time (parseProfiles.ts: CIRCLE_SEGMENTS tessellation,
+ *     category drops, geometry welding on faster profiles), and
+ *   - by the opt-in decimated navigation proxy for large models (lodSwap.ts,
+ *     `largeModelLod` preference, off by default).
  *
- *   small  (< ALL_VISIBLE_MAX_ELEMENTS): ALL_VISIBLE LodMode - the worker
- *          skips coverage/frustum culling entirely, quality is irrelevant.
- *   medium (up to LARGE_MODEL_MIN_ELEMENTS): ALL_VISIBLE LodMode - every
- *          element stays resident and drawable at any camera distance, so
- *          nothing pops during orbit or zoom; quality is irrelevant.
- *   large  (above): DEFAULT coverage classifier with quality pinned to the
- *          ladder's idle level, until per-tile LOD replaces it.
+ * The tiers below remain for the two things that still scale with model
+ * size: whether the decimated navigation proxy is worth its memory
+ * (large only), and the per-model graphicsQuality write (kept so the
+ * user's Performance-mode choice reaches the worker; under ALL_VISIBLE the
+ * classifier early-returns, so quality can never hide geometry).
  *
- * Thresholds are provisional pending scaling probes; keep them as named
- * constants so tuning lands in one place.
+ * Engine background (verified against @thatopen/fragments 3.4.0): the
+ * worker's coverage classifier scales its pixel thresholds by
+ * `factor = -1.5 * model.graphicsQuality + 2` - but only in DEFAULT /
+ * ALL_GEOMETRY modes, which this app no longer uses anywhere.
  */
 
 export type LodTier = 'small' | 'medium' | 'large';
@@ -40,19 +40,6 @@ export function resolveLodTier(elementCount: number): LodTier {
   if (elementCount < ALL_VISIBLE_MAX_ELEMENTS) return 'small';
   if (elementCount < LARGE_MODEL_MIN_ELEMENTS) return 'medium';
   return 'large';
-}
-
-/**
- * Small and medium models bypass the fragments worker's view-dependent LOD
- * entirely: every element stays resident and drawable regardless of camera
- * distance or angle, matching the stable-geometry invariant. The classifier's
- * measured frame-time benefit on this class of model is within noise, while
- * its wire/cull bands make elements visibly pop during orbit and zoom.
- * Large models keep the classifier until per-tile LOD ships; drawing every
- * triangle of a 20k+ element model unculled is a real GPU regression.
- */
-export function shouldPinAllVisible(tier: LodTier): boolean {
-  return tier === 'small' || tier === 'medium';
 }
 
 export function shouldAttachNavigationLod(tier: LodTier, enabled: boolean): boolean {

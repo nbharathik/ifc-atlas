@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState, useRef } from 'react';
+import { useEffect, useCallback, useState, useRef, type ReactNode } from 'react';
 
 import { useStore } from '../../store/useStore';
 import {
@@ -403,7 +403,10 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 </button>
               </div>
               <div className="setting-group">
-                <label className="setting-label">Theme</label>
+                <label className="setting-label setting-label-inline">
+                  Theme
+                  <InfoHint text="Dark is easier on the eyes for long model-review sessions; Light suits bright rooms. Applied instantly and remembered on this device." />
+                </label>
                 <div className="provider-cards">
                   <button
                     className={`provider-card ${theme === 'dark' ? 'selected' : ''}`}
@@ -421,7 +424,10 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               </div>
 
               <div className="setting-group">
-                <label className="setting-label">Accent colour</label>
+                <label className="setting-label setting-label-inline">
+                  Accent colour
+                  <InfoHint text="Sets the highlight colour used across buttons, selection and links. Applied live and persisted across sessions on this device." />
+                </label>
                 <div className="accent-presets">
                   {ACCENT_PRESETS.map((p) => (
                     <button
@@ -435,7 +441,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                   ))}
                 </div>
                 <p className="setting-hint">
-                  {ACCENT_PRESETS.find((p) => p.id === accentPreset)?.label ?? 'Blue'}, applied live, persisted across sessions.
+                  {ACCENT_PRESETS.find((p) => p.id === accentPreset)?.label ?? 'Blue'}
                 </p>
               </div>
             </section>
@@ -466,25 +472,22 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 </button>
               </div>
               <div className="setting-group">
-                <label className="setting-label">Selection focus</label>
+                <label className="setting-label setting-label-inline">
+                  Selection focus
+                  <InfoHint text={<><strong>Normal</strong> keeps every element fully opaque. <strong>Ghost others</strong> fades the rest of the scene to the opacity below while a selection or highlight is active, so the focused element stands out.</>} />
+                </label>
                 <div className="provider-cards">
                   <button
                     className={`provider-card ${selectionFocusMode === 'off' ? 'selected' : ''}`}
                     onClick={() => setSelectionFocusMode('off')}
                   >
                     <span className="provider-name">Normal</span>
-                    <span className="setting-hint" style={{ textAlign: 'center', fontSize: 11 }}>
-                      Keep all elements fully opaque.
-                    </span>
                   </button>
                   <button
                     className={`provider-card ${selectionFocusMode === 'ghost' ? 'selected' : ''}`}
                     onClick={() => setSelectionFocusMode('ghost')}
                   >
                     <span className="provider-name">Ghost others</span>
-                    <span className="setting-hint" style={{ textAlign: 'center', fontSize: 11 }}>
-                      Fade the scene while selection/highlight is active.
-                    </span>
                   </button>
                 </div>
               </div>
@@ -509,48 +512,45 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               </div>
 
               <div className="setting-group">
-                <label className="setting-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={gridVisible}
-                    onChange={() => toggleGrid()}
-                  />
-                  Ground grid
-                </label>
-                <p className="setting-hint" style={{ marginTop: 4 }}>
-                  Show the reference grid under the model. Also available on the toolbar.
-                </p>
+                <div className="setting-row">
+                  <label className="setting-check">
+                    <input
+                      type="checkbox"
+                      checked={gridVisible}
+                      onChange={() => toggleGrid()}
+                    />
+                    Ground grid
+                  </label>
+                  <InfoHint text="Show the reference grid under the model. Also available on the toolbar." />
+                </div>
               </div>
 
               <div className="setting-group">
-                <label className="setting-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={hoverHighlightEnabled}
-                    onChange={(e) => setHoverHighlightEnabled(e.target.checked)}
-                  />
-                  Hover highlight
-                </label>
-                <p className="setting-hint" style={{ marginTop: 4 }}>
-                  Preview-highlight the element under the cursor before you click.
-                  Also available on the toolbar.
-                </p>
+                <div className="setting-row">
+                  <label className="setting-check">
+                    <input
+                      type="checkbox"
+                      checked={hoverHighlightEnabled}
+                      onChange={(e) => setHoverHighlightEnabled(e.target.checked)}
+                    />
+                    Hover highlight
+                  </label>
+                  <InfoHint text="Preview-highlight the element under the cursor before you click. Also available on the toolbar." />
+                </div>
               </div>
 
               <div className="setting-group">
-                <label className="setting-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={furnishingMerged}
-                    onChange={(e) => setFurnishingMerged(e.target.checked)}
-                  />
-                  Simplify furnishings
-                </label>
-                <p className="setting-hint" style={{ marginTop: 4 }}>
-                  Merge furniture geometry into a single draw call for higher FPS on
-                  dense models; turn off to restore per-element detail. Also available
-                  on the toolbar.
-                </p>
+                <div className="setting-row">
+                  <label className="setting-check">
+                    <input
+                      type="checkbox"
+                      checked={furnishingMerged}
+                      onChange={(e) => setFurnishingMerged(e.target.checked)}
+                    />
+                    Simplify furnishings
+                  </label>
+                  <InfoHint text="Merge furniture geometry into a single draw call for higher FPS on dense models; turn off to restore per-element detail. Also available on the toolbar." />
+                </div>
               </div>
             </section>
 
@@ -573,14 +573,17 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                     setStartupMode('concurrent_fast');
                     handleGraphicsProfileChange('balanced');
                     setFrustumCullingEnabled(false);
-                    setLargeModelLod(true);
+                    setLargeModelLod(false);
                   }}
                 >
                   Reset section
                 </button>
               </div>
               <div className="setting-group">
-                <label className="setting-label">Renderer</label>
+                <label className="setting-label setting-label-inline">
+                  Renderer
+                  <InfoHint text={<>Chooses the graphics backend. <strong>Auto</strong> picks the best available. <strong>WebGL 2</strong> is the maximum-compatibility choice; <strong>WebGPU</strong> is a GPU-native pipeline that needs Chrome/Edge 113+. Applies on the next model load; the current session runs WebGL 2.</>} />
+                </label>
                 <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
                   {([
                     { id: 'auto', label: 'Auto', hint: 'Use the best available renderer' },
@@ -617,40 +620,34 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                     WebGPU compute is active: clip-section edge generation runs on the GPU automatically.
                   </p>
                 )}
-                <p className="setting-hint" style={{ marginTop: 6 }}>
-                  Renderer selection applies on the next model load. Current session: WebGL 2.
-                </p>
               </div>
 
               <div className="setting-group">
-                <label className="setting-label">Startup mode</label>
+                <label className="setting-label setting-label-inline">
+                  Startup mode
+                  <InfoHint text={<><strong>Concurrent fast</strong> paints geometry first and hydrates the model tree/metadata in the background. <strong>Full upfront</strong> waits for the complete tree before marking the model ready. Applies on the next model load.</>} />
+                </label>
                 <div className="provider-cards">
                   <button
                     className={`provider-card ${startupMode === 'concurrent_fast' ? 'selected' : ''}`}
                     onClick={() => setStartupMode('concurrent_fast')}
                   >
                     <span className="provider-name">Concurrent fast</span>
-                    <span className="setting-hint" style={{ textAlign: 'center', fontSize: 11 }}>
-                      Geometry first, metadata hydrates in background.
-                    </span>
                   </button>
                   <button
                     className={`provider-card ${startupMode === 'full_upfront' ? 'selected' : ''}`}
                     onClick={() => setStartupMode('full_upfront')}
                   >
                     <span className="provider-name">Full upfront</span>
-                    <span className="setting-hint" style={{ textAlign: 'center', fontSize: 11 }}>
-                      Wait for the full model tree before marking ready.
-                    </span>
                   </button>
                 </div>
-                <p className="setting-hint" style={{ marginTop: 4 }}>
-                  Applies on the next model load.
-                </p>
               </div>
 
               <div className="setting-group">
-                <label className="setting-label">Graphics profile</label>
+                <label className="setting-label setting-label-inline">
+                  Graphics profile
+                  <InfoHint text={<><strong>Balanced</strong> (default) is the best mix for most models. <strong>Quality</strong> favours visual fidelity; <strong>Performance</strong> trades fidelity for speed. Applies on the next model load.</>} />
+                </label>
                 <select
                   className="setting-select"
                   value={graphicsProfile}
@@ -660,46 +657,34 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                   <option value="quality">Quality</option>
                   <option value="performance">Performance</option>
                 </select>
-                <p className="setting-hint" style={{ marginTop: 4 }}>
-                  Balanced is the default. Performance trades visual fidelity for
-                  speed. Applies on the next model load.
-                </p>
               </div>
 
               <div className="setting-group">
-                <label className="setting-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={frustumCullingEnabled}
-                    onChange={(e) => setFrustumCullingEnabled(e.target.checked)}
-                  />
-                  Spatial visibility culling
-                </label>
-                <p className="setting-hint" style={{ marginTop: 4 }}>
-                  Off by default. For large models, uses preprocessed geometry bounds
-                  when available and keeps geometry mounted while changing only a
-                  named visibility mask. Tiles are revealed during navigation and
-                  hidden only after the camera settles; the client AABB culler remains
-                  a fallback while preprocessing warms.
-                </p>
+                <div className="setting-row">
+                  <label className="setting-check">
+                    <input
+                      type="checkbox"
+                      checked={frustumCullingEnabled}
+                      onChange={(e) => setFrustumCullingEnabled(e.target.checked)}
+                    />
+                    Spatial visibility culling
+                  </label>
+                  <InfoHint text="Off by default. For very large models it hides geometry outside the view to save GPU, revealing tiles during navigation and hiding them only after the camera settles. Leave off for the most stable picture, where nothing pops in or out." />
+                </div>
               </div>
 
               <div className="setting-group">
-                <label className="setting-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={largeModelLod}
-                    onChange={(e) => setLargeModelLod(e.target.checked)}
-                  />
-                  Fast navigation for large models
-                </label>
-                <p className="setting-hint" style={{ marginTop: 4 }}>
-                  Experimental and off by default. While you orbit or pan a large
-                  model, it swaps in a lighter decimated copy, then returns to the
-                  full-detail model when the camera stops. This can visibly pop and
-                  is suspended while selection, filtering, colours, or transparency
-                  need the exact model.
-                </p>
+                <div className="setting-row">
+                  <label className="setting-check">
+                    <input
+                      type="checkbox"
+                      checked={largeModelLod}
+                      onChange={(e) => setLargeModelLod(e.target.checked)}
+                    />
+                    Fast navigation for large models
+                  </label>
+                  <InfoHint text="Experimental and off by default. While you orbit or pan a large model it swaps in a lighter decimated copy, then restores full detail when the camera stops. This can visibly pop, and it is suspended while selection, filtering, colours or transparency need the exact model." />
+                </div>
               </div>
             </section>
 
@@ -728,24 +713,25 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               </div>
               {!BROWSER_ONLY && (
               <div className="setting-group">
-                <label className="setting-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={useServerCache}
-                    onChange={(e) => setUseServerCache(e.target.checked)}
-                  />
-                  Use server-side fragment cache
-                </label>
-                <p className="setting-hint" style={{ marginTop: 4 }}>
-                  Enabled by default. Reloading the same IFC reuses the backend's
-                  pre-built fragments for a near-instant cache hit. Disable it only
-                  when you need to force a fresh sidecar conversion.
-                </p>
+                <div className="setting-row">
+                  <label className="setting-check">
+                    <input
+                      type="checkbox"
+                      checked={useServerCache}
+                      onChange={(e) => setUseServerCache(e.target.checked)}
+                    />
+                    Use server-side fragment cache
+                  </label>
+                  <InfoHint text="Enabled by default. Reloading the same IFC reuses the backend's pre-built fragments for a near-instant cache hit. Disable it only when you need to force a fresh sidecar conversion." />
+                </div>
               </div>
               )}
 
               <div className="setting-group">
-                <label className="setting-label">Browser cache policy</label>
+                <label className="setting-label setting-label-inline">
+                  Browser cache policy
+                  <InfoHint text={<>In-browser IndexedDB cache of parsed geometry. <strong>Balanced</strong> (default) keeps recently opened, version-compatible models; <strong>Aggressive</strong> keeps everything it can; <strong>Off</strong> always re-parses. Applies on the next model load.</>} />
+                </label>
                 <select
                   className="setting-select"
                   value={cachePolicy}
@@ -755,18 +741,14 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                   <option value="aggressive">Aggressive</option>
                   <option value="off">Off</option>
                 </select>
-                <p className="setting-hint" style={{ marginTop: 4 }}>
-                  In-browser IndexedDB cache of parsed geometry. Balanced (the default)
-                  keeps recently opened, version-compatible models; Aggressive keeps
-                  everything it can; Off always re-parses. Applies on the next model load.
-                </p>
               </div>
 
               {!BROWSER_ONLY && (
               <div className="setting-group">
-                <label className="setting-label">
+                <label className="setting-label setting-label-inline">
                   Wait for server conversion
-                  <span style={{ marginLeft: 8, fontWeight: 400, color: 'var(--f-2)' }}>
+                  <InfoHint text="How long the viewer waits for the backend to finish pre-building a model before falling back to a fresh upload, polling for status at the interval below. Lower the timeout on a fast backend; raise it on a slow network. A timeout of 0 always uploads immediately. Has no effect while the server-side fragment cache is disabled." />
+                  <span style={{ marginLeft: 4, fontWeight: 400, color: 'var(--f-2)', textTransform: 'none', letterSpacing: 0 }}>
                     {!useServerCache
                       ? '(server cache off)'
                       : prebuildWaitPrefs.timeoutMs === 0
@@ -774,13 +756,6 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                         : `${(prebuildWaitPrefs.timeoutMs / 1000).toFixed(1)} s · poll ${prebuildWaitPrefs.pollIntervalMs} ms`}
                   </span>
                 </label>
-                <p className="setting-hint" style={{ marginTop: 0 }}>
-                  How long the viewer waits for the backend to finish pre-building a
-                  model before falling back to a fresh upload, polling for status at
-                  the interval below. Lower the timeout on a fast backend; raise it on
-                  a slow network. A timeout of 0 always uploads immediately. Has no
-                  effect while the server-side fragment cache is disabled.
-                </p>
                 <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
                   <div>
                     <label className="setting-hint" style={{ display: 'block', marginBottom: 2 }}>
@@ -817,8 +792,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 </div>
                 <div style={{ marginTop: 6 }}>
                   <button
-                    className="provider-card"
-                    style={{ padding: '5px 14px', fontSize: 12, fontWeight: 500 }}
+                    className="settings-btn compact"
                     onClick={resetPrebuildWaitPrefs}
                     title="Restore the default 6 000 ms timeout / 800 ms poll interval"
                   >
@@ -829,38 +803,25 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               )}
 
               <div className="setting-group">
-                <label className="setting-label">
+                <label className="setting-label setting-label-inline">
                   Fragment cache
+                  <InfoHint text={<>Pre-parsed geometry blobs stored in your browser's IndexedDB. Clearing forces a full re-parse on the next load but fixes stale-geometry issues after large edits.{cachePolicy !== 'off' && fragmentCachePersisted === 'best-effort' && ' The browser may evict this cache under storage pressure - load a model again or visit more often to qualify for persistent storage.'}{cachePolicy !== 'off' && fragmentCachePersisted === 'persistent' && ' The browser has granted persistent storage - this cache will not be evicted automatically.'}</>} />
                   {cacheEntries !== null && (
-                    <span style={{ marginLeft: 8, fontWeight: 400, color: 'var(--f-2)' }}>
+                    <span style={{ marginLeft: 4, fontWeight: 400, color: 'var(--f-2)', textTransform: 'none', letterSpacing: 0 }}>
                       {cacheEntries === 0
                         ? '(empty)'
-                        : `(${cacheEntries} entr${cacheEntries === 1 ? 'y' : 'ies'}${cacheTotalBytes ? ` · ${(cacheTotalBytes / (1024 * 1024)).toFixed(1)} MB` : ''})`}
+                        : `${cacheEntries} entr${cacheEntries === 1 ? 'y' : 'ies'}${cacheTotalBytes ? ` · ${(cacheTotalBytes / (1024 * 1024)).toFixed(1)} MB` : ''}`}
                     </span>
                   )}
                   {cachePolicy !== 'off' && <PersistenceBadge state={fragmentCachePersisted} />}
                 </label>
-                <p className="setting-hint" style={{ marginTop: 0 }}>
-                  Pre-parsed geometry blobs stored in IndexedDB. Clearing forces a full
-                  re-parse on next load but fixes stale-geometry issues after large edits.
-                  {cachePolicy !== 'off' && fragmentCachePersisted === 'best-effort' && (
-                    <>
-                      {' '}The browser may evict the cache under storage pressure - load a
-                      model again or visit more often to qualify for persistent storage.
-                    </>
-                  )}
-                  {cachePolicy !== 'off' && fragmentCachePersisted === 'persistent' && (
-                    <>{' '}The browser has granted persistent storage - the cache will not be evicted automatically.</>
-                  )}
-                </p>
-                <div style={{ marginTop: 6 }}>
+                <div style={{ marginTop: 2 }}>
                   <button
-                    className="provider-card"
-                    style={{ padding: '5px 14px', fontSize: 12, fontWeight: 500 }}
+                    className="settings-btn danger"
                     onClick={clearFragmentCache}
                     disabled={cacheClearing || cacheEntries === 0}
                   >
-                    {cacheClearing ? 'Clearing…' : 'Clear fragment cache'}
+                    {cacheClearing ? 'Clearing…' : 'Clear parsed-geometry cache'}
                   </button>
                 </div>
                 {cacheClearMsg && (
@@ -869,25 +830,20 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               </div>
 
               <div className="setting-group">
-                <label className="setting-label">
-                  WASM service-worker cache
-                  <span style={{ marginLeft: 8, fontWeight: 400, color: swReady ? 'var(--acc-hi)' : 'var(--f-2)' }}>
+                <label className="setting-label setting-label-inline">
+                  WASM engine cache
+                  <InfoHint text="Pre-caches the web-ifc WASM and worker files via a service worker so IFC loading skips the network on repeat visits. Clearing unregisters the service worker; it re-registers on the next page reload." />
+                  <span style={{ marginLeft: 4, fontWeight: 400, color: swReady ? 'var(--acc-hi)' : 'var(--f-2)', textTransform: 'none', letterSpacing: 0 }}>
                     {swReady ? '⚡ active' : '(inactive)'}
                   </span>
                 </label>
-                <p className="setting-hint" style={{ marginTop: 0 }}>
-                  Pre-caches web-ifc WASM and worker files so IFC loading skips network
-                  on repeat visits. Clearing unregisters the service worker; it will
-                  re-register on the next page reload.
-                </p>
-                <div style={{ marginTop: 6 }}>
+                <div style={{ marginTop: 2 }}>
                   <button
-                    className="provider-card"
-                    style={{ padding: '5px 14px', fontSize: 12, fontWeight: 500 }}
+                    className="settings-btn danger"
                     onClick={clearWasmCache}
                     disabled={wasmCacheClearing || !swReady}
                   >
-                    {wasmCacheClearing ? 'Clearing…' : 'Clear WASM cache'}
+                    {wasmCacheClearing ? 'Clearing…' : 'Clear WASM engine cache'}
                   </button>
                 </div>
                 {wasmCacheClearMsg && (
@@ -897,19 +853,15 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
               {!BROWSER_ONLY && (
               <div className="setting-group">
-                <label className="setting-label">
-                  User data folder
+                <label className="setting-label setting-label-inline">
+                  Local data &amp; caches
+                  <InfoHint text={<>Everything IFC Atlas stores on this machine lives in one folder so it never writes inside its install directory. Each row below shows how much space it uses and clears just that data. Set the <code>IFC_ATLAS_HOME</code> environment variable to move the folder.</>} />
                   {dataPaths && (
-                    <span style={{ marginLeft: 8, fontWeight: 400, color: 'var(--f-2)' }}>
-                      ({(dataPaths.total_size_bytes / (1024 * 1024)).toFixed(1)} MB total)
+                    <span style={{ marginLeft: 4, fontWeight: 400, color: 'var(--f-2)', textTransform: 'none', letterSpacing: 0 }}>
+                      {(dataPaths.total_size_bytes / (1024 * 1024)).toFixed(1)} MB total
                     </span>
                   )}
                 </label>
-                <p className="setting-hint" style={{ marginTop: 0 }}>
-                  Uploads, snapshots, custom agents, prompts and edit history live in this
-                  folder so the viewer never writes inside its install directory. Set the
-                  <code> IFC_ATLAS_HOME</code> environment variable to choose a different location.
-                </p>
 
                 {dataPathsLoading && (
                   <p className="setting-hint" style={{ marginTop: 6 }}>Loading…</p>
@@ -920,36 +872,39 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
                 {dataPaths && (
                   <>
-                    <div style={{ marginTop: 8, display: 'grid', gap: 4, fontFamily: 'var(--font-mono, monospace)', fontSize: 11 }}>
-                      <div title={dataPaths.base} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <strong style={{ color: 'var(--f-1)' }}>base:</strong>
-                        <code style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dataPaths.base}</code>
-                        <button
-                          className="provider-card"
-                          style={{ padding: '2px 8px', fontSize: 10 }}
-                          onClick={() => handleCopyPath(dataPaths.base)}
-                        >Copy</button>
-                      </div>
+                    <div className="data-scope-path" title={dataPaths.base}>
+                      <code>{dataPaths.base}</code>
+                      <button
+                        className="settings-btn compact"
+                        onClick={() => handleCopyPath(dataPaths.base)}
+                      >Copy path</button>
+                    </div>
+
+                    <div className="data-scope-list">
                       {([
-                        ['uploads', dataPaths.uploads],
-                        ['snapshots', dataPaths.snapshots],
-                        ['data', dataPaths.data],
-                        ['checkpoints', dataPaths.checkpoints],
-                        ['fragments', dataPaths.fragments],
-                      ] as const).map(([key, entry]) => (
-                        <div key={key} title={entry.path} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          <strong style={{ color: 'var(--f-2)', width: 90 }}>{key}:</strong>
-                          <span style={{ color: 'var(--f-2)' }}>
-                            {entry.entries} entries · {(entry.size_bytes / (1024 * 1024)).toFixed(1)} MB
-                          </span>
+                        ['uploads', 'Uploaded IFC files', 'The original IFC files you have opened.', dataPaths.uploads],
+                        ['snapshots', 'Snapshots', 'Saved viewpoints and exported snapshots.', dataPaths.snapshots],
+                        ['data', 'App data', 'Custom agents, prompts and saved app state.', dataPaths.data],
+                        ['checkpoints', 'Edit history', 'Undo checkpoints created while editing models.', dataPaths.checkpoints],
+                        ['fragments', 'Pre-built fragments', 'Backend geometry cache that makes reopening a model near-instant.', dataPaths.fragments],
+                      ] as const).map(([key, label, desc, entry]) => (
+                        <div key={key} className="data-scope-row" title={entry.path}>
+                          <div className="data-scope-meta">
+                            <span className="data-scope-name">
+                              {label}
+                              <InfoHint text={desc} />
+                            </span>
+                            <span className="data-scope-sub">
+                              {entry.entries} item{entry.entries === 1 ? '' : 's'} · {(entry.size_bytes / (1024 * 1024)).toFixed(1)} MB
+                            </span>
+                          </div>
                           <button
-                            className="provider-card"
-                            style={{ marginLeft: 'auto', padding: '2px 8px', fontSize: 10 }}
+                            className="settings-btn danger"
                             onClick={() => handleFlushScope(key as CacheScope)}
                             disabled={flushingScope !== null || entry.size_bytes === 0}
                             title={`Delete every file under ${entry.path}`}
                           >
-                            {flushingScope === key ? 'Flushing…' : 'Flush'}
+                            {flushingScope === key ? 'Clearing…' : `Clear ${label.toLowerCase()}`}
                           </button>
                         </div>
                       ))}
@@ -957,14 +912,14 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
                     {isDesktop && (
                       <p className="setting-hint" style={{ marginTop: 8 }}>
-                        Open the folder in your file manager by pasting the path above into
-                        Explorer / Finder / Nautilus.
+                        Open the folder by pasting the path above into Explorer / Finder / Nautilus.
                       </p>
                     )}
 
-                    <div style={{ marginTop: 12 }}>
-                      <label className="setting-label">
-                        Uploads cap: {cacheCapGB.toFixed(2)} GB
+                    <div style={{ marginTop: 14 }}>
+                      <label className="setting-label setting-label-inline">
+                        Uploads size cap: {cacheCapGB.toFixed(2)} GB
+                        <InfoHint text={<>The uploads folder is trimmed to this size (oldest files first) once it is exceeded. The cap applies until the backend restarts; set the <code>IFC_VIEWER_CACHE_MAX_BYTES</code> environment variable to make it permanent.</>} />
                       </label>
                       <input
                         type="range"
@@ -980,24 +935,18 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                         <span>0.25 GB</span>
                         <span>20 GB</span>
                       </div>
-                      <div style={{ marginTop: 6, display: 'flex', gap: 8 }}>
+                      <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <button
-                          className="provider-card"
-                          style={{ padding: '5px 14px', fontSize: 12, fontWeight: 500 }}
+                          className="settings-btn"
                           onClick={handleApplyCacheCap}
-                        >Apply cap</button>
+                        >Apply size cap</button>
                         <button
-                          className="provider-card"
-                          style={{ padding: '5px 14px', fontSize: 12, fontWeight: 500 }}
+                          className="settings-btn danger"
                           onClick={() => handleFlushScope('all')}
                           disabled={flushingScope !== null}
-                          title="Delete every file in the user data folder (uploads, snapshots, data, checkpoints, fragments)"
-                        >Clear all caches</button>
+                          title="Delete every file in the local data folder (uploads, snapshots, app data, edit history, fragments)"
+                        >{flushingScope === 'all' ? 'Clearing…' : 'Clear all local data'}</button>
                       </div>
-                      <p className="setting-hint" style={{ marginTop: 6 }}>
-                        The cap applies until the backend restarts. Set the
-                        <code> IFC_VIEWER_CACHE_MAX_BYTES</code> environment variable to persist it.
-                      </p>
                       {flushMsg && (
                         <p className="setting-hint" style={{ marginTop: 6, color: 'var(--acc-hi)' }}>{flushMsg}</p>
                       )}
@@ -1022,12 +971,10 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 </div>
               </div>
               <div className="setting-group">
-                <label className="setting-label">MCP servers</label>
-                <p className="setting-hint" style={{ marginTop: 0 }}>
-                  Model Context Protocol servers extend the chat agent with external tools.
-                  Edit <code>mcp_servers.json</code> in your user data folder to configure;
-                  click Reload to pick up changes without restarting the backend.
-                </p>
+                <label className="setting-label setting-label-inline">
+                  MCP servers
+                  <InfoHint text={<>Model Context Protocol servers extend the chat agent with external tools. Edit <code>mcp_servers.json</code> in your user data folder to configure, then click Reload to pick up changes without restarting the backend.</>} />
+                </label>
 
                 {mcpError && (
                   <div className="setting-hint" style={{ color: 'var(--err, #e5736a)', marginTop: 8 }}>
@@ -1128,12 +1075,11 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               </div>
 
               <div className="setting-group">
-                <label className="setting-label">IDS validation</label>
+                <label className="setting-label setting-label-inline">
+                  IDS validation
+                  <InfoHint text={<>Attach a <code>.ids</code> file in chat and run the <strong>IDS Auditor</strong> preset (or type <code>/ids</code>) to get a pass/fail report with sample failing elements.</>} />
+                </label>
                 <p className="setting-hint" style={{ marginTop: 0 }}>
-                  Attach a <code>.ids</code> file in chat and run the <strong>IDS Auditor</strong> preset
-                  (or type <code>/ids</code>) to get a pass/fail report with sample failing elements.
-                </p>
-                <p className="setting-hint" style={{ marginTop: 6 }}>
                   Press <kbd>?</kbd> anywhere in the viewer to see the full keyboard-shortcut reference.
                 </p>
               </div>
@@ -1269,6 +1215,66 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
       </div>
     )}
     </>
+  );
+}
+
+/**
+ * A small "i" icon that reveals its description in a hover/focus bubble, so the
+ * settings page can stay scannable instead of stacking a paragraph under every
+ * control. The bubble is position:fixed and placed from the icon's rect, so it
+ * is never clipped by the settings scroll pane; it flips above the icon in the
+ * lower half of the viewport. Works on touch too (tap toggles).
+ */
+function InfoHint({ text, label = 'More information' }: { text: ReactNode; label?: string }) {
+  const iconRef = useRef<HTMLButtonElement | null>(null);
+  const [bubble, setBubble] = useState<{ top: number; left: number; place: 'top' | 'bottom' } | null>(null);
+
+  const open = useCallback(() => {
+    const el = iconRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const width = 300;
+    const margin = 12;
+    const place: 'top' | 'bottom' = r.top > window.innerHeight * 0.5 ? 'top' : 'bottom';
+    let left = r.left + r.width / 2 - width / 2;
+    left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
+    const top = place === 'top' ? r.top - 8 : r.bottom + 8;
+    setBubble({ top, left, place });
+  }, []);
+
+  const close = useCallback(() => setBubble(null), []);
+
+  return (
+    <span className="setting-info-wrap">
+      <button
+        type="button"
+        ref={iconRef}
+        className="setting-info-icon"
+        aria-label={label}
+        onMouseEnter={open}
+        onMouseLeave={close}
+        onFocus={open}
+        onBlur={close}
+        onClick={(e) => { e.preventDefault(); if (bubble) close(); else open(); }}
+      >
+        i
+      </button>
+      {bubble && (
+        <span
+          role="tooltip"
+          className="setting-info-bubble"
+          style={{
+            position: 'fixed',
+            top: bubble.top,
+            left: bubble.left,
+            width: 300,
+            transform: bubble.place === 'top' ? 'translateY(-100%)' : undefined,
+          }}
+        >
+          {text}
+        </span>
+      )}
+    </span>
   );
 }
 

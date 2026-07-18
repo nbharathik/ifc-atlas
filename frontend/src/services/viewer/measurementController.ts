@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { Line2 } from 'three/examples/jsm/lines/Line2.js';
+import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import * as FRAGS from '@thatopen/fragments';
 import {
   WORLD_Y_UP_FRAME,
@@ -430,25 +433,66 @@ const DUPLICATE_CLICK_EPSILON_METRES = 1e-3;
  *  vertices are typically at sub-centimetre precision. */
 const SNAP_THRESHOLD_METRES = 0.1;
 
-/** Small helper that builds a low-allocation LineBasicMaterial. The colour
- *  is chosen to read against both AMOLED-black and light backgrounds. */
-function lineMaterial(opts: { dashed?: boolean; colour?: number } = {}): THREE.Material {
-  const colour = opts.colour ?? 0xffcc33;
-  if (opts.dashed) {
-    return new THREE.LineDashedMaterial({
-      color: colour,
-      dashSize: 0.08,
-      gapSize: 0.06,
-      depthTest: false,
-      transparent: true,
-      opacity: 0.95,
-    });
+/** Screen-space width (in CSS pixels) of every measurement line. THREE.Line's
+ *  `linewidth` is ignored by the WebGL/ANGLE backend (always 1px), so the
+ *  controller draws Line2 fat lines instead, whose width this constant sets.
+ *  Chosen thick enough to read clearly over busy geometry without obscuring it. */
+const MEASURE_LINE_WIDTH_PX = 3.5;
+
+/** Cached ring texture for the start-point marker. `undefined` = not yet built;
+ *  `null` = build attempted but no 2D canvas context (e.g. headless tests). */
+let startMarkerTexture: THREE.Texture | null | undefined;
+
+/** Build (once) a soft target-ring sprite used for the in-flight start marker.
+ *  Drawn in white so a PointsMaterial `color` can tint it. Returns null in
+ *  environments without a 2D canvas so the marker degrades to a plain dot. */
+function startMarkerRingTexture(): THREE.Texture | null {
+  if (startMarkerTexture !== undefined) return startMarkerTexture;
+  try {
+    const size = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      startMarkerTexture = null;
+      return null;
+    }
+    const c = size / 2;
+    ctx.clearRect(0, 0, size, size);
+    // Outer target ring.
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = 'rgba(255,255,255,1)';
+    ctx.beginPath();
+    ctx.arc(c, c, c - 7, 0, Math.PI * 2);
+    ctx.stroke();
+    // Solid centre pip.
+    ctx.fillStyle = 'rgba(255,255,255,1)';
+    ctx.beginPath();
+    ctx.arc(c, c, 6, 0, Math.PI * 2);
+    ctx.fill();
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    startMarkerTexture = texture;
+    return texture;
+  } catch {
+    startMarkerTexture = null;
+    return null;
   }
-  return new THREE.LineBasicMaterial({
-    color: colour,
+}
+
+/** Material for the in-flight start-point marker: a bright green target ring
+ *  that stays pinned to the first placed vertex for the whole measurement. */
+function startMarkerMaterial(): THREE.PointsMaterial {
+  const map = startMarkerRingTexture();
+  return new THREE.PointsMaterial({
+    color: 0x22e06a,
+    size: 22,
+    sizeAttenuation: false,
     depthTest: false,
     transparent: true,
-    opacity: 0.95,
+    opacity: 1,
+    ...(map ? { map, alphaTest: 0.05 } : {}),
   });
 }
 
@@ -524,14 +568,23 @@ export class MeasurementController {
    *  `dispose()` trivially correct - detach + recursively free. */
   private readonly group: THREE.Group;
   /** Live "rubber band" line from the last committed vertex to the cursor. */
-  private previewLine: THREE.Line | null = null;
+  private previewLine: Line2 | null = null;
   /** Live close-edge line (area mode only) - visualises how the polygon
    *  would close if the user finished right now. Keeps polygon UX honest. */
-  private previewCloseLine: THREE.Line | null = null;
+  private previewCloseLine: Line2 | null = null;
   /** Snap indicator dot: shown at the snapped vertex when cursor is within
    *  SNAP_THRESHOLD_METRES of a candidate endpoint (white) or within the
    *  screen-space vertex threshold of a mesh face vertex (blue). */
   private snapDot: THREE.Points | null = null;
+  /** Persistent marker pinned to the first placed vertex of the in-flight
+   *  measurement. Unlike snapDot (which chases the live cursor snap and jumps
+   *  away the instant the pointer moves), this stays put so the user always
+   *  sees where the current run started - the reliable "start point" cue. */
+  private startDot: THREE.Points | null = null;
+  /** Screen resolution fed to every Line2 material so fat-line width resolves
+   *  to the intended pixel thickness. Refreshed on window resize. */
+  private readonly lineResolution = new THREE.Vector2(1, 1);
+  private readonly handleViewportResize = (): void => this.refreshLineResolution();
 
   private mode: MeasurementMode = 'off';
   private pending: THREE.Vector3[] = [];
@@ -558,6 +611,66 @@ export class MeasurementController {
     this.group.name = MEASUREMENT_TAG;
     this.group.renderOrder = 999;
     this.scene.add(this.group);
+    this.refreshLineResolution();
+    if (typeof window !== 'undefined') {
+      window.addEventListener('resize', this.handleViewportResize);
+    }
+  }
+
+  /** Fat lines need the viewport size to convert their pixel width into clip
+   *  space. The exact canvas size is not owned here, so the window size is a
+   *  close-enough proxy; being off by the sidebar width only nudges the
+   *  rendered thickness by a pixel. Pushes the value to every live material. */
+  private refreshLineResolution(): void {
+    const width = typeof window !== 'undefined' ? window.innerWidth : 1;
+    const height = typeof window !== 'undefined' ? window.innerHeight : 1;
+    this.lineResolution.set(Math.max(1, width), Math.max(1, height));
+    for (const material of this.previewMaterials.values()) {
+      if (material instanceof LineMaterial) material.resolution.copy(this.lineResolution);
+    }
+    this.group.traverse((obj) => {
+      const material = (obj as { material?: unknown }).material;
+      if (material instanceof LineMaterial) material.resolution.copy(this.lineResolution);
+    });
+  }
+
+  /** Build a screen-space fat line (Line2) through the given world points.
+   *  `shared` reuses a cached preview material (per-move churn); otherwise a
+   *  fresh disposable material is created for a committed visual. */
+  private makeFatLine(
+    points: THREE.Vector3[],
+    opts: { dashed?: boolean; colour?: number; shared?: boolean } = {},
+  ): Line2 {
+    const positions: number[] = [];
+    for (const point of points) positions.push(point.x, point.y, point.z);
+    const geometry = new LineGeometry();
+    geometry.setPositions(positions);
+    const material = opts.shared
+      ? (this.sharedPreviewMaterial(opts) as LineMaterial)
+      : this.makeLineMaterial(opts);
+    const line = new Line2(geometry, material);
+    if (opts.dashed) line.computeLineDistances();
+    line.renderOrder = 999;
+    return line;
+  }
+
+  /** Disposable fat-line material for a committed visual. Colour must be a
+   *  THREE.Color (LineMaterial assigns the value straight into its uniform). */
+  private makeLineMaterial(opts: { dashed?: boolean; colour?: number } = {}): LineMaterial {
+    const colour = opts.colour ?? 0xffcc33;
+    const material = new LineMaterial({
+      color: new THREE.Color(colour),
+      linewidth: MEASURE_LINE_WIDTH_PX,
+      worldUnits: false,
+      dashed: !!opts.dashed,
+      dashSize: 0.08,
+      gapSize: 0.06,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.95,
+    });
+    material.resolution.copy(this.lineResolution);
+    return material;
   }
 
   getMode(): MeasurementMode { return this.mode; }
@@ -1172,6 +1285,9 @@ export class MeasurementController {
 
   /** Tear down: remove group, free materials/geometries, clear listeners. */
   dispose(): void {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('resize', this.handleViewportResize);
+    }
     this.scene.remove(this.group);
     // Collect first, dispose once: preview materials are shared and cached,
     // and cached ones may not be mounted right now.
@@ -1196,6 +1312,7 @@ export class MeasurementController {
     this.previewLine = null;
     this.previewCloseLine = null;
     this.snapDot = null;
+    this.startDot = null;
     this.snapTarget = null;
     this.snapKind = null;
   }
@@ -1322,7 +1439,7 @@ export class MeasurementController {
     const key = `${opts.dashed ? 'dashed' : 'solid'}:${colour}`;
     let material = this.previewMaterials.get(key);
     if (!material) {
-      material = lineMaterial(opts);
+      material = this.makeLineMaterial(opts);
       this.previewMaterials.set(key, material);
     }
     return material;
@@ -1330,8 +1447,11 @@ export class MeasurementController {
 
   /** Rebuild the preview (rubber-band) line + optional close edge. Called
    *  on every pointer move and every pending-points mutation. Only the
-   *  geometry is rebuilt; materials come from `sharedPreviewMaterial`. */
+   *  geometry is rebuilt; materials come from `sharedPreviewMaterial`. Also
+   *  keeps the persistent start-point marker in sync, since this runs on every
+   *  state transition that adds, clears, or commits a pending point. */
   private refreshPreview(): void {
+    this.updateStartDot();
     if (this.previewLine) {
       this.group.remove(this.previewLine);
       this.previewLine.geometry.dispose();
@@ -1347,11 +1467,11 @@ export class MeasurementController {
     if (this.mode === 'box' && this.boxNormal) {
       // Live rectangle outline: 4 corners on the plane of click 1.
       const corners = buildBoxCorners(this.pending[0], this.cursor, this.boxNormal);
-      const loop = [...corners, corners[0]];
-      const geom = new THREE.BufferGeometry().setFromPoints(loop);
-      this.previewLine = new THREE.Line(geom, this.sharedPreviewMaterial({ dashed: true, colour: 0xffcc33 }));
-      this.previewLine.computeLineDistances();
-      this.previewLine.renderOrder = 999;
+      this.previewLine = this.makeFatLine([...corners, corners[0]], {
+        dashed: true,
+        colour: 0xffcc33,
+        shared: true,
+      });
       this.group.add(this.previewLine);
       return;
     }
@@ -1359,27 +1479,16 @@ export class MeasurementController {
     if (this.mode === 'height' && this.pending.length === 1) {
       const height = verticalHeightBetween(this.pending[0], this.cursor, 'y');
       if (!height) return;
-      const dimensionGeometry = new THREE.BufferGeometry().setFromPoints([
-        height.dimensionStart,
-        height.dimensionEnd,
-      ]);
-      this.previewLine = new THREE.Line(
-        dimensionGeometry,
-        this.sharedPreviewMaterial({ colour: 0xffa040 }),
+      this.previewLine = this.makeFatLine(
+        [height.dimensionStart, height.dimensionEnd],
+        { colour: 0xffa040, shared: true },
       );
-      this.previewLine.renderOrder = 999;
       this.group.add(this.previewLine);
 
-      const witnessGeometry = new THREE.BufferGeometry().setFromPoints([
-        height.sourceB,
-        height.dimensionEnd,
-      ]);
-      this.previewCloseLine = new THREE.Line(
-        witnessGeometry,
-        this.sharedPreviewMaterial({ dashed: true, colour: 0xffa040 }),
+      this.previewCloseLine = this.makeFatLine(
+        [height.sourceB, height.dimensionEnd],
+        { dashed: true, colour: 0xffa040, shared: true },
       );
-      this.previewCloseLine.computeLineDistances();
-      this.previewCloseLine.renderOrder = 999;
       this.group.add(this.previewCloseLine);
       return;
     }
@@ -1387,27 +1496,27 @@ export class MeasurementController {
     if (this.mode === 'angle') {
       if (this.pending.length === 1) {
         // Arm1 not placed yet: rubber-band from vertex to cursor.
-        const vertex = this.pending[0];
-        const geom = new THREE.BufferGeometry().setFromPoints([vertex, this.cursor]);
-        this.previewLine = new THREE.Line(geom, this.sharedPreviewMaterial({ dashed: true, colour: 0xffcc33 }));
-        // Without lineDistances the dash shader reads 0 for every vertex, so
-        // the whole segment falls inside the first dash and renders solid.
-        this.previewLine.computeLineDistances();
-        this.previewLine.renderOrder = 999;
+        this.previewLine = this.makeFatLine([this.pending[0], this.cursor], {
+          dashed: true,
+          colour: 0xffcc33,
+          shared: true,
+        });
         this.group.add(this.previewLine);
       } else if (this.pending.length === 2) {
         // Arm1 placed: show vertex→arm1 solid + vertex→cursor dashed for arm2.
         const vertex = this.pending[0];
         const arm1 = this.pending[1];
-        const solidGeom = new THREE.BufferGeometry().setFromPoints([vertex, arm1]);
-        this.previewCloseLine = new THREE.Line(solidGeom, this.sharedPreviewMaterial({ colour: 0xffcc33 }));
-        this.previewCloseLine.renderOrder = 999;
+        this.previewCloseLine = this.makeFatLine([vertex, arm1], {
+          colour: 0xffcc33,
+          shared: true,
+        });
         this.group.add(this.previewCloseLine);
 
-        const dashGeom = new THREE.BufferGeometry().setFromPoints([vertex, this.cursor]);
-        this.previewLine = new THREE.Line(dashGeom, this.sharedPreviewMaterial({ dashed: true, colour: 0xffcc33 }));
-        this.previewLine.computeLineDistances();
-        this.previewLine.renderOrder = 999;
+        this.previewLine = this.makeFatLine([vertex, this.cursor], {
+          dashed: true,
+          colour: 0xffcc33,
+          shared: true,
+        });
         this.group.add(this.previewLine);
       }
       return;
@@ -1415,21 +1524,47 @@ export class MeasurementController {
 
     // Rubber-band from the last placed vertex to the cursor.
     const last = this.pending[this.pending.length - 1];
-    const geom = new THREE.BufferGeometry().setFromPoints([last, this.cursor]);
-    this.previewLine = new THREE.Line(geom, this.sharedPreviewMaterial({ dashed: false, colour: 0xffcc33 }));
-    this.previewLine.renderOrder = 999;
+    this.previewLine = this.makeFatLine([last, this.cursor], {
+      dashed: false,
+      colour: 0xffcc33,
+      shared: true,
+    });
     this.group.add(this.previewLine);
 
     // Area mode: show the close edge (first vertex ↔ cursor) dashed so the
     // user knows how the polygon closes before committing.
     if (this.mode === 'area' && this.pending.length >= 2) {
       const first = this.pending[0];
-      const closeGeom = new THREE.BufferGeometry().setFromPoints([this.cursor, first]);
-      const mat = this.sharedPreviewMaterial({ dashed: true, colour: 0xffcc33 });
-      this.previewCloseLine = new THREE.Line(closeGeom, mat);
-      (this.previewCloseLine as THREE.Line).computeLineDistances();
-      this.previewCloseLine.renderOrder = 999;
+      this.previewCloseLine = this.makeFatLine([this.cursor, first], {
+        dashed: true,
+        colour: 0xffcc33,
+        shared: true,
+      });
       this.group.add(this.previewCloseLine);
+    }
+  }
+
+  /** Show or hide the persistent start-point marker at the first placed vertex
+   *  of the in-flight measurement. Reliable by construction: it is pinned to
+   *  `pending[0]` and refreshed on every state change, so - unlike the snap
+   *  dot - it never blinks out when the cursor drifts off a snappable feature. */
+  private updateStartDot(): void {
+    const anchor = this.mode !== 'off' && this.pending.length > 0 ? this.pending[0] : null;
+    if (anchor) {
+      if (!this.startDot) {
+        const geom = new THREE.BufferGeometry();
+        geom.setFromPoints([anchor]);
+        this.startDot = new THREE.Points(geom, startMarkerMaterial());
+        this.startDot.name = MEASUREMENT_TAG + '/start';
+        this.startDot.renderOrder = 1001;
+        this.group.add(this.startDot);
+      } else {
+        (this.startDot.geometry as THREE.BufferGeometry).setFromPoints([anchor]);
+        this.startDot.geometry.attributes['position'].needsUpdate = true;
+        this.startDot.visible = true;
+      }
+    } else if (this.startDot) {
+      this.startDot.visible = false;
     }
   }
 
@@ -1449,9 +1584,7 @@ export class MeasurementController {
     }
     const loop = m.kind === 'area';
     const pts = loop ? [...m.points, m.points[0]] : m.points;
-    const lineGeom = new THREE.BufferGeometry().setFromPoints(pts);
-    const line = new THREE.Line(lineGeom, lineMaterial({ dashed: false, colour: 0x66ddff }));
-    line.renderOrder = 999;
+    const line = this.makeFatLine(pts, { dashed: false, colour: 0x66ddff });
     line.userData.measurementId = m.id;
     this.group.add(line);
 
@@ -1464,23 +1597,15 @@ export class MeasurementController {
 
   private buildWitnessVisual(m: CommittedMeasurement): void {
     const colour = m.kind === 'height' ? 0xffa040 : 0xc58cff;
-    const lineGeometry = new THREE.BufferGeometry().setFromPoints(m.points);
-    const line = new THREE.Line(lineGeometry, lineMaterial({ colour }));
-    line.renderOrder = 999;
+    const line = this.makeFatLine(m.points, { colour });
     line.userData.measurementId = m.id;
     this.group.add(line);
 
     if (m.kind === 'height' && m.sourcePoints?.length === 2) {
-      const witnessGeometry = new THREE.BufferGeometry().setFromPoints([
-        m.sourcePoints[1],
-        m.points[1],
-      ]);
-      const witness = new THREE.Line(
-        witnessGeometry,
-        lineMaterial({ dashed: true, colour }),
-      );
-      witness.computeLineDistances();
-      witness.renderOrder = 999;
+      const witness = this.makeFatLine([m.sourcePoints[1], m.points[1]], {
+        dashed: true,
+        colour,
+      });
       witness.userData.measurementId = m.id;
       this.group.add(witness);
     }
@@ -1507,12 +1632,7 @@ export class MeasurementController {
       point.clone().add(new THREE.Vector3(0, 0, 0.08)),
     ];
     for (let index = 0; index < axes.length; index += 2) {
-      const geometry = new THREE.BufferGeometry().setFromPoints([
-        axes[index],
-        axes[index + 1],
-      ]);
-      const line = new THREE.Line(geometry, lineMaterial({ colour }));
-      line.renderOrder = 999;
+      const line = this.makeFatLine([axes[index], axes[index + 1]], { colour });
       line.userData.measurementId = m.id;
       this.group.add(line);
     }
@@ -1530,9 +1650,7 @@ export class MeasurementController {
 
     // Two arm lines.
     for (const endPt of [arm1, arm2]) {
-      const geom = new THREE.BufferGeometry().setFromPoints([vertex, endPt]);
-      const line = new THREE.Line(geom, lineMaterial({ colour }));
-      line.renderOrder = 999;
+      const line = this.makeFatLine([vertex, endPt], { colour });
       line.userData.measurementId = m.id;
       this.group.add(line);
     }
@@ -1540,9 +1658,7 @@ export class MeasurementController {
     // Small arc between the two arms to indicate the angle visually.
     const arcPts = buildAngleArc(vertex, arm1, arm2, 20);
     if (arcPts.length >= 2) {
-      const arcGeom = new THREE.BufferGeometry().setFromPoints(arcPts);
-      const arc = new THREE.Line(arcGeom, lineMaterial({ colour }));
-      arc.renderOrder = 999;
+      const arc = this.makeFatLine(arcPts, { colour });
       arc.userData.measurementId = m.id;
       this.group.add(arc);
     }

@@ -7,7 +7,6 @@ import {
   LARGE_MODEL_MIN_ELEMENTS,
   resolveLodTier,
   resolveModelGraphicsQuality,
-  shouldPinAllVisible,
   shouldAttachNavigationLod,
 } from '../lodTierPolicy';
 
@@ -70,18 +69,10 @@ describe('navigation LOD policy', () => {
   });
 });
 
-describe('shouldPinAllVisible', () => {
-  it('keeps every element resident for the reported 1,032-element class', () => {
-    expect(resolveLodTier(1_032)).toBe('medium');
-    expect(shouldPinAllVisible(resolveLodTier(1_032))).toBe(true);
-  });
-
-  it('bypasses coverage culling for small and medium models only', () => {
-    expect(shouldPinAllVisible('small')).toBe(true);
-    expect(shouldPinAllVisible('medium')).toBe(true);
-    expect(shouldPinAllVisible('large')).toBe(false);
-  });
-});
+// Stable-geometry contract: there is deliberately NO per-tier LodMode policy
+// anymore. ViewerPanel pins FRAGS.LodMode.ALL_VISIBLE for every model at load
+// so the fragments worker never culls or LOD-swaps geometry; the triangle
+// budget lives in parseProfiles.ts (conversion-time tessellation) instead.
 
 describe('resolveModelGraphicsQuality', () => {
   const IDLE = 0.85;

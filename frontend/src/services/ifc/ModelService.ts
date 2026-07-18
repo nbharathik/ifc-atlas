@@ -224,6 +224,12 @@ class ModelServiceImpl {
         idx = result.view;
         break;
       }
+      if (result.kind === 'failed') {
+        // Terminal: the backend parse errored and no index will arrive for
+        // this model. Stop burning the 120 s deadline and fall back to the
+        // in-browser worker right away so properties still work.
+        break;
+      }
       if (result.kind === 'unreachable') {
         networkFailures += 1;
         if (networkFailures >= MAX_NETWORK_FAILURES) break; // backend is down

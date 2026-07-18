@@ -66,10 +66,12 @@ export interface RawBackendIndex {
 }
 
 export interface BackendNativeIndexResponse {
-  /** 'ready' | 'pending' | 'mismatch' on current backends; absent on older ones. */
+  /** 'ready' | 'pending' | 'failed' | 'mismatch' on current backends; absent on older ones. */
   status?: string;
   sha256?: string | null;
   index: RawBackendIndex | null;
+  /** Present when status='failed': why the background parse errored. */
+  error?: string | null;
 }
 
 // Value-types the sidecar emits for IfcQuantity* properties (see
@@ -264,14 +266,17 @@ export class BackendMetadataIndex {
 export type BackendIndexFetchResult =
   | { kind: 'ready'; view: BackendMetadataIndex }
   | { kind: 'pending' }
+  | { kind: 'failed' }
   | { kind: 'unreachable' };
 
 /**
  * Fetch the server-built metadata index for the current model. The backend
  * answers with a 200 status envelope: 'ready' carries the index; 'pending'
  * (not built yet) and 'mismatch' (index belongs to another model) carry
- * index=null and map to 'pending' here. Never throws - this path must never
- * break the load.
+ * index=null and map to 'pending' here; 'failed' means the background parse
+ * errored and no index will ever arrive for this model - callers must stop
+ * polling and fall back to the in-browser worker. Never throws - this path
+ * must never break the load.
  */
 export async function fetchBackendMetadataIndex(
   fingerprint?: string,
@@ -285,6 +290,7 @@ export async function fetchBackendMetadataIndex(
     // response as pending so a version-skewed pair still converges.
     if (!resp.ok) return { kind: 'pending' };
     const body = (await resp.json()) as BackendNativeIndexResponse;
+    if (body?.status === 'failed') return { kind: 'failed' };
     if (!body || !body.index) return { kind: 'pending' };
     const view = new BackendMetadataIndex(body.index, body.sha256 ?? null);
     // An index with zero elements is useless - treat as a miss so we fall back.

@@ -240,13 +240,13 @@ export function getWebIfcSettingsForProfile(
     };
   }
   if (profile === 'performance') {
-    // Bumped CIRCLE_SEGMENTS 8 → 14: curves were rendering as octagons
-    // (visible as "blocky" pipes / columns / round mullions). Triangle
-    // count goes up ~75 % on round elements, but those are usually a
-    // small share of total triangles so the FPS hit is in the noise.
+    // 10 segments (decagon) keeps round elements recognisable while cutting
+    // their triangle count ~30 % vs 14. The stable-geometry viewer renders
+    // the WHOLE model every frame (LodMode.ALL_VISIBLE, no culling), so
+    // convert-time tessellation is the primary triangle budget.
     return {
       COORDINATE_TO_ORIGIN: true,
-      CIRCLE_SEGMENTS: 14,
+      CIRCLE_SEGMENTS: 10,
       MEMORY_LIMIT: 384 * 1024 * 1024,
       TAPE_SIZE: 96 * 1024 * 1024,
       PLANE_REFIT_ITERATIONS: 5,
@@ -261,11 +261,13 @@ export function getWebIfcSettingsForProfile(
       CIRCLE_SEGMENTS: 24,
     };
   }
-  // 'balanced' default: 12 → 18 for a meaningful quality bump on the
-  // out-of-the-box render. Most desktop machines don't notice the extra
-  // triangles; the visual improvement on round elements is dramatic.
+  // 'balanced' default: 12 - the web-ifc default and what lightweight
+  // viewers (e.g. IFC-Lite) ship. The viewer draws every element every
+  // frame with no camera-driven culling (stable-geometry contract), so the
+  // out-of-the-box profile keeps the triangle budget lean; pick Quality for
+  // smoother curves on capable machines.
   return {
     COORDINATE_TO_ORIGIN: true,
-    CIRCLE_SEGMENTS: 18,
+    CIRCLE_SEGMENTS: 12,
   };
 }

@@ -733,6 +733,10 @@ async def get_native_index(
       properties-on-click.
     * ``{"status": "pending", "sha256": null, "index": null}`` - no index is
       loaded yet (the background parse is still running). Poll again.
+    * ``{"status": "failed", "sha256": null, "index": null, "error": ...}`` -
+      the background parse errored and no index will arrive for this model.
+      Terminal: callers must STOP polling and fall back to their local parse
+      or the authoritative ``GET /elements/{id}`` route.
     * ``{"status": "mismatch", "sha256": <loaded sha>, "index": null}`` - an
       index is loaded but belongs to a different model than the requested
       ``fingerprint``. Poll again; the background parse for the requested
@@ -748,6 +752,14 @@ async def get_native_index(
     route never needs to be rebuilt mid-session.
     """
     if not metadata_index_service.is_loaded:
+        snap = readiness_service.get_state()
+        if snap.native_index == "error":
+            return {
+                "status": "failed",
+                "sha256": None,
+                "index": None,
+                "error": snap.native_index_error,
+            }
         return {"status": "pending", "sha256": None, "index": None}
     idx = metadata_index_service.current
     assert idx is not None

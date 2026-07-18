@@ -387,6 +387,71 @@ function makeController(): MeasurementController {
   return new MeasurementController(new THREE.Scene(), model, { onChange: () => {} });
 }
 
+describe('MeasurementController start-point marker', () => {
+  function makeControllerWithScene(): { controller: MeasurementController; scene: THREE.Scene } {
+    const scene = new THREE.Scene();
+    const model = {} as ConstructorParameters<typeof MeasurementController>[1];
+    const controller = new MeasurementController(scene, model, { onChange: () => {} });
+    return { controller, scene };
+  }
+
+  /** The persistent start marker is named `<tag>/start`; the transient hover
+   *  snap dot is `<tag>/snap`. Finding by suffix avoids exporting the tag. */
+  function startMarker(scene: THREE.Scene): THREE.Object3D | undefined {
+    let found: THREE.Object3D | undefined;
+    scene.traverse((o) => {
+      if (o.name.endsWith('/start')) found = o;
+    });
+    return found;
+  }
+
+  it('pins a visible marker to the first placed vertex', () => {
+    const { controller, scene } = makeControllerWithScene();
+    controller.setMode('linear');
+    controller.handleClick(v(2, 0, 3));
+    const marker = startMarker(scene);
+    expect(marker).toBeDefined();
+    expect(marker!.visible).toBe(true);
+    const position = new THREE.Vector3().fromBufferAttribute(
+      (marker as THREE.Points).geometry.getAttribute('position') as THREE.BufferAttribute,
+      0,
+    );
+    expect(position.equals(v(2, 0, 3))).toBe(true);
+  });
+
+  it('keeps the start marker shown when the cursor leaves every snappable feature', () => {
+    // The old behaviour reused the hover snap dot as the start cue, so moving
+    // the pointer onto a bare face (no snap resolved) blinked it out - the
+    // "shows sometimes, not always" bug. The dedicated marker must persist.
+    const { controller, scene } = makeControllerWithScene();
+    controller.setMode('linear');
+    controller.handleClick(v(0, 0, 0));
+    // A caller-resolved null snap => no snap dot, still mid-measurement.
+    controller.handleMove(v(5, 0, 5), null);
+    expect(controller.snapshot().snapFeedback).toBeNull();
+    const marker = startMarker(scene);
+    expect(marker?.visible).toBe(true);
+  });
+
+  it('hides the start marker once the measurement commits', () => {
+    const { controller, scene } = makeControllerWithScene();
+    controller.setMode('linear');
+    controller.handleClick(v(0, 0, 0));
+    controller.handleClick(v(1, 0, 0)); // linear auto-commits on the 2nd click
+    expect(controller.snapshot().committed).toHaveLength(1);
+    expect(startMarker(scene)?.visible).toBe(false);
+  });
+
+  it('hides the start marker when the pending measurement is cancelled', () => {
+    const { controller, scene } = makeControllerWithScene();
+    controller.setMode('area');
+    controller.handleClick(v(0, 0, 0));
+    expect(startMarker(scene)?.visible).toBe(true);
+    controller.cancel();
+    expect(startMarker(scene)?.visible).toBe(false);
+  });
+});
+
 describe('MeasurementController snap priority', () => {
   /** Commit one measurement so its endpoints become snap anchors. */
   function withCommittedMeasurement(): MeasurementController {

@@ -4,6 +4,7 @@ import type { IfcPatch } from './types/ifcPatch';
 
 import DemoModeBanner from './components/layout/DemoModeBanner';
 import EditScopeBanner from './components/layout/EditScopeBanner';
+import UpdateBanner from './components/layout/UpdateBanner';
 import KeyboardShortcuts from './components/layout/KeyboardShortcuts';
 import Menubar from './components/layout/Menubar';
 import { applyAccentPreset } from './utils/accentPreset';
@@ -665,6 +666,10 @@ export default function App() {
           summary: `Metadata index ready: ${element_count} elements, ${storey_count} storeys, ${pset_count} psets in ${total_ms} ms. Ask-mode tools now use fast path.`,
         });
         state.setNativeIndexReady({ elementCount: element_count, storeyCount: storey_count, psetCount: pset_count });
+        // Fast properties are now servable from the index - re-run the
+        // fetch for the current selection in case it stuck on a miss while
+        // the background parse was still running.
+        state.bumpDetailRefresh();
       }
     };
 
@@ -872,6 +877,7 @@ export default function App() {
         </Suspense>
       )}
       <ToastStack />
+      <UpdateBanner />
       {!BROWSER_ONLY && <AgentManagerPanelWrapper />}
       <Suspense fallback={null}>
         {checkpointPanelOpen && !BROWSER_ONLY && <TimelinePanel />}

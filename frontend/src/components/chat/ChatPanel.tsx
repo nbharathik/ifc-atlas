@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useStore } from '../../store/useStore';
 import type { ChatMessage, ChatUsage, ToolCall, ChatAttachment } from '../../types/ifc';
 import {
@@ -570,6 +571,7 @@ function ChatUsageChip({ usage, messageContent }: { usage: ChatUsage; messageCon
 const MarkdownContent = memo(function MarkdownContent({ content }: { content: string }) {
   return (
     <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
       components={{
         code({ className, children, ...props }) {
           const isInline = !className;
@@ -586,6 +588,15 @@ const MarkdownContent = memo(function MarkdownContent({ content }: { content: st
         },
         a({ children, ...props }) {
           return <a {...props} target="_blank" rel="noopener noreferrer">{children}</a>;
+        },
+        // Wrap GFM tables so a wide table scrolls horizontally inside the
+        // bubble instead of blowing out the chat panel width.
+        table({ children, ...props }) {
+          return (
+            <div className="chat-table-wrap">
+              <table {...props}>{children}</table>
+            </div>
+          );
         },
       }}
     >

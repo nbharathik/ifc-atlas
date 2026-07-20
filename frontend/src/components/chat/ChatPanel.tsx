@@ -1508,6 +1508,10 @@ export default function ChatPanel({ embedded = false }: ChatPanelProps = {}) {
       thread_id: useStore.getState().chatThreadId,
       use_graph: true,
       selected_ids: selectedIds.slice(0, 50),
+      // Lets the backend notice when it still holds a previously loaded
+      // model (a fresh open persists in the background) and prefix the
+      // turn with a sync warning instead of silently answering from it.
+      model_fingerprint: selState.modelFingerprint,
       // Edit scope: 'semantic' strips the AI's structural (geometry) write
       // tools so metadata edits never reload the viewer (dev/docs/EDIT_SCOPES).
       edit_scope: selState.editScope,

@@ -867,9 +867,47 @@ export default function App() {
         </Suspense>
       )}
       {settingsOpen && (
-        <Suspense fallback={null}>
-          <SettingsModal onClose={() => setSettingsOpen(false)} />
-        </Suspense>
+        /* The modal is a lazy chunk. With fallback={null} and no boundary,
+           "open Settings" showed NOTHING while the chunk downloaded, and a
+           failed chunk request (stale hashes after a redeploy, dev-server
+           hiccup) made the click permanently do nothing. Show a loading
+           shell while it resolves; on a load error offer reload/close
+           (React.lazy caches the rejection, so only a reload retries). */
+        <ErrorBoundary
+          label="SettingsModal"
+          fallback={
+            <div className="modal-overlay" onClick={() => setSettingsOpen(false)}>
+              <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h2>Settings failed to load</h2>
+                  <button className="btn-icon" onClick={() => setSettingsOpen(false)} aria-label="Close settings">
+                    &times;
+                  </button>
+                </div>
+                <p>
+                  The settings panel could not be loaded. This usually means the app
+                  was updated or the connection dropped while fetching it. Reload the
+                  app and try again.
+                </p>
+                <button className="btn-primary" onClick={() => window.location.reload()}>
+                  Reload app
+                </button>
+              </div>
+            </div>
+          }
+        >
+          <Suspense
+            fallback={
+              <div className="modal-overlay">
+                <div className="modal-content" aria-busy="true">
+                  <p>Loading settings...</p>
+                </div>
+              </div>
+            }
+          >
+            <SettingsModal onClose={() => setSettingsOpen(false)} />
+          </Suspense>
+        </ErrorBoundary>
       )}
       {pendingEditCount > 0 && (
         <Suspense fallback={null}>

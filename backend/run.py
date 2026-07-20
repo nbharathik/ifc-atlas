@@ -116,6 +116,16 @@ def _bind_server_socket(host: str, preferred: int) -> socket.socket:
                 exc,
             )
             continue
+        # Start listening HERE, not later inside uvicorn. Loading
+        # ``app.main`` pulls in ifcopenshell and every router and takes ~3 s on
+        # Windows. A socket that is bound but not yet listening does not refuse
+        # connections on Windows - it silently drops the SYN, so the dev proxy
+        # and the frontend sit there until they time out. Listening up front
+        # means anything that arrives during the import queues in the backlog
+        # and is served the moment uvicorn starts accepting.
+        # asyncio's create_server() calls listen() again on this same socket,
+        # which is a no-op beyond resetting the backlog.
+        sock.listen(2048)
         return sock
     raise AssertionError("unreachable")
 

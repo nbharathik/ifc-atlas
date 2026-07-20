@@ -784,7 +784,12 @@ async def get_meta(
 @router.post("/edits/apply", response_model=EditApplyResponse)
 async def apply_edits(request: EditApplyRequest):
     _check_loaded()
-    result = ifc_service.apply_edits(request)
+    # Mutation + full-model persist: serialize on the shared edit lock like
+    # the pending-apply path (this route previously raced it), and run
+    # off-loop like the chat write tools so the serialize/fingerprint pass
+    # does not stall every other request.
+    async with _apply_lock:
+        result = await asyncio.to_thread(ifc_service.apply_edits, request)
 
     if result.status == "accepted":
         await model_sync_broker.publish(
@@ -1365,6 +1370,12 @@ async def model_sync_ws(websocket: WebSocket):
             await websocket.send_json(event.model_dump())
     except WebSocketDisconnect:
         pass
+    except RuntimeError:
+        # The peer can drop between queue.get() and send_json; starlette
+        # then raises RuntimeError ("Unexpected ASGI message ... after
+        # sending 'websocket.close'") instead of WebSocketDisconnect.
+        # Either way the subscriber is gone - clean up quietly.
+        pass
     finally:
         await model_sync_broker.unsubscribe(queue)
 
@@ -1372,13 +1383,15 @@ async def model_sync_ws(websocket: WebSocket):
 @router.get("/project", response_model=ProjectInfo)
 async def get_project():
     _check_loaded()
-    return ifc_service.get_project_info()
+    return await asyncio.to_thread(ifc_service.get_project_info)
 
 
 @router.get("/tree", response_model=SpatialNode)
 async def get_spatial_tree():
     _check_loaded()
-    return ifc_service.get_spatial_tree()
+    # Cache-backed, but the first call per model walks the whole spatial
+    # structure - keep the build off the loop.
+    return await asyncio.to_thread(ifc_service.get_spatial_tree)
 
 
 @router.get("/elements", response_model=list[ElementSummary])
@@ -1388,17 +1401,20 @@ async def get_elements(
 ):
     _check_loaded()
     if storey_id is not None:
-        return ifc_service.get_elements_by_storey(storey_id)
+        return await asyncio.to_thread(ifc_service.get_elements_by_storey, storey_id)
     if ifc_type:
-        return ifc_service.get_elements_by_type(ifc_type)
-    return ifc_service.get_all_elements()
+        return await asyncio.to_thread(ifc_service.get_elements_by_type, ifc_type)
+    return await asyncio.to_thread(ifc_service.get_all_elements)
 
 
 @router.get("/elements/{element_id}", response_model=ElementDetail)
 async def get_element(element_id: int):
     _check_loaded()
     try:
-        return ifc_service.get_element(element_id)
+        # Per-element pset/relation walk; off-loop like the other
+        # model-traversal routes so a click on a heavy element does not
+        # stall every other request and websocket.
+        return await asyncio.to_thread(ifc_service.get_element, element_id)
     except ValueError as e:
         raise HTTPException(404, str(e))
     except RuntimeError as e:
@@ -1418,13 +1434,17 @@ async def get_element_relations(element_id: int):
     API calls.
     """
     _check_loaded()
-    try:
+
+    def _collect() -> dict:
         return {
             "element_id": element_id,
             "material": ifc_service.get_element_material(element_id),
             "connections": ifc_service.get_connected_elements(element_id),
             "openings": ifc_service.get_openings_for_element(element_id),
         }
+
+    try:
+        return await asyncio.to_thread(_collect)
     except ValueError as e:
         raise HTTPException(404, str(e))
 
@@ -1432,13 +1452,13 @@ async def get_element_relations(element_id: int):
 @router.get("/stats", response_model=ModelStats)
 async def get_stats():
     _check_loaded()
-    return ifc_service.get_model_stats()
+    return await asyncio.to_thread(ifc_service.get_model_stats)
 
 
 @router.get("/storeys", response_model=list[ElementSummary])
 async def get_storeys():
     _check_loaded()
-    return ifc_service.get_storeys()
+    return await asyncio.to_thread(ifc_service.get_storeys)
 
 
 @router.get("/search", response_model=SearchResult)
@@ -1449,7 +1469,9 @@ async def search(
     limit: int = Query(100, ge=1, le=1000),
 ):
     _check_loaded()
-    return ifc_service.search(q, ifc_type=ifc_type, storey=storey, limit=limit)
+    return await asyncio.to_thread(
+        ifc_service.search, q, ifc_type=ifc_type, storey=storey, limit=limit
+    )
 
 
 @router.post("/aggregate", response_model=AggregateResult)
@@ -1463,7 +1485,7 @@ async def aggregate_elements(request: AggregateRequest):
     if len(request.express_ids) > 2000:
         from fastapi import HTTPException as _HTTPException
         raise _HTTPException(status_code=400, detail="Too many IDs - max 2000")
-    result = ifc_service.get_aggregate(request.express_ids)
+    result = await asyncio.to_thread(ifc_service.get_aggregate, request.express_ids)
     return AggregateResult(**result)
 
 
@@ -1649,7 +1671,9 @@ async def health_check_endpoint(req: HealthCheckRequest = HealthCheckRequest()):
     _check_loaded()
     model = ifc_service.model
     t0 = _time.perf_counter()
-    result = run_health_check(model, limit_per_rule=req.limit_per_rule)
+    result = await asyncio.to_thread(
+        run_health_check, model, limit_per_rule=req.limit_per_rule
+    )
     result["duration_ms"] = round((_time.perf_counter() - t0) * 1000, 1)
     return result
 
@@ -1670,13 +1694,17 @@ async def ids_validate_endpoint(req: IdsValidateRequest):
     headers = {"X-IDS-Engine": IDS_ENGINE}
     try:
         if req.format == "csv":
-            csv_text = validate_ids_base64_to_csv(model, req.ids_base64)
+            csv_text = await asyncio.to_thread(
+                validate_ids_base64_to_csv, model, req.ids_base64
+            )
             return Response(
                 content=csv_text,
                 media_type="text/csv",
                 headers={**headers, "Content-Disposition": 'attachment; filename="ids_failures.csv"'},
             )
-        report = validate_ids_base64(model, req.ids_base64, limit_per_spec=req.limit_per_spec)
+        report = await asyncio.to_thread(
+            validate_ids_base64, model, req.ids_base64, limit_per_spec=req.limit_per_spec
+        )
         report = {**report, "all_failing_ids": extract_failing_ids(report)}
         from fastapi.responses import JSONResponse
         return JSONResponse(content=report, headers=headers)
@@ -1735,7 +1763,10 @@ async def get_storey_manifest():
     """
     _check_loaded()
     sha = ifc_service._model_fingerprint  # noqa: SLF001
-    manifest = storey_splitter.get_manifest(ifc_service.model, sha)
+    # Same splitter the tile/storey fragment routes already run off-loop.
+    manifest = await asyncio.to_thread(
+        storey_splitter.get_manifest, ifc_service.model, sha
+    )
     return {
         "source_sha256": manifest.source_sha256,
         "total_elements": manifest.total_elements,
@@ -2674,7 +2705,7 @@ async def get_lod_fragment(
 @router.get("/checkpoints", response_model=CheckpointStatus)
 async def get_checkpoints(limit: int = Query(50, ge=1, le=200)):
     """List git-backed IFC edit checkpoints newest-first."""
-    raw = ifc_checkpoint_service.list_checkpoints(limit=limit)
+    raw = await asyncio.to_thread(ifc_checkpoint_service.list_checkpoints, limit=limit)
     checkpoints = [IFCCheckpoint(**c) for c in raw]
     return CheckpointStatus(
         available=ifc_checkpoint_service.is_available,
@@ -2691,35 +2722,43 @@ async def rollback_to_checkpoint(sha: str):
     Returns ``{sha, model_version, model_fingerprint}`` on success.
     """
     _check_loaded()
-    ifc_bytes = ifc_checkpoint_service.restore(sha)
-    if ifc_bytes is None:
-        raise HTTPException(404, f"Checkpoint '{sha}' not found")
+    # Serialize against any in-flight edit apply: a rollback swapping the
+    # model file mid-mutation would persist a torn state. The restore, the
+    # working-file rewrite, the full-model reopen, and the snapshot commit
+    # are all heavyweight - keep them off the event loop.
+    async with _apply_lock:
+        ifc_bytes = await asyncio.to_thread(ifc_checkpoint_service.restore, sha)
+        if ifc_bytes is None:
+            raise HTTPException(404, f"Checkpoint '{sha}' not found")
 
-    # Write bytes back to the working file (NOT the pristine upload) and
-    # reload the IfcOpenShell handle in place. We can't call load() here:
-    # load() now treats its argument as a fresh upload and would create a
-    # nested .working/.working/ sidecar.
-    file_path = ifc_service._file_path  # noqa: SLF001 - working file
-    if file_path is None:
-        raise HTTPException(409, "No IFC file currently loaded")
+        # Write bytes back to the working file (NOT the pristine upload) and
+        # reload the IfcOpenShell handle in place. We can't call load() here:
+        # load() now treats its argument as a fresh upload and would create a
+        # nested .working/.working/ sidecar.
+        file_path = ifc_service._file_path  # noqa: SLF001 - working file
+        if file_path is None:
+            raise HTTPException(409, "No IFC file currently loaded")
 
-    try:
-        file_path.write_bytes(ifc_bytes)
-        ifc_service.reload_after_sandbox(edit_id=f"rollback_{sha[:8]}")
-    except Exception as exc:
-        raise HTTPException(500, f"Rollback failed: {exc}") from exc
+        def _restore_and_reload() -> None:
+            file_path.write_bytes(ifc_bytes)
+            ifc_service.reload_after_sandbox(edit_id=f"rollback_{sha[:8]}")
 
-    # Record the rollback in the op log (clears any armed redo - the model
-    # just changed under it) and commit a fresh "Rollback to ..." snapshot so
-    # the newest checkpoint truthfully IS the current state (the panel marks
-    # checkpoints[0] as current).
-    operation_service.record_external(
-        name="rollback",
-        actor=Actor.USER,
-        description=f"Rolled back to checkpoint {sha}",
-        ifc_service=ifc_service,
-    )
-    _snapshot_after_edit(f"Rollback to {sha}")
+        try:
+            await asyncio.to_thread(_restore_and_reload)
+        except Exception as exc:
+            raise HTTPException(500, f"Rollback failed: {exc}") from exc
+
+        # Record the rollback in the op log (clears any armed redo - the model
+        # just changed under it) and commit a fresh "Rollback to ..." snapshot so
+        # the newest checkpoint truthfully IS the current state (the panel marks
+        # checkpoints[0] as current).
+        operation_service.record_external(
+            name="rollback",
+            actor=Actor.USER,
+            description=f"Rolled back to checkpoint {sha}",
+            ifc_service=ifc_service,
+        )
+        await asyncio.to_thread(_snapshot_after_edit, f"Rollback to {sha}")
 
     contract = ifc_service.get_model_contract()
     # A rollback can change anything, geometry included - broadcast the
@@ -2809,7 +2848,7 @@ async def get_checkpoint_diff(sha: str):
     if model is None:
         raise HTTPException(409, "No model currently loaded")
 
-    result = ifc_checkpoint_service.get_diff(sha, model)
+    result = await asyncio.to_thread(ifc_checkpoint_service.get_diff, sha, model)
     if result is None:
         raise HTTPException(404, f"Checkpoint '{sha}' not found or diff failed")
 
@@ -2837,7 +2876,9 @@ async def export_properties(
     """
     _check_loaded()
 
-    csv_text = ifc_service.export_properties_csv(
+    # Walks up to 50k elements plus every pset - by far the heaviest read.
+    csv_text = await asyncio.to_thread(
+        ifc_service.export_properties_csv,
         ifc_type=ifc_type or None,
         include_quantities=include_quantities,
         max_elements=max_elements,
@@ -2877,7 +2918,8 @@ async def get_nearby_elements(
     """
     _check_loaded()
     parsed_types = [t.strip() for t in ifc_types.split(",") if t.strip()] if ifc_types else None
-    return ifc_service.find_nearby_elements(
+    return await asyncio.to_thread(
+        ifc_service.find_nearby_elements,
         element_id=element_id,
         radius_m=radius_m,
         ifc_types=parsed_types,
@@ -2904,7 +2946,10 @@ async def filter_elements_by_property(req: PropertyFilterRequest):
     """
     _check_loaded()
     limit = min(req.limit, 500)
-    return ifc_service.filter_by_property_value(
+    # Walks every IfcProduct + pset; off-loop like its indexed sibling
+    # /elements/filter below.
+    return await asyncio.to_thread(
+        ifc_service.filter_by_property_value,
         property_name=req.property_name,
         operator=req.operator,
         value=req.value,

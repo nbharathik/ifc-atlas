@@ -787,6 +787,34 @@ CLIENT_TOOL_TIMEOUT_SECONDS = 30.0
 # Schema: {"type": "error", "content": "Invalid chat payload: ..."}
 
 
+def _model_sync_notice(client_fp: Optional[str]) -> Optional[str]:
+    """Notice text when the viewer's model is not the backend's model.
+
+    The frontend flips to a freshly-opened model immediately and persists it
+    to the backend in the background, so a chat turn can arrive while the
+    backend still holds the previous model (or none). Answering silently
+    from the wrong model is the confusing part - say so instead. Soft
+    notice only: the client's FNV fallback fingerprint legitimately differs
+    from the backend SHA-256, so a mismatch must never hard-block the turn.
+    """
+    if not client_fp:
+        return None
+    if not ifc_service.is_loaded:
+        return (
+            "Note: your model has not finished syncing to the backend yet "
+            "(no model is loaded server-side right now). Model-specific "
+            "questions may fail - give it a moment and try again.\n\n"
+        )
+    server_fp = ifc_service.model_fingerprint
+    if server_fp and server_fp != client_fp:
+        return (
+            "Note: the backend is still syncing the model shown in your "
+            "viewer - answers below may reflect the previously loaded "
+            "model until the sync finishes.\n\n"
+        )
+    return None
+
+
 @router.websocket("/ws")
 async def chat_websocket(websocket: WebSocket):
     await websocket.accept()
@@ -798,9 +826,36 @@ async def chat_websocket(websocket: WebSocket):
     # so the agent avoids redundant info-gathering tool calls.
     session_mem = SessionMemory()
 
+    # Model-sync notices already shown on this connection, keyed by text -
+    # a persisting mismatch warns once, not on every turn.
+    sync_notices_sent: set[str] = set()
+
     # Pending futures for in-flight client-side tool calls, keyed by the
     # server-generated tool_call_id.
     pending_tool_calls: dict[str, asyncio.Future] = {}
+
+    # Set the moment the client is known to be gone (disconnect seen by the
+    # receive loop, or any failed send). Checked before every outbound frame
+    # and once per stream event so a mid-turn disconnect aborts the LLM
+    # stream instead of erroring on a closed socket for every chunk.
+    client_gone = asyncio.Event()
+
+    async def safe_send(payload: dict) -> bool:
+        """Send JSON unless the client already disconnected.
+
+        Starlette raises RuntimeError ("Unexpected ASGI message
+        'websocket.send', after sending 'websocket.close'") when writing to
+        a socket the client closed mid-turn; treat that exactly like a
+        disconnect rather than letting it crash the chat turn.
+        """
+        if client_gone.is_set():
+            return False
+        try:
+            await websocket.send_json(payload)
+            return True
+        except (WebSocketDisconnect, RuntimeError):
+            client_gone.set()
+            return False
 
     async def receive_loop() -> None:
         """Continuously drain the WS so client tool_result acks can
@@ -830,7 +885,7 @@ async def chat_websocket(websocket: WebSocket):
                 try:
                     request = ChatRequest(**payload)
                 except Exception as e:
-                    await websocket.send_json({
+                    await safe_send({
                         "type": "error",
                         "content": f"Invalid chat payload: {e}",
                     })
@@ -841,6 +896,7 @@ async def chat_websocket(websocket: WebSocket):
         finally:
             # Signal the chat loop to stop and unblock any pending tool
             # calls so they can clean up without hanging.
+            client_gone.set()
             await chat_queue.put(None)
             for fut in list(pending_tool_calls.values()):
                 if not fut.done():
@@ -852,12 +908,17 @@ async def chat_websocket(websocket: WebSocket):
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         pending_tool_calls[tool_call_id] = fut
         try:
-            await websocket.send_json({
+            sent = await safe_send({
                 "type": "tool_call_request",
                 "tool_call_id": tool_call_id,
                 "name": name,
                 "arguments": args,
             })
+            if not sent:
+                return {
+                    "_executed_on_client": True,
+                    "error": f"Client tool '{name}' could not run: the client disconnected.",
+                }
             try:
                 result = await asyncio.wait_for(fut, timeout=CLIENT_TOOL_TIMEOUT_SECONDS)
             except asyncio.TimeoutError:
@@ -991,7 +1052,12 @@ async def chat_websocket(websocket: WebSocket):
                         if _context_block
                         else _sel_block
                     )
-                async for event in stream_chat(
+                _sync_note = _model_sync_notice(request.model_fingerprint)
+                if _sync_note and _sync_note not in sync_notices_sent:
+                    sync_notices_sent.add(_sync_note)
+                    await safe_send({"type": "chunk", "content": _sync_note})
+
+                stream = stream_chat(
                     message=request.message,
                     history=request.history,
                     provider=request.provider,
@@ -1005,92 +1071,109 @@ async def chat_websocket(websocket: WebSocket):
                     prompt_id=request.prompt_id,
                     model_registry_id=request.model_registry_id,
                     edit_scope=request.edit_scope,
-                ):
-                    event_type = event.get("type")
+                )
+                try:
+                    async for event in stream:
+                        if client_gone.is_set():
+                            # Client vanished mid-turn (tab closed, reload,
+                            # proxy drop). Stop consuming the provider
+                            # stream; aclose() below cancels it.
+                            break
+                        event_type = event.get("type")
 
-                    if event_type == "chunk":
-                        full_response += event["content"]
-                        await websocket.send_json({
-                            "type": "chunk",
-                            "content": event["content"],
-                        })
-                    elif event_type == "tool_call":
-                        tier_id, tier_label = tool_tier(event["name"])
-                        await websocket.send_json({
-                            "type": "tool_call",
-                            "name": event["name"],
-                            "arguments": event["arguments"],
-                            "tier": tier_id,
-                            "tier_label": tier_label,
-                            "activity_kind": tool_activity_kind(event["name"]),
-                        })
-                    elif event_type == "tool_result":
-                        result_data = event.get("result")
-                        tool_result_name = event.get("name", "")
-                        await websocket.send_json({
-                            "type": "tool_result",
-                            "name": tool_result_name,
-                            "result": result_data,
-                            "executed_on": event.get("executed_on"),
-                        })
-                        # Update session memory and emit memory_update if changed.
-                        if tool_result_name and session_mem.update(tool_result_name, result_data):
-                            await websocket.send_json({
-                                "type": "memory_update",
-                                "facts": session_mem.get_facts_list(),
+                        if event_type == "chunk":
+                            full_response += event["content"]
+                            await safe_send({
+                                "type": "chunk",
+                                "content": event["content"],
                             })
-                    elif event_type == "highlight":
-                        await websocket.send_json({
-                            "type": "highlight",
-                            "element_ids": event["element_ids"],
-                        })
-                    elif event_type == "select":
-                        await websocket.send_json({
-                            "type": "select",
-                            "element_id": event["element_id"],
-                        })
-                    elif event_type == "isolate":
-                        await websocket.send_json({
-                            "type": "isolate",
-                            "element_ids": event["element_ids"],
-                        })
-                    elif event_type == "show_all":
-                        await websocket.send_json({"type": "show_all"})
-                    elif event_type == "clip_section_box":
-                        await websocket.send_json({
-                            "type": "clip_section_box",
-                            "element_id": event["element_id"],
-                        })
-                    elif event_type == "metadata_changed":
-                        await websocket.send_json({
-                            "type": "metadata_changed",
-                            "changed_ids": event.get("changed_ids", []),
-                            "description": event.get("description", ""),
-                            "renamed": event.get("renamed"),
-                        })
-                    elif event_type == "entity_delta":
-                        # Partial model update signal.
-                        await websocket.send_json({
-                            "type": "entity_delta",
-                            "changed_ids": event.get("changed_ids", []),
-                            "dirty_ids": event.get("dirty_ids", []),
-                            "delta_type": event.get("delta_type", "metadata"),
-                        })
-                    elif event_type == "usage":
-                        # Per-turn cost + cache telemetry.
-                        await websocket.send_json(event)
-                    elif event_type == "error":
-                        # In-band stream errors (e.g. the agent stream was
-                        # interrupted mid-turn). llm_service emits these under
-                        # "message"; the client reads "content" - normalise.
-                        await websocket.send_json({
-                            "type": "error",
-                            "content": event.get("message") or event.get("content") or "Chat stream error.",
-                        })
-                    elif event_type in ("model_fallback", "budget_warning"):
-                        await websocket.send_json(event)
+                        elif event_type == "tool_call":
+                            tier_id, tier_label = tool_tier(event["name"])
+                            await safe_send({
+                                "type": "tool_call",
+                                "name": event["name"],
+                                "arguments": event["arguments"],
+                                "tier": tier_id,
+                                "tier_label": tier_label,
+                                "activity_kind": tool_activity_kind(event["name"]),
+                            })
+                        elif event_type == "tool_result":
+                            result_data = event.get("result")
+                            tool_result_name = event.get("name", "")
+                            await safe_send({
+                                "type": "tool_result",
+                                "name": tool_result_name,
+                                "result": result_data,
+                                "executed_on": event.get("executed_on"),
+                            })
+                            # Update session memory and emit memory_update if changed.
+                            if tool_result_name and session_mem.update(tool_result_name, result_data):
+                                await safe_send({
+                                    "type": "memory_update",
+                                    "facts": session_mem.get_facts_list(),
+                                })
+                        elif event_type == "highlight":
+                            await safe_send({
+                                "type": "highlight",
+                                "element_ids": event["element_ids"],
+                            })
+                        elif event_type == "select":
+                            await safe_send({
+                                "type": "select",
+                                "element_id": event["element_id"],
+                            })
+                        elif event_type == "isolate":
+                            await safe_send({
+                                "type": "isolate",
+                                "element_ids": event["element_ids"],
+                            })
+                        elif event_type == "show_all":
+                            await safe_send({"type": "show_all"})
+                        elif event_type == "clip_section_box":
+                            await safe_send({
+                                "type": "clip_section_box",
+                                "element_id": event["element_id"],
+                            })
+                        elif event_type == "metadata_changed":
+                            await safe_send({
+                                "type": "metadata_changed",
+                                "changed_ids": event.get("changed_ids", []),
+                                "description": event.get("description", ""),
+                                "renamed": event.get("renamed"),
+                            })
+                        elif event_type == "entity_delta":
+                            # Partial model update signal.
+                            await safe_send({
+                                "type": "entity_delta",
+                                "changed_ids": event.get("changed_ids", []),
+                                "dirty_ids": event.get("dirty_ids", []),
+                                "delta_type": event.get("delta_type", "metadata"),
+                            })
+                        elif event_type == "usage":
+                            # Per-turn cost + cache telemetry.
+                            await safe_send(event)
+                        elif event_type == "error":
+                            # In-band stream errors (e.g. the agent stream was
+                            # interrupted mid-turn). llm_service emits these under
+                            # "message"; the client reads "content" - normalise.
+                            await safe_send({
+                                "type": "error",
+                                "content": event.get("message") or event.get("content") or "Chat stream error.",
+                            })
+                        elif event_type in ("model_fallback", "budget_warning"):
+                            await safe_send(event)
+                finally:
+                    # A break (disconnect) or an exception leaves the
+                    # generator suspended; close it NOW so its finally
+                    # blocks run and the provider HTTP stream is cancelled
+                    # instead of billing tokens to a dead socket.
+                    await stream.aclose()
 
-                await websocket.send_json({
+                if client_gone.is_set():
+                    logger.info("chat client disconnected mid-turn; aborting turn")
+                    return
+
+                await safe_send({
                     "type": "done",
                     "content": full_response,
                 })
@@ -1134,13 +1217,10 @@ async def chat_websocket(websocket: WebSocket):
 
             except Exception as e:
                 logger.exception("chat loop error")
-                try:
-                    await websocket.send_json({
-                        "type": "error",
-                        "content": str(e),
-                    })
-                except Exception:
-                    pass
+                await safe_send({
+                    "type": "error",
+                    "content": str(e),
+                })
 
     receive_task = asyncio.create_task(receive_loop(), name="chat-ws-recv")
     chat_task = asyncio.create_task(chat_loop(), name="chat-ws-loop")

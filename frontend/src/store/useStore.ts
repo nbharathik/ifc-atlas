@@ -2017,6 +2017,21 @@ export const useStore = create<AppState>()(
     }),
     reset: () => set((s) => ({
       ...initialState,
+      // Describes the BACKEND (its EDIT_MODE_ENABLED flag), not the model, so
+      // closing one does not change it. It is probed once on mount into
+      // editModeAvailable; letting reset() clear it back to false stripped the
+      // whole edit surface - New Project, the Edit toggle, editable properties,
+      // undo/redo - for the rest of the session, because nothing re-probes on
+      // the close -> open path and <App> never remounts. refreshEditState()
+      // still corrects this if the backend's flag actually changes.
+      editModeAvailable: s.editModeAvailable,
+      // Session identity, not model state. initialState captured this ONCE at
+      // module load; if the user started a new chat since then (which writes a
+      // fresh UUID to store + localStorage), spreading initialState would
+      // silently revert the in-memory id to the stale captured one while
+      // localStorage holds the newer id - the next open then restores the
+      // wrong thread's history.
+      chatThreadId: s.chatThreadId,
       // Preserve user prefs across reset
       theme: s.theme,
       chatProvider: s.chatProvider,

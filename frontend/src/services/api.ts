@@ -1404,10 +1404,19 @@ interface SecretsStatusOptions {
   timeoutMs?: number;
 }
 
-export async function getSecretsStatus(
-  options: SecretsStatusOptions = {},
-): Promise<SecretsStatusResponse> {
-  const timeoutMs = options.timeoutMs ?? 5000;
+/**
+ * Reading the key status is a small JSON file read - it answers in ~2 ms on an
+ * idle backend. Every slow response is therefore the backend being busy, not
+ * the lookup being expensive: an upload/convert turn parks the event loop for
+ * seconds at a time, and a 5 s budget expired inside that window often enough
+ * that configured keys were reported as unreachable. Wait longer per attempt
+ * and retry a couple of times before giving up.
+ */
+const SECRETS_STATUS_ATTEMPT_TIMEOUT_MS = 15_000;
+const SECRETS_STATUS_ATTEMPTS = 3;
+const SECRETS_STATUS_RETRY_DELAY_MS = 750;
+
+async function fetchSecretsStatusOnce(timeoutMs: number): Promise<SecretsStatusResponse> {
   if (timeoutMs <= 0) return fetchJson<SecretsStatusResponse>('/settings/secrets');
 
   const controller = new AbortController();
@@ -1424,14 +1433,40 @@ export async function getSecretsStatus(
   } catch (err) {
     if (timedOut) {
       throw new Error(
-        `Provider key status timed out after ${Math.round(timeoutMs / 1000)}s. ` +
-          'The backend may be busy; retry when the current model operation finishes.',
+        `Provider key status timed out after ${Math.round(timeoutMs / 1000)}s.`,
       );
     }
     throw err;
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+export async function getSecretsStatus(
+  options: SecretsStatusOptions = {},
+): Promise<SecretsStatusResponse> {
+  const timeoutMs = options.timeoutMs ?? SECRETS_STATUS_ATTEMPT_TIMEOUT_MS;
+  // A caller that opts out of the timeout wants a single unbounded attempt.
+  const attempts = timeoutMs <= 0 ? 1 : SECRETS_STATUS_ATTEMPTS;
+  let lastErr: unknown;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fetchSecretsStatusOnce(timeoutMs);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < attempts - 1) {
+        await new Promise((r) => setTimeout(r, SECRETS_STATUS_RETRY_DELAY_MS));
+      }
+    }
+  }
+
+  const detail = lastErr instanceof Error ? lastErr.message : String(lastErr);
+  throw new Error(
+    `Couldn't read provider key status after ${attempts} attempts (${detail}) ` +
+      'Your saved keys are untouched - this only means the backend did not answer. ' +
+      'It is usually busy with a model upload or conversion; retry once that finishes.',
+  );
 }
 
 export async function updateSecrets(payload: SecretsUpdatePayload): Promise<SecretsStatusResponse> {

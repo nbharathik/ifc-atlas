@@ -454,3 +454,10 @@ class ChatRequest(BaseModel):
     # Stable client-assigned ID for graph checkpointing.  Generate a UUID
     # once on session start and pass it with every turn.
     thread_id: Optional[str] = None
+    # Fingerprint of the model the CLIENT is currently showing. The frontend
+    # flips to a new model instantly while the backend upload persists in the
+    # background, so the backend may still hold the previous model when a chat
+    # turn arrives. On mismatch the turn gets a leading notice chunk; never a
+    # hard block (the client-side FNV fallback fingerprint legitimately differs
+    # from the backend SHA-256).
+    model_fingerprint: Optional[str] = None

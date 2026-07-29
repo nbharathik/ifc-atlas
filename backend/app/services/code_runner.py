@@ -26,16 +26,21 @@ The parent (``SandboxService.execute_python``) enforces a wall-clock
 timeout via ``subprocess.run(timeout=...)`` - if the child hangs we kill
 it with ``SIGKILL`` / ``TerminateProcess`` and surface a timeout error.
 
-This keeps the main backend process safe from:
+This reduces risk to the main backend process from:
 - infinite loops / CPU spin
-- memory blow-up (the child's RSS is bounded by the OS, and crash doesn't
-  take the backend down)
+- child crashes taking down the API process
 - filesystem escape (audit hook + path allowlist)
 - network egress (audit hook)
 - schema corruption (only the sandbox file is writable)
 
 The child has no way to mutate the live IFC, the live ``IfcService``
 handle, or any other file on disk.
+
+This is not an OS security sandbox. Audit hooks can be bypassed by sufficiently
+hostile native code, and per-process CPU/memory controls are platform-specific.
+Server deployments must keep this feature disabled/trusted-only until the
+worker is placed in the isolated execution boundary described in the
+repository refactoring plan.
 """
 
 from __future__ import annotations
@@ -48,6 +53,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+from app.core.config import CODE_EXECUTION_ENABLED
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +78,51 @@ MAX_TIMEOUT_S = 240.0
 # Cap the code payload size. An LLM that wants to stream multi-MB of
 # Python into the sandbox is either confused or trying to DoS us.
 MAX_CODE_CHARS = 100_000
+
+# Preserve only process-runtime values needed to launch Python and native
+# IfcOpenShell libraries. In particular, never forward provider credentials,
+# server tokens, cloud credentials, or the backend's complete environment to
+# LLM-authored code.
+_SANDBOX_ENV_ALLOWLIST = frozenset(
+    {
+        "APPDATA",
+        "COMSPEC",
+        "DYLD_LIBRARY_PATH",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LD_LIBRARY_PATH",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMDATA",
+        "SYSTEMDRIVE",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "TZ",
+        "USERPROFILE",
+        "VIRTUAL_ENV",
+        "WINDIR",
+    }
+)
+
+
+def build_sandbox_environment(
+    parent_env: dict[str, str],
+    sandbox_path: Path,
+) -> dict[str, str]:
+    """Return a minimal child environment with no application credentials."""
+
+    env = {
+        key: value
+        for key, value in parent_env.items()
+        if key.upper() in _SANDBOX_ENV_ALLOWLIST
+    }
+    env["SANDBOX_IFC_PATH"] = str(sandbox_path)
+    env["PYTHONUNBUFFERED"] = "1"
+    return env
 
 
 @dataclass
@@ -298,6 +350,11 @@ def run_ifc_code(
     folded into the ``timed_out`` / ``error`` fields rather than raising,
     so the caller can surface them to the LLM.
     """
+    if not CODE_EXECUTION_ENABLED:
+        raise PermissionError(
+            "Free-form IFC code execution is disabled for this deployment. "
+            "Use structured operations or an isolated trusted worker."
+        )
     if not code or not isinstance(code, str):
         raise ValueError("execute_ifc_code: `code` must be a non-empty string")
     if len(code) > MAX_CODE_CHARS:
@@ -307,18 +364,8 @@ def run_ifc_code(
 
     clamped_timeout = max(MIN_TIMEOUT_S, min(MAX_TIMEOUT_S, float(timeout_s)))
 
-    env = {
-        # Minimum env: PATH so python resolves, SANDBOX path, and keep
-        # PYTHONPATH so the child can find site-packages for ifcopenshell.
-        # We pass os.environ through rather than scrubbing - the backend
-        # process is already trusted, and the audit hook is what enforces
-        # safety in the child.
-    }
     import os as _os  # local import to avoid polluting module namespace
-    env = dict(_os.environ)
-    env["SANDBOX_IFC_PATH"] = str(sandbox_path)
-    # Make the child unbuffered so our sentinel lines flush in order.
-    env.setdefault("PYTHONUNBUFFERED", "1")
+    env = build_sandbox_environment(dict(_os.environ), sandbox_path)
     # When frozen, the child is THIS onefile exe re-invoked (--run-ifc-sandbox).
     # PyInstaller's bootloader sets these env vars in the running process; if the
     # child inherits them it may think extraction already happened and point at

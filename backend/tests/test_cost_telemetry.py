@@ -6,7 +6,7 @@ Covers:
   - stream_openai: emits usage event after non-tool turn.
   - stream_anthropic: emits usage event from final_message.usage.
   - stream_openrouter: emits usage event.
-  - upload fire-and-forget: ensure_future is called (not awaited).
+  - upload fire-and-forget: ingestion schedules derived-data work.
 """
 
 from __future__ import annotations
@@ -174,23 +174,23 @@ async def test_stream_anthropic_emits_usage_event():
 
 
 # ---------------------------------------------------------------------------
-# upload fire-and-forget (ifc_routes.py)
+# upload fire-and-forget (IFC ingestion service)
 # ---------------------------------------------------------------------------
 
-def test_upload_native_parse_uses_ensure_future(tmp_path):
-    """The upload handler should call asyncio.ensure_future, not await the parse."""
-    import ast, inspect
+def test_upload_native_parse_is_scheduled_by_ingestion_service():
+    """The route delegates and ingestion schedules derived-data warm-up."""
     from pathlib import Path
 
-    src = (
+    route_src = (
         Path(__file__).parents[1] / "app" / "api" / "ifc_routes.py"
     ).read_text(encoding="utf-8")
+    service_src = (
+        Path(__file__).parents[1]
+        / "app"
+        / "services"
+        / "ifc_ingestion_service.py"
+    ).read_text(encoding="utf-8")
 
-    # Verify ensure_future is present in the upload handler
-    assert "ensure_future" in src, "Upload should use ensure_future for fire-and-forget"
-    # Verify it is NOT directly awaited (no 'await metadata_index_service.build_from_bytes' at top level)
-    # The old pattern was `await metadata_index_service.build_from_bytes(raw_bytes)` at route level.
-    # Now it must be inside a background coroutine.
-    # Check: ensure_future wraps a background coroutine (name may change across refactors;
-    # we only require that ensure_future is present, not a specific internal function name).
-    assert "_bg_" in src, "Background task coroutine should have a _bg_ prefix"
+    assert "_ifc_ingestion_service().ingest" in route_src
+    assert "asyncio.create_task(operation)" in service_src
+    assert "self._warm_derived_data(" in service_src

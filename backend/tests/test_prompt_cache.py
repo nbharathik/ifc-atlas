@@ -1,7 +1,6 @@
 """Tests for Anthropic prompt caching + tool-result memoization."""
-import json
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 
 # ---------------------------------------------------------------------------

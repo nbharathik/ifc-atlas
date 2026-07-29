@@ -7,9 +7,7 @@ parser itself has its own tests in ``backend/sidecar/test/parser.test.ts``.
 
 from __future__ import annotations
 
-import json
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -98,7 +96,6 @@ def _fake_index(sha: str, element_count: int = 2) -> dict:
 async def test_build_from_bytes_calls_sidecar_and_caches(fresh_index_service, monkeypatch):
     service, tmp_path = fresh_index_service
     bytes_in = b"not a real IFC, just bytes"
-    fake_index = _fake_index("aabbcc")  # SHA computed from bytes_in is different
     sidecar_calls = {"count": 0}
 
     async def fake_parse(*_args, **_kwargs):

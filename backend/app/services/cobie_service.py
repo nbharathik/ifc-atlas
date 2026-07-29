@@ -16,7 +16,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import ifcopenshell
 import ifcopenshell.util.element as element_util

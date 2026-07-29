@@ -37,8 +37,8 @@ function makeTree(): SpatialNode {
 
 /**
  * Minimal FragmentsModel mock for build() tests. getItem resolves
- * express → local as `expressId + 1000`; getItemsGeometry returns one
- * mesh group per requested id (result parallel to the input array).
+ * express → local as `expressId + 1000`; getBoxes returns one box per
+ * requested id (result parallel to the input array).
  */
 function makeModelMock() {
   return {
@@ -46,13 +46,11 @@ function makeModelMock() {
     getItem: vi.fn((expressId: number) => ({
       getLocalId: vi.fn(async () => expressId + 1000),
     })),
-    getItemsGeometry: vi.fn(async (localIds: number[]) =>
-      localIds.map((id) => [
-        {
-          positions: new Float32Array([id, 0, 0, id + 1, 1, 1]),
-          transform: new THREE.Matrix4(), // identity
-        },
-      ]),
+    getBoxes: vi.fn(async (localIds: number[]) =>
+      localIds.map((id) => new THREE.Box3(
+        new THREE.Vector3(id, 0, 0),
+        new THREE.Vector3(id + 1, 1, 1),
+      )),
     ),
   } as unknown as FRAGS.FragmentsModel;
 }
@@ -400,7 +398,7 @@ describe('StoreyFrustumCuller.build', () => {
     expect(culler.isBuilt).toBe(true);
     expect(culler.storeyCount).toBe(2); // Second Floor has no leaves
     // The lookup-resolved local ids are what the geometry fetch receives.
-    const geomMock = model.getItemsGeometry as ReturnType<typeof vi.fn>;
+    const geomMock = model.getBoxes as ReturnType<typeof vi.fn>;
     expect(geomMock.mock.calls.map((c) => c[0])).toEqual([[1100, 1101], [1110]]);
   });
 
@@ -413,7 +411,7 @@ describe('StoreyFrustumCuller.build', () => {
     expect(model.getItem).toHaveBeenCalledTimes(3); // leaves 100, 101, 110
     expect(culler.storeyCount).toBe(2);
     // Fallback-resolved ids (express + 1000) reach the geometry fetch.
-    const geomMock = model.getItemsGeometry as ReturnType<typeof vi.fn>;
+    const geomMock = model.getBoxes as ReturnType<typeof vi.fn>;
     expect(geomMock.mock.calls.map((c) => c[0])).toEqual([[1100, 1101], [1110]]);
   });
 
@@ -424,7 +422,7 @@ describe('StoreyFrustumCuller.build', () => {
 
     await culler.build(model, extractStoreyNodes(root), lookup);
 
-    const geomMock = model.getItemsGeometry as ReturnType<typeof vi.fn>;
+    const geomMock = model.getBoxes as ReturnType<typeof vi.fn>;
     expect(geomMock).toHaveBeenCalledTimes(3);
     expect(geomMock.mock.calls.map((c) => (c[0] as number[]).length)).toEqual([64, 64, 2]);
     expect(culler.storeyCount).toBe(1); // chunks accumulate into ONE storey box
@@ -434,7 +432,7 @@ describe('StoreyFrustumCuller.build', () => {
     const { root, lookup } = makeWideTree(130); // 3 chunks
     const model = makeModelMock();
     const culler = new StoreyFrustumCuller();
-    const geomMock = model.getItemsGeometry as ReturnType<typeof vi.fn>;
+    const geomMock = model.getBoxes as ReturnType<typeof vi.fn>;
     geomMock.mockImplementationOnce(async (chunk: number[]) => {
       // Dispose while the first chunk is in flight - chunks 2 and 3 must
       // never be fetched.

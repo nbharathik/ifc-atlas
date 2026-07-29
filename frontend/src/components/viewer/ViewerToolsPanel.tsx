@@ -34,6 +34,7 @@ function fmtOffset(v: number): string {
 
 function ClipPlaneRow({ plane, index }: { plane: ClipPlaneState; index: number }) {
   const updateClipPlane = useStore((s) => s.updateClipPlane);
+  const setClipPlaneOffsetTransient = useStore((s) => s.setClipPlaneOffsetTransient);
   const removeClipPlane = useStore((s) => s.removeClipPlane);
   const halfExtents = useStore((s) => s.modelHalfExtents);
   const axisExtent = halfExtents
@@ -79,7 +80,10 @@ function ClipPlaneRow({ plane, index }: { plane: ClipPlaneState; index: number }
           className="vtp-slider"
           min={-range} max={range} step={step}
           value={plane.offset}
-          onChange={(e) => updateClipPlane(plane.id, { offset: Number(e.currentTarget.value) })}
+          onChange={(e) => setClipPlaneOffsetTransient(plane.id, Number(e.currentTarget.value))}
+          onPointerUp={(e) => updateClipPlane(plane.id, { offset: Number(e.currentTarget.value) })}
+          onKeyUp={(e) => updateClipPlane(plane.id, { offset: Number(e.currentTarget.value) })}
+          onBlur={(e) => updateClipPlane(plane.id, { offset: Number(e.currentTarget.value) })}
           aria-label={`Plane ${index + 1} offset`}
         />
         <span className="vtp-slider-val">{fmtOffset(plane.offset)} m</span>

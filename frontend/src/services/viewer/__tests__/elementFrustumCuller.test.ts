@@ -14,17 +14,14 @@ function makeModelMock() {
     setVisible: vi.fn(async (ids: number[], visible: boolean) => {
       visibilityCalls.push({ ids: [...ids], visible });
     }),
-    // Returns one triangle whose AABB is [box.min..box.max].
-    getItemsGeometry: vi.fn(async (localIds: number[]) => {
+    // Each element gets a unique bounding box at (id*2, 0, 0) ± 0.5.
+    getBoxes: vi.fn(async (localIds: number[]) => {
       return localIds.map((id) => {
-        // Each element gets a unique bounding box at (id*2, 0, 0) ± 0.5
         const x = id * 2;
-        return [
-          {
-            positions: new Float32Array([x - 0.5, -0.5, -0.5, x + 0.5, 0.5, 0.5]),
-            transform: new THREE.Matrix4(), // identity
-          },
-        ];
+        return new THREE.Box3(
+          new THREE.Vector3(x - 0.5, -0.5, -0.5),
+          new THREE.Vector3(x + 0.5, 0.5, 0.5),
+        );
       });
     }),
   } as unknown as FRAGS.FragmentsModel & { visibilityCalls: typeof visibilityCalls };
@@ -252,7 +249,7 @@ describe('ElementFrustumCuller', () => {
   });
 
   it('geometry failure is silently skipped', async () => {
-    (model.getItemsGeometry as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('no geom'));
+    (model.getBoxes as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('no geom'));
     // 65 ids span 2 chunks (64 + 1). Chunk 1 (ids 0-63) fails and is
     // skipped; chunk 2 (id 64) succeeds.
     const ids = Array.from({ length: 65 }, (_, i) => i);
@@ -261,9 +258,7 @@ describe('ElementFrustumCuller', () => {
   });
 
   it('empty geometry (isEmpty box) is skipped', async () => {
-    (model.getItemsGeometry as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
-      [{ positions: new Float32Array(0), transform: new THREE.Matrix4() }],
-    ]);
+    (model.getBoxes as ReturnType<typeof vi.fn>).mockResolvedValueOnce([new THREE.Box3()]);
     await culler.build(model as unknown as FRAGS.FragmentsModel, [0]);
     // Empty positions → empty Box3 → skipped
     expect(culler.elementCount).toBe(0);
@@ -271,7 +266,7 @@ describe('ElementFrustumCuller', () => {
 
   // ── chunked geometry fetches ─────────────────────────────────────────
   //
-  // build() must batch getItemsGeometry into 64-id chunks (one worker
+  // build() must batch getBoxes into 64-id chunks (one worker
   // round-trip per chunk, not per element) and honor dispose() between
   // chunks so a model swap mid-build doesn't keep hammering the worker.
 
@@ -279,7 +274,7 @@ describe('ElementFrustumCuller', () => {
     const ids = Array.from({ length: 130 }, (_, i) => i);
     await culler.build(model as unknown as FRAGS.FragmentsModel, ids);
 
-    const geomMock = model.getItemsGeometry as ReturnType<typeof vi.fn>;
+    const geomMock = model.getBoxes as ReturnType<typeof vi.fn>;
     expect(geomMock).toHaveBeenCalledTimes(3);
     expect(geomMock.mock.calls.map((c) => (c[0] as number[]).length)).toEqual([64, 64, 2]);
     // Every id still gets its own record - batching must not lose items.
@@ -288,17 +283,15 @@ describe('ElementFrustumCuller', () => {
 
   it('dispose() mid-build stops further chunk fetches', async () => {
     const ids = Array.from({ length: 130 }, (_, i) => i); // 3 chunks
-    const geomMock = model.getItemsGeometry as ReturnType<typeof vi.fn>;
+    const geomMock = model.getBoxes as ReturnType<typeof vi.fn>;
     geomMock.mockImplementationOnce(async (chunk: number[]) => {
       // Dispose while the first chunk is in flight - chunks 2 and 3 must
       // never be fetched.
       void culler.dispose();
-      return chunk.map(() => [
-        {
-          positions: new Float32Array([0, 0, 0, 1, 1, 1]),
-          transform: new THREE.Matrix4(),
-        },
-      ]);
+      return chunk.map(() => new THREE.Box3(
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(1, 1, 1),
+      ));
     });
 
     await culler.build(model as unknown as FRAGS.FragmentsModel, ids);

@@ -1,7 +1,62 @@
-import { defineConfig } from 'vite'
+import { createRequire } from 'node:module'
+import { existsSync, readFileSync } from 'node:fs'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import type { ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
+
+const require_ = createRequire(import.meta.url)
+
+/**
+ * Serve the Fragments geometry worker straight from the installed package.
+ *
+ * The worker used to be a hand-copied binary in `public/`, which drifted from
+ * the pinned `@thatopen/fragments` version: the LOD classifier and tiling logic
+ * run inside the worker, so a skew there silently changes render behaviour.
+ * Rewriting the library's own `new URL("./Worker/worker.mjs", import.meta.url)`
+ * to the served path also stops Rollup emitting a second, never-fetched copy of
+ * the same worker into `dist`.
+ */
+function fragmentsWorker(): Plugin {
+  const WORKER_PATH = '/worker.mjs'
+  // Only './worker' is in the package exports map, and it points at the
+  // unminified build. Derive the minified sibling from it and fall back if a
+  // future release stops shipping one.
+  const resolved = () => {
+    const exported = require_.resolve('@thatopen/fragments/worker')
+    const minified = exported.replace(/worker\.mjs$/, 'worker.min.mjs')
+    return existsSync(minified) ? minified : exported
+  }
+
+  return {
+    name: 'ifc-atlas-fragments-worker',
+    enforce: 'pre',
+    transform(code, id) {
+      if (!id.includes('@thatopen/fragments')) return null
+      if (!code.includes('./Worker/worker.mjs')) return null
+      return {
+        code: code.replaceAll(
+          /new URL\(\s*"\.\/Worker\/worker\.mjs"\s*,\s*import\.meta\.url\s*\)/g,
+          `new URL(${JSON.stringify(WORKER_PATH)}, self.location.origin)`,
+        ),
+        map: null,
+      }
+    },
+    configureServer(server) {
+      server.middlewares.use(WORKER_PATH, (_req, res) => {
+        res.setHeader('Content-Type', 'text/javascript')
+        res.end(readFileSync(resolved()))
+      })
+    },
+    generateBundle() {
+      this.emitFile({
+        type: 'asset',
+        fileName: WORKER_PATH.slice(1),
+        source: readFileSync(resolved()),
+      })
+    },
+  }
+}
 
 // Cross-origin isolation headers (COOP + COEP). When both headers
 // are present, `self.crossOriginIsolated` flips to `true`, which unlocks
@@ -21,6 +76,28 @@ const CROSS_ORIGIN_ISOLATION_HEADERS = {
   'Cross-Origin-Embedder-Policy': 'credentialless',
   'Cross-Origin-Resource-Policy': 'same-origin',
 } as const
+
+/**
+ * Cache namespace for the service worker, stable within a build.
+ *
+ * Derived from the installed engine versions plus the package version so a
+ * dependency bump invalidates the cached worker and wasm without anyone having
+ * to remember to edit a constant.
+ */
+function swBuildId(): string {
+  const pkg = (name: string) => {
+    try {
+      return require_(`${name}/package.json`).version as string
+    } catch {
+      return '0'
+    }
+  }
+  return [
+    require_('./package.json').version,
+    pkg('@thatopen/fragments'),
+    pkg('web-ifc'),
+  ].join('-')
+}
 
 function envPort(name: string, fallback: number): number {
   const value = process.env[name];
@@ -49,13 +126,14 @@ const backendPort = isDesktopBuild ? TAURI_BACKEND_PORT : WEB_BACKEND_PORT;
 const backendHost = process.env.BACKEND_HOST?.trim() || '127.0.0.1';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [fragmentsWorker(), react()],
   resolve: {
     dedupe: ['three'],
   },
   // Expose VITE_PLATFORM to the app so platform.ts can detect at compile-time.
   define: {
     '__VITE_PLATFORM__': JSON.stringify(process.env.VITE_PLATFORM ?? 'web'),
+    '__SW_BUILD_ID__': JSON.stringify(swBuildId()),
   },
   server: {
     // Honor a harness/CI-assigned PORT so the
@@ -98,6 +176,13 @@ export default defineConfig({
   preview: {
     port: 4173,
     headers: { ...CROSS_ORIGIN_ISOLATION_HEADERS },
+  },
+  // Worker bundles are separate Rollup builds with their own plugin pipeline.
+  // Without this the conversion worker keeps its own copy of the Fragments
+  // worker, on the unminified build, which is the version skew this plugin
+  // exists to prevent.
+  worker: {
+    plugins: () => [fragmentsWorker()],
   },
   optimizeDeps: {
     exclude: ['web-ifc'],

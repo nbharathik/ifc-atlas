@@ -147,6 +147,10 @@ if "--run-ifc-sandbox" in sys.argv:
 if __name__ == "__main__":
     args = _parse_args()
     log_level = "debug" if args.verbose else args.log_level
+    # app.main validates the configured security profile during lifespan.
+    # Propagate the CLI override so validation sees the actual bind host rather
+    # than config.py's loopback-safe default.
+    os.environ["HOST"] = args.host
     os.environ["BACKEND_VERBOSE"] = "1" if args.verbose else os.getenv("BACKEND_VERBOSE", "0")
     os.environ["LOG_LEVEL"] = log_level
     _configure_logging(log_level)

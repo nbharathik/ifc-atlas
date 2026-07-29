@@ -1,9 +1,6 @@
 """Pure unit tests for IFCCheckpointService - no IfcOpenShell, no live backend."""
 
-import shutil
-import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -356,7 +353,6 @@ def test_get_diff_detects_added_entity(tmp_repo, monkeypatch):
     ])
 
     import app.services.ifc_checkpoint_service as mod
-    import ifcopenshell  # ensure available
 
     # Patch ifcopenshell.open to return the snap_model without touching disk.
     monkeypatch.setattr(mod, "tempfile", __import__("tempfile"))

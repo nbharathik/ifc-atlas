@@ -6,6 +6,10 @@
 
 {$DOMAIN:localhost} {
 
+    # Caddy does not compress by default. Without this every asset ships raw,
+    # which on the model-open path is 8.6 MB instead of 1.7 MB.
+    encode zstd gzip
+
     # Required headers for SharedArrayBuffer + WASM threads (@thatopen/components).
     # COEP "credentialless" matches the Vite dev/preview servers: cross-origin
     # resources (e.g. fonts) load without per-resource CORP headers.
@@ -13,6 +17,9 @@
         Cross-Origin-Opener-Policy "same-origin"
         Cross-Origin-Embedder-Policy "credentialless"
         Cross-Origin-Resource-Policy "same-origin"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        X-Frame-Options "DENY"
         Permissions-Policy "interest-cohort=()"
         # Remove server fingerprint
         -Server

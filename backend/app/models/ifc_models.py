@@ -4,6 +4,8 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from app.models.contracts import ModelIdentityV1
+
 
 class ProjectInfo(BaseModel):
     name: str
@@ -169,6 +171,7 @@ class ModelMeta(BaseModel):
     model_version: int
     model_fingerprint: str
     edit_id: Optional[str] = None
+    identity: ModelIdentityV1
 
 
 class EditOperation(BaseModel):

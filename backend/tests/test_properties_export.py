@@ -107,7 +107,7 @@ class TestExportPropertiesCsv:
 
 class TestExportPropertiesCsvMocked:
     def _make_model_and_service(self):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
         from app.services.ifc_service import IfcService
 
         svc = IfcService()

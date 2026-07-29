@@ -10,17 +10,39 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./backend:/app
+      - ./backend:/app:ro
       # All writable state (uploads, fragment cache, secrets, edit history)
       # lives in the per-user dotfolder - persist it across recreates.
-      - ifc-atlas-data:/root/.ifc-atlas
+      - ifc-atlas-data:/home/ifcatlas/.ifc-atlas
     environment:
       - FRONTEND_URL=http://localhost:5173
+      - HOST=0.0.0.0
+      - IFC_ATLAS_SECURITY_MODE=server
+      - IFC_ATLAS_API_TOKEN=${IFC_ATLAS_API_TOKEN:?Set a random token with at least 32 characters}
     env_file:
       # Optional: API keys / overrides. You can also set keys in-app
       # (stored in the ifc-atlas-data volume).
       - path: ./backend/.env
         required: false
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 2g
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   frontend:
     build:
@@ -33,7 +55,8 @@ services:
       # frontend container's own localhost.
       - BACKEND_HOST=backend
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   ifc-atlas-data:

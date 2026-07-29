@@ -7,8 +7,17 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.core.config import FRONTEND_URL
+from app.core.config import FRONTEND_URL, HOST, SECURITY_SETTINGS
+from app.core.security import ApiTokenMiddleware, SecurityMode
+from app.models.contracts import (
+    ApiErrorResponseV1,
+    ErrorCode,
+    ErrorDetailV1,
+    classify_error_code,
+)
 from app.api.ifc_routes import router as ifc_router
 from app.api.chat_routes import router as chat_router
 from app.api.settings_routes import router as settings_router
@@ -79,11 +88,14 @@ async def _lifespan(_: FastAPI):
     to `failed`, waking pending `wait_for` callers so they fall back to
     `/convert` instead of blocking for their full timeout.
     """
+    SECURITY_SETTINGS.validate_for_host(os.getenv("HOST", HOST))
     logger.info(
-        "Backend lifespan starting pid=%s verbose=%s log_level=%s",
+        "Backend lifespan starting pid=%s verbose=%s log_level=%s security_mode=%s auth_required=%s",
         os.getpid(),
         _verbose_enabled(),
         os.getenv("LOG_LEVEL", "info"),
+        SECURITY_SETTINGS.mode.value,
+        SECURITY_SETTINGS.auth_required,
     )
     # Tauri sidecar announce protocol - see docs/architecture/TAURI.md.
     # run.py sets BACKEND_ANNOUNCE_PORT before uvicorn.run; the Tauri Rust
@@ -134,6 +146,41 @@ app = FastAPI(
     version="1.1.0",
     lifespan=_lifespan,
 )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def stable_http_error_handler(
+    _: Request,
+    exc: StarletteHTTPException,
+) -> JSONResponse:
+    """Add the v1 error contract while retaining FastAPI's ``detail`` field."""
+
+    detail = exc.detail
+    message = detail if isinstance(detail, str) else "Request failed"
+    code = classify_error_code(message, status_code=exc.status_code)
+    payload = ApiErrorResponseV1(
+        detail=detail,
+        error=ErrorDetailV1(
+            code=code,
+            message=message,
+            retryable=code
+            in {
+                ErrorCode.CONVERTER_UNAVAILABLE,
+                ErrorCode.CONVERSION_FAILED,
+                ErrorCode.INTERNAL_ERROR,
+            },
+        ),
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=payload.model_dump(mode="json"),
+        headers=exc.headers,
+    )
+
+
+# Add auth before CORS so Starlette makes CORS the outer wrapper and browser
+# clients receive usable CORS headers on 401 responses.
+app.add_middleware(ApiTokenMiddleware, settings=SECURITY_SETTINGS)
 
 app.add_middleware(
     CORSMiddleware,
@@ -222,11 +269,31 @@ app.include_router(viewer_state_router)
 # MCP server (viewer-as-server).
 # SSE endpoint: GET  /mcp/sse
 # Message post: POST /mcp/messages/
-# Set MCP_SERVER_TOKEN env var to enable bearer-token auth.
-_mcp_token = os.getenv("MCP_SERVER_TOKEN") or None
+# Set MCP_SERVER_TOKEN env var to use a separate MCP credential. Server mode
+# otherwise inherits the main API token so /mcp is never accidentally public.
+_mcp_token = os.getenv("MCP_SERVER_TOKEN") or (
+    SECURITY_SETTINGS.api_token
+    if SECURITY_SETTINGS.mode is SecurityMode.SERVER
+    else None
+)
 app.mount("/mcp", build_sse_app(token=_mcp_token))
 
 
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "version": "1.1.0"}
+
+
+@app.get("/api/security")
+async def security_profile():
+    """Public bootstrap metadata; never exposes the configured credential."""
+    return {
+        "mode": SECURITY_SETTINGS.mode.value,
+        "auth_required": SECURITY_SETTINGS.auth_required,
+    }
+
+
+@app.post("/api/security/verify")
+async def verify_security_token():
+    """Protected no-op used by the web bootstrap gate to verify a token."""
+    return {"authenticated": True, "mode": SECURITY_SETTINGS.mode.value}

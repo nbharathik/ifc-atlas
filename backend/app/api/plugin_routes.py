@@ -125,6 +125,8 @@ async def run_plugin(plugin_id: str, req: PluginRunRequest):
         raise HTTPException(404, f"Unknown plugin '{plugin_id}'") from exc
     except PluginValidationError as exc:
         raise HTTPException(422, exc.errors) from exc
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
     except ValueError as exc:
         # Sandbox preconditions: pending-edit backlog full, oversized code, ...
         raise HTTPException(400, str(exc)) from exc

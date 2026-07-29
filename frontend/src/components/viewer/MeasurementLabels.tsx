@@ -7,12 +7,8 @@ import type { ViewerRefs } from './ViewerPanel';
 import { MeasurementLabelRenderer } from '../../services/viewer/measurementLabels';
 
 // ─── Component ────────────────────────────────────────────────────────────────
-// Screen-projection / centroid / midpoint helpers live in
-// `services/viewer/screenSpaceLabelHelpers.ts` (see `worldToScreen` /
-// `centroidScreen`) - kept out of this component module so it exports only the
-// component, avoiding a Fast Refresh smell from mixing component and pure-
-// function exports. The component itself does not project to screen: the
-// CSS2DRenderer in `measurementLabels.ts` handles label placement.
+// This component does not project to screen: the CSS2DRenderer in
+// `measurementLabels.ts` handles label placement.
 
 interface Props {
   snapshot: MeasurementSnapshot | null;

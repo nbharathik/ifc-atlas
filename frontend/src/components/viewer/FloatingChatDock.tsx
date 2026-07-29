@@ -1,6 +1,10 @@
+import { Suspense, lazy } from 'react';
+
 import { useStore } from '../../store/useStore';
-import ChatPanel from '../chat/ChatPanel';
 import Icon from '../ui/Icon';
+
+// Lazy so the markdown pipeline and chat transport stay off the model-open path.
+const ChatPanel = lazy(() => import('../chat/ChatPanel'));
 
 /**
  * The minimised "Ask AI" pill. Split out from the expanded dock below so it can
@@ -84,7 +88,9 @@ export default function FloatingChatDock() {
         </button>
       </div>
       <div className="floating-chat-body">
-        <ChatPanel embedded />
+        <Suspense fallback={null}>
+          <ChatPanel embedded />
+        </Suspense>
       </div>
     </div>
   );

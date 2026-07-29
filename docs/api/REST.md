@@ -16,6 +16,26 @@ Health
 
 ---
 
+### `GET` `/api/security`
+
+Security Profile
+
+Public bootstrap metadata; never exposes the configured credential.
+
+**Response:** Successful Response
+
+---
+
+### `POST` `/api/security/verify`
+
+Verify Security Token
+
+Protected no-op used by the web bootstrap gate to verify a token.
+
+**Response:** Successful Response
+
+---
+
 ## bcf
 
 ### `GET` `/api/bcf/export`
@@ -937,6 +957,25 @@ material histogram, and type histogram.
 
 ---
 
+### `GET` `/api/ifc/artifact-manifest`
+
+Get Artifact Manifest
+
+Return the validated Atlas Render Package manifest v1, if cached.
+
+This is the engine-neutral successor to ``/fragment-manifest``. The legacy
+endpoint remains available during the frontend compatibility window.
+
+**Query parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `fingerprint` | string | ✓ | Lowercase SHA-256 of the immutable IFC source revision. |
+| `profile` | string |  |  |
+**Response:** Successful Response
+
+---
+
 ### `GET` `/api/ifc/checkpoints`
 
 Get Checkpoints
@@ -986,6 +1025,23 @@ returned; when there are more, ``truncated=true`` is set.
 | Name | Type | Required | Description |
 |---|---|---|---|
 | `sha` | string | ✓ |  |
+**Response:** Successful Response
+
+---
+
+### `GET` `/api/ifc/conversion-jobs/current`
+
+Get Conversion Job
+
+Adapt the current prebuild registry to the stable job contract v1.
+
+**Query parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `fingerprint` | string | ✓ | Lowercase SHA-256 of the immutable IFC source revision. |
+| `profile` | string |  |  |
+| `wait_ms` | integer |  |  |
 **Response:** Successful Response
 
 ---
@@ -1225,6 +1281,21 @@ Returns matching element IDs and details.
 ### `GET` `/api/ifc/elements/{element_id}`
 
 Get Element
+
+**Path parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `element_id` | integer | ✓ |  |
+**Response:** Successful Response
+
+---
+
+### `GET` `/api/ifc/elements/{element_id}/key`
+
+Get Element Key
+
+Resolve an IFC-local express ID to its compound Atlas element key.
 
 **Path parameters:**
 
@@ -1584,6 +1655,16 @@ event loop; results are LRU-cached by content identity.
 
 ---
 
+### `GET` `/api/ifc/identity`
+
+Get Model Identity
+
+Return stable Atlas project, model, and immutable revision identity.
+
+**Response:** Successful Response
+
+---
+
 ### `POST` `/api/ifc/ids-info`
 
 Ids Info Endpoint
@@ -1695,6 +1776,10 @@ Returns a status envelope:
   properties-on-click.
 * ``{"status": "pending", "sha256": null, "index": null}`` - no index is
   loaded yet (the background parse is still running). Poll again.
+* ``{"status": "failed", "sha256": null, "index": null, "error": ...}`` -
+  the background parse errored and no index will arrive for this model.
+  Terminal: callers must STOP polling and fall back to their local parse
+  or the authoritative ``GET /elements/{id}`` route.
 * ``{"status": "mismatch", "sha256": <loaded sha>, "index": null}`` - an
   index is loaded but belongs to a different model than the requested
   ``fingerprint``. Poll again; the background parse for the requested
@@ -2395,4 +2480,4 @@ Upload Snapshot
 
 ---
 
-_Last regenerated: 2026-07-17. Run `python scripts/generate_api_doc.py` to refresh._
+_Last regenerated: 2026-07-26. Run `python scripts/generate_api_doc.py` to refresh._

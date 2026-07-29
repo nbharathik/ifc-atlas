@@ -358,3 +358,140 @@ export function tallyCullerCoordination(
   }
   return counts;
 }
+
+// ── shared ownership-ladder passes ───────────────────────────────────────────
+//
+// The ladder below (tile owns everything when built; storey is the coarse
+// fallback; the element culler fills in only while no tile culler exists) was
+// hand-written at four ViewerPanel sites and had already drifted: one copy
+// skipped the remembered-localId pinning fallback, and each copy had its own
+// error discipline. These passes are the single implementation. Interfaces are
+// structural so the real culler classes satisfy them without new coupling.
+
+export interface TileViewOptions {
+  readonly pinnedLocalIds: ReadonlySet<number>;
+  readonly viewportHeightPx: number;
+}
+
+export interface TileCullerLike {
+  readonly isBuilt: boolean;
+  tick(
+    camera: unknown,
+    target: never,
+    view: TileViewOptions,
+  ): Promise<{ hiddenElementCount: number }>;
+  showPass(
+    camera: unknown,
+    target: never,
+    view: TileViewOptions,
+  ): Promise<{ revealedElementCount: number; hiddenElementCount: number }>;
+  clearCull(target: never): Promise<unknown>;
+}
+
+export interface StoreyCullerLike {
+  readonly isBuilt: boolean;
+  tick(camera: unknown, model: never, target: never): Promise<number>;
+  showPass(camera: unknown, model: never, target: never): Promise<number>;
+  clearCull(model: never, target: never): Promise<unknown>;
+  getCulledMemberIds(): Iterable<number>;
+}
+
+export interface ElementCullerLike {
+  readonly isBuilt: boolean;
+  tick(
+    camera: unknown,
+    model: never,
+    ownedByStorey: Set<number> | undefined,
+    target: never,
+  ): Promise<number>;
+  showPass(
+    camera: unknown,
+    model: never,
+    ownedByStorey: Set<number> | undefined,
+    target: never,
+  ): Promise<number>;
+  clearCull(model: never, target: never): Promise<unknown>;
+}
+
+export interface CullerPassPorts {
+  readonly camera: unknown;
+  readonly model: never;
+  readonly tile: TileCullerLike | null;
+  readonly storey: StoreyCullerLike | null;
+  readonly element: ElementCullerLike | null;
+  readonly tileTarget: never;
+  readonly storeyTarget: never;
+  readonly elementTarget: never;
+  readonly viewOptions: () => TileViewOptions;
+}
+
+export interface CullerPassCounts {
+  culledStoreys: number;
+  culledElements: number;
+  revealedElements: number;
+}
+
+function ownedByStoreyOf(ports: CullerPassPorts): Set<number> | undefined {
+  return ports.storey?.isBuilt ? new Set(ports.storey.getCulledMemberIds()) : undefined;
+}
+
+/** Release every app-culler claim, in ownership order. */
+export async function clearCullPass(ports: CullerPassPorts): Promise<void> {
+  if (ports.tile?.isBuilt) {
+    await ports.tile.clearCull(ports.tileTarget);
+  } else if (ports.storey?.isBuilt) {
+    await ports.storey.clearCull(ports.model, ports.storeyTarget);
+  }
+  if (!ports.tile?.isBuilt && ports.element?.isBuilt) {
+    await ports.element.clearCull(ports.model, ports.elementTarget);
+  }
+}
+
+/** Idle hide pass. Callers gate on user isolation/hide being inactive. */
+export async function hideTickPass(ports: CullerPassPorts): Promise<CullerPassCounts> {
+  const counts: CullerPassCounts = { culledStoreys: 0, culledElements: 0, revealedElements: 0 };
+  if (ports.tile?.isBuilt) {
+    const result = await ports.tile.tick(ports.camera, ports.tileTarget, ports.viewOptions());
+    counts.culledElements = result.hiddenElementCount;
+  } else if (ports.storey?.isBuilt) {
+    counts.culledStoreys = await ports.storey.tick(ports.camera, ports.model, ports.storeyTarget);
+  }
+  if (!ports.tile?.isBuilt && ports.element?.isBuilt) {
+    counts.culledElements = await ports.element.tick(
+      ports.camera,
+      ports.model,
+      ownedByStoreyOf(ports),
+      ports.elementTarget,
+    );
+  }
+  return counts;
+}
+
+/** Orbit reveal pass: show culled elements that re-entered the frustum. */
+export async function showCullPass(ports: CullerPassPorts): Promise<CullerPassCounts> {
+  const counts: CullerPassCounts = { culledStoreys: 0, culledElements: 0, revealedElements: 0 };
+  if (ports.tile?.isBuilt) {
+    const result = await ports.tile.showPass(ports.camera, ports.tileTarget, ports.viewOptions());
+    counts.revealedElements += result.revealedElementCount;
+    counts.culledElements = result.hiddenElementCount;
+  } else if (ports.storey?.isBuilt) {
+    counts.revealedElements += await ports.storey.showPass(
+      ports.camera,
+      ports.model,
+      ports.storeyTarget,
+    );
+  }
+  if (!ports.tile?.isBuilt && ports.element?.isBuilt) {
+    counts.revealedElements += await ports.element.showPass(
+      ports.camera,
+      ports.model,
+      ownedByStoreyOf(ports),
+      ports.elementTarget,
+    );
+  }
+  return counts;
+}
+
+export function anyCullerBuilt(ports: CullerPassPorts): boolean {
+  return !!(ports.tile?.isBuilt || ports.storey?.isBuilt || ports.element?.isBuilt);
+}

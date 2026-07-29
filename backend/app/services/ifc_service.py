@@ -19,6 +19,7 @@ from typing import Any, Optional
 import ifcopenshell
 import ifcopenshell.util.element as element_util
 
+from app.models.contracts import ModelIdentityV1, build_model_identity
 from app.models.ifc_models import (
     EditApplyRequest,
     EditApplyResponse,
@@ -163,6 +164,28 @@ class IfcService:
             "model_fingerprint": self._model_fingerprint,
             "edit_id": self._last_edit_id,
         }
+
+    def get_model_identity(self) -> ModelIdentityV1:
+        """Return the stable Atlas identity for the current model revision.
+
+        During the migration the import digest defines the model lineage and
+        the current working-file digest defines its immutable revision.
+        """
+
+        if not self._original_fingerprint or not self._model_fingerprint:
+            raise RuntimeError("No IFC model loaded")
+        project_global_id: str | None = None
+        projects = self.model.by_type("IfcProject")
+        if projects:
+            value = getattr(projects[0], "GlobalId", None)
+            if isinstance(value, str) and value.strip():
+                project_global_id = value
+        return build_model_identity(
+            project_global_id=project_global_id,
+            source_sha256=self._original_fingerprint,
+            revision_sha256=self._model_fingerprint,
+            model_version=self._model_version,
+        )
 
     def read_bytes(self) -> Optional[bytes]:
         """Return the raw IFC bytes from the backing file, or None if unavailable."""

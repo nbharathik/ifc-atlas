@@ -28,6 +28,19 @@ from pydantic import BaseModel, Field
 
 from app.core import config as app_config
 from app.core.config import FRAGMENT_CACHE_DIR, MAX_IFC_UPLOAD_BYTES, UPLOAD_DIR
+from app.models.contracts import (
+    ApiErrorResponseV1,
+    ArtifactManifestLookupV1,
+    ConversionJobLookupV1,
+    ElementKeyV1,
+    ErrorCode,
+    ErrorDetailV1,
+    JobContractV1,
+    JobState,
+    ModelIdentityV1,
+    build_artifact_manifest,
+    classify_error_code,
+)
 from app.models.ifc_models import (
     AABBBulkRequest,
     AABBBulkResponse,
@@ -77,6 +90,13 @@ from app.services.ids_service import (
     validate_ids_base64,
     validate_ids_base64_to_csv,
 )
+from app.services.ifc_converter import IfcConverter, WebIfcSidecarConverter
+from app.services.ifc_conversion_service import (
+    ConverterUnavailableError,
+    IfcConversionService,
+    InvalidRenderArtifactError,
+)
+from app.services.ifc_ingestion_service import IfcIngestionError, IfcIngestionService
 from app.services.ifc_checkpoint_service import ifc_checkpoint_service
 from app.services.ifc_service import ifc_service
 from app.services.lod_service import (
@@ -113,6 +133,44 @@ _IFC_UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 def _full_fragment_entry(fingerprint: str, profile: str) -> FragmentCacheEntry:
     return full_fragment_cache_entry(FRAGMENT_CACHE_DIR, fingerprint, profile)
+
+
+def _ifc_converter() -> IfcConverter:
+    """Resolve dynamically so existing tests can replace the sidecar manager."""
+
+    return WebIfcSidecarConverter(sidecar_manager)
+
+
+def _ifc_conversion_service(
+    *,
+    prebuild_wait_s: float = 30.0,
+) -> IfcConversionService:
+    """Build the request-scoped orchestrator from replaceable application ports."""
+
+    return IfcConversionService(
+        cache_dir=FRAGMENT_CACHE_DIR,
+        converter=_ifc_converter(),
+        prebuild_service=fragment_prebuild_service,
+        clear_progress=sidecar_manager.clear_progress,
+        prebuild_wait_s=prebuild_wait_s,
+    )
+
+
+def _ifc_ingestion_service() -> IfcIngestionService:
+    """Compose ingestion from the current transitional single-model adapters."""
+
+    return IfcIngestionService(
+        ifc_service=ifc_service,
+        metadata_index_service=metadata_index_service,
+        readiness_service=readiness_service,
+        checkpoint_service=ifc_checkpoint_service,
+        conversion_service=_ifc_conversion_service(prebuild_wait_s=120.0),
+        model_sync_broker=model_sync_broker,
+        aabb_service=aabb_service,
+        broadcast_readiness=broadcast_readiness_changed,
+        build_meta=lambda include: _build_meta(include_tree_stats=include),
+        snapshot_upload=_snapshot_after_upload,
+    )
 
 
 def _fragment_cache_key_headers(entry: FragmentCacheEntry) -> dict[str, str]:
@@ -198,6 +256,7 @@ def _build_meta(include_tree_stats: bool = True) -> ModelMeta:
         model_version=contract["model_version"],
         model_fingerprint=contract["model_fingerprint"],
         edit_id=contract["edit_id"],
+        identity=ifc_service.get_model_identity(),
     )
 
 
@@ -229,7 +288,6 @@ async def upload_ifc(
     ),
 ):
     """Parse an uploaded IFC and return model metadata."""
-    upload_started = time.perf_counter()
     safe_name = _validate_ifc_upload_filename(file.filename)
     dest = UPLOAD_DIR / safe_name
     size_bytes = _copy_ifc_upload_to_disk(file, dest)
@@ -246,199 +304,22 @@ async def upload_ifc(
     # after the load).
     source_sha = await asyncio.to_thread(_sha256_file, dest)
 
-    # Swap out the previous model's metadata index BEFORE readiness is
-    # broadcast: the stale index would otherwise keep answering
-    # GET /native-index and the Ask-mode tool gate with the old model's data
-    # for the whole load window (readiness reconciles against the loaded
-    # index, so it would also keep reporting "ready" for the wrong model).
-    # Same-file re-uploads keep their index; a disk-cached index for the new
-    # file is restored instantly instead of waiting for the background parse.
-    if metadata_index_service.current_sha != source_sha:
-        metadata_index_service.unload()
-        metadata_index_service.hydrate_from_disk(source_sha)
-
-    # Reset the readiness state machine for the new model BEFORE the
-    # sync ifcopenshell load runs; the chip flips to "warming" immediately so
-    # users see the assistant is initialising, not silent.
-    # Each transition is broadcast over the model-sync WS so the
-    # chat-panel chip never has to poll.
-    readiness_service.reset(model_id=safe_name)
-    readiness_service.mark_ifcopenshell_warming()
-    await broadcast_readiness_changed()
-
-    # ``ifc_service.load`` calls into IfcOpenShell which is CPU-bound + blocking.
-    # Running it directly on the FastAPI event loop locks every other request
-    # (readiness polls, fragment serves, chat WS keep-alives) for the entire
-    # load - 30 s to 5 min on real-world models. Offload to a worker thread so
-    # the event loop stays responsive: the viewer can keep streaming fragments
-    # from cache while the semantic backend warms up in the background.
-    import asyncio as _asyncio_thread
     try:
-        logger.info("IFC upload: starting IfcOpenShell load filename=%s", safe_name)
-        await _asyncio_thread.to_thread(ifc_service.load, dest)
-    except Exception as e:
-        readiness_service.mark_ifcopenshell_error(str(e))
-        await broadcast_readiness_changed()
+        return await _ifc_ingestion_service().ingest(
+            path=dest,
+            source_sha256=source_sha,
+            source_name=safe_name,
+            include_tree_stats=response == "full",
+            prebuild_fragments=prebuild_fragments,
+            prebuild_profile=prebuild_profile,
+        )
+    except IfcIngestionError as exc:
         dest.unlink(missing_ok=True)
-        raise HTTPException(400, f"Failed to load IFC file: {e}")
+        raise HTTPException(
+            400,
+            f"Failed to load IFC file: {exc}",
+        ) from exc
 
-    readiness_service.mark_ifcopenshell_ready()
-    await broadcast_readiness_changed()
-    logger.info(
-        "IFC upload: IfcOpenShell ready filename=%s elapsed_ms=%.1f",
-        safe_name,
-        (time.perf_counter() - upload_started) * 1000,
-    )
-
-    # Rebind checkpoint history to this model's own repo (history persists
-    # across reloads of the same file) and snapshot the uploaded baseline.
-    # snapshot() dedupes identical content, so re-uploading the same bytes
-    # doesn't create an empty commit.
-    ifc_checkpoint_service.rebind(ifc_service.original_fingerprint or safe_name)
-    _snapshot_after_upload(safe_name)
-
-    # Fire-and-forget background tasks on upload.
-    # Both tasks are non-fatal: if the sidecar is down they log a warning
-    # and the existing IfcOpenShell + browser-WASM path still works.
-    import asyncio as _asyncio
-
-    FRAGMENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    if prebuild_fragments:
-        prebuild_entry = _full_fragment_entry(source_sha, prebuild_profile)
-        prebuild_info = inspect_fragment_cache(prebuild_entry)
-        if prebuild_info is not None:
-            await fragment_prebuild_service.mark_complete(
-                source_sha, prebuild_profile, size_bytes=prebuild_info.size_bytes
-            )
-        # A cold cache is registered inflight by the background task itself,
-        # right before it starts converting. Registering it here as well made
-        # the task (and any concurrent POST /convert for the same file) wait
-        # out a long timeout on an entry that nobody was actually converting.
-    else:
-        logger.info(
-            "IFC upload: skipping background fragment prebuild (client opted out of server cache) sha=%s",
-            source_sha[:12],
-        )
-
-    async def _bg_tasks(path: "Path", source_sha: str) -> None:
-        raw_bytes = path.read_bytes()
-        # Eager fragment pre-conversion warms the on-disk cache for the
-        # profile the viewer actually loads with (prebuild_profile, sent by
-        # the client; balanced is the production default). Skipped entirely
-        # when prebuild_fragments=False - the client said it will not consume
-        # the server fragment cache, so pre-warming would just steal CPU from
-        # interactive operations on the just-loaded model.
-        if prebuild_fragments:
-            FRAGMENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            for profile in (prebuild_profile,):
-                cache_entry = _full_fragment_entry(source_sha, profile)
-                cache_info = inspect_fragment_cache(cache_entry)
-                if cache_info is not None:
-                    await fragment_prebuild_service.mark_complete(
-                        source_sha, profile, size_bytes=cache_info.size_bytes
-                    )
-                    continue
-                # Dedupe: if the viewer kicked off /convert for this same SHA
-                # already, wait for it instead of running the sidecar twice.
-                existing = fragment_prebuild_service.get_status(source_sha, profile)
-                if existing.status == "inflight":
-                    logger.info(
-                        "Fragment prebuild already inflight for sha=%s - waiting for /convert to finish",
-                        source_sha[:12],
-                    )
-                    final = await fragment_prebuild_service.wait_for(
-                        source_sha, profile, timeout_s=120.0
-                    )
-                    if (
-                        final.status == "complete"
-                        and inspect_fragment_cache(cache_entry) is not None
-                    ):
-                        continue
-                    # Inflight task failed or timed out - fall through and retry.
-                await fragment_prebuild_service.register_inflight(source_sha, profile)
-                try:
-                    frag_bytes, _ = await sidecar_manager.convert(
-                        ifc_bytes=raw_bytes,
-                        profile=profile,
-                        model_id=f"{source_sha[:12]}-{profile}",
-                    )
-                    # Same empty-fragment guard as POST /convert - refuse to cache
-                    # suspicious stubs.
-                    if len(frag_bytes) < 4 * 1024:
-                        msg = (
-                            f"sidecar produced empty fragment ({len(frag_bytes)} B) "
-                            f"for {len(raw_bytes)} B IFC; skipping cache write"
-                        )
-                        logger.warning(msg)
-                        await fragment_prebuild_service.mark_failed(source_sha, profile, error=msg)
-                        continue
-                    atomic_write_fragment_cache(cache_entry, frag_bytes)
-                    await fragment_prebuild_service.mark_complete(
-                        source_sha, profile, size_bytes=len(frag_bytes)
-                    )
-                    logger.info(
-                        "Fragment pre-converted: sha=%s profile=%s size=%s B",
-                        source_sha[:12], profile, len(frag_bytes),
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    await fragment_prebuild_service.mark_failed(
-                        source_sha, profile, error=str(exc)
-                    )
-                    logger.warning("Fragment pre-conversion failed (profile=%s): %s", profile, exc)
-
-        # Native metadata parse (Ask-mode, tree, properties, psets).
-        readiness_service.mark_native_index_building()
-        await broadcast_readiness_changed()
-        try:
-            index, _, _ = await metadata_index_service.build_from_bytes(raw_bytes)
-            readiness_service.mark_native_index_ready(total_ms=index.stats.total_ms)
-            await broadcast_readiness_changed()
-            # Broadcast the ready event so the frontend can update its status.
-            contract = ifc_service.get_model_contract()
-            await model_sync_broker.publish(
-                ModelSyncEvent(
-                    type="native_index_ready",
-                    model_version=contract["model_version"],
-                    model_fingerprint=contract["model_fingerprint"],
-                    payload={
-                        "element_count": index.stats.element_count,
-                        "storey_count": index.stats.storey_count,
-                        "pset_count": len(index.all_pset_names),
-                        "total_ms": index.stats.total_ms,
-                    },
-                )
-            )
-        except Exception as exc:  # noqa: BLE001
-            readiness_service.mark_native_index_error(str(exc))
-            await broadcast_readiness_changed()
-            logger.warning("Native metadata parse skipped: %s", exc)
-
-        # Warm the real-AABB cache in the background so the tile manifest
-        # (and frustum culling) get real geometry AABBs the moment the user
-        # starts panning. Disk-cached → instant on warm.
-        try:
-            await aabb_service.compute_async(ifc_service.model, source_sha)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("AABB warm-up failed: %s", exc)
-
-    _asyncio.ensure_future(_bg_tasks(dest, source_sha))
-
-    include_tree_stats = response == "full"
-    meta = _build_meta(include_tree_stats=include_tree_stats)
-    await model_sync_broker.publish(
-        ModelSyncEvent(
-            type="metadata_patch",
-            model_version=meta.model_version,
-            model_fingerprint=meta.model_fingerprint,
-            edit_id=meta.edit_id,
-            payload={
-                "bootstrap": True,
-                "has_tree": meta.tree is not None,
-                "has_stats": meta.stats is not None,
-            },
-        )
-    )
-    return meta
 
 
 @router.post("/native-parse", response_model=NativeParseResponse)
@@ -779,6 +660,18 @@ async def get_meta(
     """Return model metadata for the currently-loaded model."""
     _check_loaded()
     return _build_meta(include_tree_stats=response == "full")
+
+
+@router.get(
+    "/identity",
+    response_model=ModelIdentityV1,
+    responses={400: {"model": ApiErrorResponseV1}},
+)
+async def get_model_identity():
+    """Return stable Atlas project, model, and immutable revision identity."""
+
+    _check_loaded()
+    return ifc_service.get_model_identity()
 
 
 @router.post("/edits/apply", response_model=EditApplyResponse)
@@ -1131,11 +1024,12 @@ def _prewarm_fragments_after_geometry_edit() -> None:
         await fragment_prebuild_service.register_inflight(fingerprint, _PREWARM_PROFILE)
         try:
             FRAGMENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            frag_bytes, _ = await sidecar_manager.convert(
+            converted = await _ifc_converter().convert(
                 ifc_bytes=ifc_bytes,
                 profile=_PREWARM_PROFILE,
                 model_id=f"{fingerprint[:12]}-{_PREWARM_PROFILE}",
             )
+            frag_bytes = converted.data
             if len(frag_bytes) < 4 * 1024:  # same empty-stub guard as /convert
                 await fragment_prebuild_service.mark_failed(
                     fingerprint, _PREWARM_PROFILE, error="empty fragment"
@@ -1405,6 +1299,28 @@ async def get_elements(
     if ifc_type:
         return await asyncio.to_thread(ifc_service.get_elements_by_type, ifc_type)
     return await asyncio.to_thread(ifc_service.get_all_elements)
+
+
+@router.get(
+    "/elements/{element_id}/key",
+    response_model=ElementKeyV1,
+    responses={404: {"model": ApiErrorResponseV1}},
+)
+async def get_element_key(element_id: int):
+    """Resolve an IFC-local express ID to its compound Atlas element key."""
+
+    _check_loaded()
+    try:
+        detail = await asyncio.to_thread(ifc_service.get_element, element_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    identity = ifc_service.get_model_identity()
+    return ElementKeyV1(
+        model_id=identity.model_id,
+        revision_id=identity.revision_id,
+        express_id=element_id,
+        global_id=detail.global_id or None,
+    )
 
 
 @router.get("/elements/{element_id}", response_model=ElementDetail)
@@ -2168,14 +2084,17 @@ async def get_storey_fragment(
         raise HTTPException(503, detail=f"Serialization error: {exc}") from exc
 
     # Attempt sidecar conversion (converts sub-IFC → fragment binary).
-    caps = await sidecar_manager.capabilities()
+    converter = _ifc_converter()
+    caps = await converter.capabilities()
     if caps.get("available"):
         try:
-            frag_bytes, meta = await sidecar_manager.convert(
+            converted = await converter.convert(
                 ifc_bytes=sub_ifc_bytes,
                 profile="balanced",
                 model_id=f"storey-{current_sha[:8]}-s{idx}",
             )
+            frag_bytes = converted.data
+            meta = converted.metadata
             try:
                 atomic_write_fragment_cache(frag_cache_entry, frag_bytes)
             except (OSError, ValueError):
@@ -2224,7 +2143,7 @@ async def get_ifc_features():
     started = time.perf_counter()
     logger.debug("IFC features probe: checking sidecar capabilities")
     try:
-        caps = await sidecar_manager.capabilities()
+        caps = await _ifc_converter().capabilities()
     except Exception as exc:  # defensive: readiness probes should never 500
         logger.exception("IFC features probe failed")
         caps = {
@@ -2264,178 +2183,36 @@ async def convert_ifc_to_fragments(
       - `X-Fragment-Source-Sha256`: sha256 of the input IFC
       - `X-Fragments-Format-Version`: producing @thatopen/fragments version
     """
-    started = time.perf_counter()
     ifc_bytes = await request.body()
     if not ifc_bytes:
         raise HTTPException(400, "empty body; POST the IFC bytes as octet-stream")
     _enforce_ifc_upload_size(len(ifc_bytes))
 
-    # Hashing a multi-hundred-MB upload and checksum-verifying the cached
-    # artifact are CPU-bound; run both off the event loop so convert-progress
-    # polls and websockets stay responsive.
-    source_sha = await asyncio.to_thread(
-        lambda: hashlib.sha256(ifc_bytes).hexdigest()
-    )
-    logger.info(
-        "IFC convert request: sha=%s profile=%s model_id=%s input=%.2fMB",
-        source_sha[:12],
-        profile,
-        model_id,
-        len(ifc_bytes) / (1024 * 1024),
-    )
-    FRAGMENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_entry = _full_fragment_entry(source_sha, profile)
-
-    if no_cache:
-        logger.info(
-            "IFC convert no_cache=1: sha=%s profile=%s - bypassing cache read/write and prebuild reuse",
-            source_sha[:12],
-            profile,
-        )
-
-    cached_bytes = None if no_cache else await asyncio.to_thread(
-        read_fragment_cache, cache_entry
-    )
-    if cached_bytes is not None:
-        logger.info(
-            "IFC convert cache hit: sha=%s profile=%s size=%.2fMB elapsed_ms=%.1f",
-            source_sha[:12],
-            profile,
-            len(cached_bytes) / (1024 * 1024),
-            (time.perf_counter() - started) * 1000,
-        )
-        return Response(
-            content=cached_bytes,
-            media_type="application/octet-stream",
-            headers={
-                "X-Fragment-Source": "cache",
-                "X-Fragment-Profile": profile,
-                "X-Fragment-Source-Sha256": source_sha,
-                **_fragment_cache_key_headers(cache_entry),
-            },
-        )
-
-    prebuild_report = fragment_prebuild_service.get_status(source_sha, profile)
-    if not no_cache and prebuild_report.status == "inflight":
-        logger.info(
-            "IFC convert waiting for inflight prebuild: sha=%s profile=%s",
-            source_sha[:12],
-            profile,
-        )
-        prebuild_report = await fragment_prebuild_service.wait_for(
-            source_sha, profile, timeout_s=30.0
-        )
-        cached_bytes = read_fragment_cache(cache_entry)
-        if cached_bytes is not None:
-            logger.info(
-                "IFC convert prebuild hit: sha=%s profile=%s size=%.2fMB elapsed_ms=%.1f",
-                source_sha[:12],
-                profile,
-                len(cached_bytes) / (1024 * 1024),
-                (time.perf_counter() - started) * 1000,
-            )
-            return Response(
-                content=cached_bytes,
-                media_type="application/octet-stream",
-                headers={
-                    "X-Fragment-Source": "cache",
-                    "X-Fragment-Profile": profile,
-                    "X-Fragment-Elapsed-Ms": str(prebuild_report.elapsed_ms or 0),
-                    "X-Fragment-Source-Sha256": source_sha,
-                    **_fragment_cache_key_headers(cache_entry),
-                },
-            )
-
-    # Register this conversion as in-flight so the upload route's `_bg_tasks`
-    # (or a concurrent `/convert` for the same SHA) sees the work and waits
-    # instead of running a duplicate sidecar conversion. `register_inflight`
-    # is idempotent - if another caller already won the race, this is a no-op
-    # and we still run our own conversion (the cache writes are idempotent).
-    if not no_cache:
-        await fragment_prebuild_service.register_inflight(source_sha, profile)
-
     try:
-        logger.info(
-            "IFC convert sidecar start: sha=%s profile=%s model_id=%s",
-            source_sha[:12],
-            profile,
-            model_id,
-        )
-        frag_bytes, meta = await sidecar_manager.convert(
+        artifact = await _ifc_conversion_service().convert(
             ifc_bytes=ifc_bytes,
             profile=profile,
             model_id=model_id,
+            no_cache=no_cache,
         )
-    except RuntimeError as exc:
-        await fragment_prebuild_service.mark_failed(source_sha, profile, error=str(exc))
+    except ConverterUnavailableError as exc:
         raise HTTPException(503, f"sidecar error: {exc}") from exc
+    except InvalidRenderArtifactError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
-    # Sanity check: the sidecar sometimes returns a tiny (~100 B) zlib stub
-    # when conversion silently fails on geometry it can't handle. We refuse
-    # to cache or serve those - caching them poisons future requests for the
-    # same SHA, and the frontend wastes retries trying to load empty bytes.
-    # Threshold is 4 KB: a real fragment with even one element is larger.
-    _MIN_VALID_FRAG_BYTES = 4 * 1024
-    if len(frag_bytes) < _MIN_VALID_FRAG_BYTES:
-        err = (
-            f"sidecar produced suspiciously small fragment "
-            f"({len(frag_bytes)} B from {len(ifc_bytes)} B IFC) - likely "
-            "an empty stub from a conversion failure"
-        )
-        logger.warning(err)
-        await fragment_prebuild_service.mark_failed(source_sha, profile, error=err)
-        raise HTTPException(422, err)
-
-    # Persist for next time. Best-effort; a write failure is not fatal.
-    # When no_cache=1 we skip the write so the toggle truly disables reuse
-    # (otherwise the next "uncached" request would still see this file in
-    # cache_path on a subsequent toggle-on).
-    cache_persisted = False
-    cache_write_error: Optional[str] = None
-    if not no_cache:
-        try:
-            atomic_write_fragment_cache(cache_entry, frag_bytes)
-            cache_persisted = True
-        except (OSError, ValueError) as exc:
-            cache_write_error = str(exc)
-            logger.warning("Failed to persist fragment cache at %s: %s", cache_entry.path, exc)
-
-    # Notify any waiters (the upload `_bg_tasks` for the same SHA) that the
-    # conversion is done and the cache is hot. With no_cache=1 we never
-    # wrote the cache, so there is nothing for waiters to consume.
-    if cache_persisted:
-        await fragment_prebuild_service.mark_complete(
-            source_sha, profile, size_bytes=len(frag_bytes)
-        )
-    elif not no_cache:
-        await fragment_prebuild_service.mark_failed(
-            source_sha,
-            profile,
-            error=cache_write_error or "fragment cache publication failed",
-        )
-    logger.info(
-        "IFC convert sidecar done: sha=%s profile=%s output=%.2fMB sidecar_ms=%s total_ms=%.1f",
-        source_sha[:12],
-        profile,
-        len(frag_bytes) / (1024 * 1024),
-        meta.get("elapsedMs", 0),
-        (time.perf_counter() - started) * 1000,
-    )
-
-    # Drop the progress snapshot now that we're done so a follow-up
-    # poll returns None (the conversion is over) instead of stale 100 %.
-    sidecar_manager.clear_progress(model_id)
+    headers = {
+        "X-Fragment-Source": artifact.source,
+        "X-Fragment-Profile": artifact.effective_profile,
+        "X-Fragment-Source-Sha256": artifact.source_sha256,
+        **_fragment_cache_key_headers(artifact.cache_entry),
+    }
+    if artifact.elapsed_ms is not None:
+        headers["X-Fragment-Elapsed-Ms"] = str(artifact.elapsed_ms)
 
     return Response(
-        content=frag_bytes,
+        content=artifact.data,
         media_type="application/octet-stream",
-        headers={
-            "X-Fragment-Source": "sidecar",
-            "X-Fragment-Profile": meta.get("effectiveProfile") or profile,
-            "X-Fragment-Elapsed-Ms": str(meta.get("elapsedMs", 0)),
-            "X-Fragment-Source-Sha256": source_sha,
-            **_fragment_cache_key_headers(cache_entry),
-        },
+        headers=headers,
     )
 
 
@@ -2514,6 +2291,51 @@ async def get_fragment_manifest(
     }
 
 
+@router.get("/artifact-manifest", response_model=ArtifactManifestLookupV1)
+async def get_artifact_manifest(
+    fingerprint: str = Query(
+        ...,
+        pattern=r"^[0-9a-f]{64}$",
+        description="Lowercase SHA-256 of the immutable IFC source revision.",
+    ),
+    profile: Literal["quality", "balanced", "performance", "ultra_fast"] = Query(
+        "balanced"
+    ),
+):
+    """Return the validated Atlas Render Package manifest v1, if cached.
+
+    This is the engine-neutral successor to ``/fragment-manifest``. The legacy
+    endpoint remains available during the frontend compatibility window.
+    """
+
+    FRAGMENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_entry = _full_fragment_entry(fingerprint, profile)
+    cache_info = inspect_fragment_cache(cache_entry)
+    manifest = None
+    if cache_info is not None:
+        serve_url = (
+            f"/api/ifc/fragments/serve?fingerprint={fingerprint}&profile={profile}"
+        )
+        manifest = build_artifact_manifest(
+            source_sha256=fingerprint,
+            artifact_kind=cache_entry.key.artifact_kind,
+            profile=profile,
+            cache_key=cache_entry.key.digest,
+            fragments_format_version=fragments_format_version(cache_entry),
+            artifact_sha256=cache_info.sha256,
+            artifact_size=cache_info.size_bytes,
+            serve_url=serve_url,
+            provenance=cache_entry.key.provenance,
+            preprocessing=cache_info.preprocessing,
+        )
+    return ArtifactManifestLookupV1(
+        cached=manifest is not None,
+        fingerprint=fingerprint,
+        profile=profile,
+        manifest=manifest,
+    )
+
+
 @router.get("/convert-status")
 async def get_convert_status(
     fingerprint: str = Query(..., description="SHA-256 of the IFC file (from model contract)"),
@@ -2582,6 +2404,75 @@ async def get_convert_status(
     else:
         payload["serve_url"] = None
     return payload
+
+
+@router.get("/conversion-jobs/current", response_model=ConversionJobLookupV1)
+async def get_conversion_job(
+    fingerprint: str = Query(
+        ...,
+        pattern=r"^[0-9a-f]{64}$",
+        description="Lowercase SHA-256 of the immutable IFC source revision.",
+    ),
+    profile: Literal["quality", "balanced", "performance", "ultra_fast"] = Query(
+        "balanced"
+    ),
+    wait_ms: int = Query(0, ge=0, le=30_000),
+):
+    """Adapt the current prebuild registry to the stable job contract v1."""
+
+    legacy = await get_convert_status(
+        fingerprint=fingerprint,
+        profile=profile,
+        wait_ms=wait_ms,
+    )
+    legacy_state = legacy["status"]
+    if legacy_state == "idle":
+        return ConversionJobLookupV1(
+            fingerprint=fingerprint,
+            profile=profile,
+            job=None,
+        )
+
+    cache_key = str(legacy["cache_key"])
+    state = {
+        "inflight": JobState.RUNNING,
+        "complete": JobState.SUCCEEDED,
+        "failed": JobState.FAILED,
+    }[legacy_state]
+    error = None
+    if state is JobState.FAILED:
+        message = str(legacy.get("error") or "IFC conversion failed")
+        code = classify_error_code(message)
+        if code is ErrorCode.CANCELLED:
+            state = JobState.CANCELLED
+        else:
+            error = ErrorDetailV1(
+                code=code,
+                message=message,
+                retryable=code
+                in {
+                    ErrorCode.CONVERTER_UNAVAILABLE,
+                    ErrorCode.CONVERSION_FAILED,
+                },
+            )
+    job = JobContractV1(
+        job_id=f"job_{cache_key}",
+        job_type="ifc_conversion",
+        state=state,
+        progress=1.0 if state is JobState.SUCCEEDED else 0.0,
+        # The current sidecar request cannot yet be interrupted reliably.
+        cancellable=False,
+        elapsed_ms=legacy.get("elapsed_ms"),
+        result_artifact_id=(
+            f"art_{cache_key}" if state is JobState.SUCCEEDED else None
+        ),
+        error=error,
+    )
+    return ConversionJobLookupV1(
+        fingerprint=fingerprint,
+        profile=profile,
+        job=job,
+    )
 
 
 @router.get("/fragments/serve")

@@ -1,10 +1,9 @@
 """
 Structural route checks for the FastAPI app assembled in app.main.
 
-Follows the route-inspection style of test_mcp_server.py: no HTTP traffic -
-import the app object and assert the expected paths are registered. This
-catches the failure mode where a router module exists but was never wired
-into app.main via include_router.
+Use the public OpenAPI model for HTTP routes. FastAPI 0.140 keeps included
+routers nested internally, so inspecting only ``app.routes`` no longer finds
+their paths. This still catches a router omitted from ``app.main``.
 """
 
 from __future__ import annotations
@@ -26,8 +25,14 @@ EXPECTED_PATHS = [
 
 
 def _registered_paths() -> set[str]:
-    """All route paths on the app (APIRoute, WebSocketRoute, and Mount alike)."""
-    return {getattr(r, "path", "") for r in app.routes}
+    """All documented HTTP paths plus top-level mounts such as MCP."""
+    paths = set(app.openapi()["paths"])
+    paths.update(
+        getattr(route, "path", "")
+        for route in app.routes
+        if getattr(route, "path", "")
+    )
+    return paths
 
 
 class TestFeatureRoutersRegistered:
@@ -49,11 +54,8 @@ class TestRouteMethods:
     """The representative paths must expose the verbs the frontend/CLI call."""
 
     def _methods_for(self, path: str) -> set[str]:
-        methods: set[str] = set()
-        for r in app.routes:
-            if getattr(r, "path", "") == path:
-                methods |= set(getattr(r, "methods", None) or ())
-        return methods
+        operations = app.openapi()["paths"].get(path, {})
+        return {method.upper() for method in operations}
 
     def test_qto_summary_is_get(self):
         assert "GET" in self._methods_for("/api/qto/summary")

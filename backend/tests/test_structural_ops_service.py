@@ -9,7 +9,6 @@ deletions (express-id preservation = the native-IFC ID contract).
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 

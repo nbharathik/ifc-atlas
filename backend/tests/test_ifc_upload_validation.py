@@ -4,6 +4,8 @@ import hashlib
 
 from fastapi.testclient import TestClient
 
+from app.services.ifc_ingestion_service import IfcIngestionError
+
 
 def _client() -> TestClient:
     from app.main import app
@@ -40,6 +42,42 @@ def test_upload_rejects_empty_ifc_before_model_load(tmp_path, monkeypatch):
 
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Empty file body"
+
+
+def test_upload_maps_ingestion_failure_and_removes_staged_file(
+    tmp_path,
+    monkeypatch,
+):
+    from app.api import ifc_routes
+
+    class FailingIngestion:
+        async def ingest(self, **_kwargs):
+            raise IfcIngestionError("invalid semantic model")
+
+    monkeypatch.setattr(ifc_routes, "UPLOAD_DIR", tmp_path)
+    monkeypatch.setattr(ifc_routes, "MAX_IFC_UPLOAD_BYTES", 1024)
+    monkeypatch.setattr(
+        ifc_routes,
+        "_ifc_ingestion_service",
+        lambda: FailingIngestion(),
+    )
+
+    resp = _client().post(
+        "/api/ifc/upload",
+        files={
+            "file": (
+                "broken.ifc",
+                b"ISO-10303-21;broken",
+                "application/octet-stream",
+            )
+        },
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == (
+        "Failed to load IFC file: invalid semantic model"
+    )
+    assert not (tmp_path / "broken.ifc").exists()
 
 
 def test_preview_upload_endpoints_share_ifc_size_cap(monkeypatch):

@@ -6,7 +6,6 @@ reconcile path, plus WS-broadcast and warming-envelope coverage below.
 
 from __future__ import annotations
 
-import pytest
 
 from app.services import readiness_service as rs_module
 from app.services.readiness_service import ReadinessService

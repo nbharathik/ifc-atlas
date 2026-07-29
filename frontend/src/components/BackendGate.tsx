@@ -1,6 +1,16 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { isDesktop, isTauri, getBackendUrl, invokeCommand } from '../lib/platform';
+import {
+  apiUrl,
+  clearServerApiToken,
+  getBackendUrl,
+  getStoredServerApiToken,
+  invokeCommand,
+  isDesktop,
+  isTauri,
+  setServerApiToken,
+} from '../lib/platform';
+import { BROWSER_ONLY } from '../config/featureFlags';
 
 type GateStatus = 'connecting' | 'ready' | 'failed' | 'crashed' | 'reconnecting';
 
@@ -30,8 +40,148 @@ const POLL_INTERVAL_MS = 800;
  * tearing the session down.
  */
 export function BackendGate({ children }: { children: ReactNode }) {
-  if (!isDesktop) return <>{children}</>;
-  return <DesktopBackendGate>{children}</DesktopBackendGate>;
+  if (BROWSER_ONLY) return <>{children}</>;
+  if (isDesktop) return <DesktopBackendGate>{children}</DesktopBackendGate>;
+  return <ServerSecurityGate>{children}</ServerSecurityGate>;
+}
+
+type SecurityInfo = {
+  mode: 'local' | 'server';
+  auth_required: boolean;
+};
+
+function ServerSecurityGate({ children }: { children: ReactNode }) {
+  const [status, setStatus] = useState<'checking' | 'ready' | 'token' | 'failed'>(
+    'checking',
+  );
+  const [token, setToken] = useState('');
+  const [reason, setReason] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const infoResponse = await fetch(apiUrl('/api/security'), {
+          cache: 'no-store',
+        });
+        if (!infoResponse.ok) {
+          throw new Error(`security profile returned ${infoResponse.status}`);
+        }
+        const info = (await infoResponse.json()) as SecurityInfo;
+        if (!info.auth_required) {
+          if (!cancelled) setStatus('ready');
+          return;
+        }
+
+        if (!getStoredServerApiToken()) {
+          if (!cancelled) setStatus('token');
+          return;
+        }
+        const verify = await fetch(apiUrl('/api/security/verify'), {
+          method: 'POST',
+          cache: 'no-store',
+        });
+        if (verify.ok) {
+          if (!cancelled) setStatus('ready');
+          return;
+        }
+        clearServerApiToken();
+        if (!cancelled) {
+          setReason('The saved access token is no longer valid.');
+          setStatus('token');
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setReason(`Could not reach the IFC Atlas backend: ${String(error)}`);
+          setStatus('failed');
+        }
+      }
+    };
+    void check();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const authenticate = async () => {
+    const normalized = token.trim();
+    if (!normalized) {
+      setReason('Enter the server access token.');
+      return;
+    }
+    setServerApiToken(normalized);
+    try {
+      const verify = await fetch(apiUrl('/api/security/verify'), {
+        method: 'POST',
+        cache: 'no-store',
+      });
+      if (!verify.ok) {
+        clearServerApiToken();
+        setReason('The server rejected this access token.');
+        return;
+      }
+      setToken('');
+      setReason('');
+      setStatus('ready');
+    } catch (error) {
+      clearServerApiToken();
+      setReason(`Could not verify the access token: ${String(error)}`);
+    }
+  };
+
+  if (status === 'ready') return <>{children}</>;
+
+  return (
+    <div style={overlayStyle}>
+      <style>{spinnerKeyframes}</style>
+      {status === 'checking' ? (
+        <>
+          <div style={spinnerStyle} />
+          <div style={titleStyle}>Checking server security...</div>
+        </>
+      ) : status === 'token' ? (
+        <form
+          style={authFormStyle}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void authenticate();
+          }}
+        >
+          <div style={titleStyle}>Server access required</div>
+          <div style={subStyle}>
+            Enter the access token configured by this IFC Atlas server. It is
+            kept only in this browser tab.
+          </div>
+          <input
+            type="password"
+            autoComplete="current-password"
+            value={token}
+            onChange={(event) => setToken(event.target.value)}
+            aria-label="IFC Atlas server access token"
+            style={tokenInputStyle}
+            autoFocus
+          />
+          {reason && <div style={authErrorStyle}>{reason}</div>}
+          <button type="submit" style={retryStyle}>
+            Connect
+          </button>
+        </form>
+      ) : (
+        <>
+          <div style={errIconStyle}>⚠</div>
+          <div style={titleStyle}>Backend unavailable</div>
+          <div style={subStyle}>{reason}</div>
+          <button
+            type="button"
+            style={retryStyle}
+            onClick={() => window.location.reload()}
+          >
+            Retry
+          </button>
+        </>
+      )}
+    </div>
+  );
 }
 
 function DesktopBackendGate({ children }: { children: ReactNode }) {
@@ -275,6 +425,31 @@ const buttonRowStyle: CSSProperties = {
   display: 'flex',
   gap: 8,
   marginTop: 8,
+};
+
+const authFormStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: 12,
+  width: 'min(420px, 100%)',
+};
+
+const tokenInputStyle: CSSProperties = {
+  boxSizing: 'border-box',
+  width: '100%',
+  padding: '10px 12px',
+  borderRadius: 6,
+  border: '1px solid rgba(245,245,245,0.25)',
+  background: 'rgba(255,255,255,0.08)',
+  color: '#f5f5f5',
+  fontSize: 14,
+};
+
+const authErrorStyle: CSSProperties = {
+  color: '#ff9a9a',
+  fontSize: 13,
+  lineHeight: 1.4,
 };
 
 const retryStyle: CSSProperties = {

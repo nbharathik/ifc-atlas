@@ -117,33 +117,14 @@ export class ElementFrustumCuller {
 
       const chunk = capped.slice(start, start + GEOMETRY_CHUNK);
       try {
-        // Result is parallel to the input: perItem[i] holds the mesh face
-        // groups for chunk[i] (getItemsGeometry(localIds) → MeshData[][]).
-        const perItem = await model.getItemsGeometry(chunk) as Array<Array<{
-          positions?: Float32Array | Float64Array;
-          indices?: ArrayLike<number>;
-          transform: THREE.Matrix4;
-        }> | null>;
-        if (!perItem) continue;
-
+        // The worker computes per-item boxes directly; transferring raw vertex
+        // buffers to rebuild them on the main thread cost 120-250 ms per model.
+        const boxes = await model.getBoxes(chunk);
         for (let i = 0; i < chunk.length; i++) {
           if (this._disposed) return;
-          const itemMeshes = perItem[i];
-          if (!itemMeshes) continue;
-
-          const box = new THREE.Box3();
-          for (const md of itemMeshes) {
-            if (!md?.positions) continue;
-            const pos = md.positions;
-            const mat = md.transform as THREE.Matrix4;
-            for (let j = 0; j < pos.length; j += 3) {
-              tmp.set(pos[j], pos[j + 1], pos[j + 2]).applyMatrix4(mat);
-              box.expandByPoint(tmp);
-            }
-          }
-          if (!box.isEmpty()) {
-            this.records.push({ localId: chunk[i], box, autoCulled: false });
-          }
+          const box = boxes[i];
+          if (!box || box.isEmpty()) continue;
+          this.records.push({ localId: chunk[i], box: box.clone(), autoCulled: false });
         }
       } catch { /* chunk geometry unavailable - its elements skipped */ }
     }

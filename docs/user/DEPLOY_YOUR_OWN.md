@@ -8,11 +8,16 @@ Five supported deployment modes. Pick the one that matches your constraints.
 
 ```bash
 # Set OPENAI_API_KEY / ANTHROPIC_API_KEY / OPENROUTER_API_KEY in your shell
-# (or in ~/.ifc-atlas/.env) first
+# (or in ~/.ifc-atlas/.env) first. Generate and export a 32+ character
+# IFC_ATLAS_API_TOKEN as well.
 docker compose up --build
 ```
 
-Frontend on port 5173, backend on port 8000. This compose file runs the Vite development server and is useful for local validation. For day-to-day development you can also run the backend and frontend directly; see [Getting Started](GETTING_STARTED.md).
+Frontend on port 5173, backend on port 8000. The browser asks for the server
+access token and keeps it only for the current tab. This compose file runs the
+Vite development server and is useful for local validation. For day-to-day
+development you can also run the backend and frontend directly; see [Getting
+Started](GETTING_STARTED.md).
 
 ---
 
@@ -26,10 +31,17 @@ npm ci
 npm run build
 cd ..
 
-DOMAIN=your.domain docker compose -f docker-compose.prod.yml up -d --build
+DOMAIN=your.domain \
+IFC_ATLAS_API_TOKEN='replace-with-a-random-32-plus-character-value' \
+docker compose -f docker-compose.prod.yml up -d --build
 ```
 
 Caddy serves the built frontend on ports 80/443 and proxies API and WebSocket traffic to the backend container.
+
+The Phase 0 server credential is a shared deployment token. Give it only to
+trusted users. It authenticates access to the deployment but does not provide
+per-user identity, project isolation, roles or audit attribution. Keep TLS
+enabled and leave `IFC_ATLAS_ENABLE_CODE_EXECUTION=0` for shared servers.
 
 ---
 
@@ -46,6 +58,9 @@ your.domain {
     header {
         Cross-Origin-Opener-Policy "same-origin"
         Cross-Origin-Embedder-Policy "credentialless"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "no-referrer"
+        X-Frame-Options "DENY"
     }
     @ws {
         header Connection *Upgrade*
@@ -76,7 +91,11 @@ your.domain {
 | `FRONTEND_URL` | Origin allowed in CORS responses. |
 | `IFC_VIEWER_MAX_UPLOAD_BYTES` | Max upload size in bytes (default 512 MB). |
 | `IFC_ATLAS_HOME` | Override the per-user data folder (absolute path). |
-| `MCP_SERVER_TOKEN` | Bearer token required on `/mcp/*` (leave unset to disable auth). |
+| `IFC_ATLAS_SECURITY_MODE` | `local` for loopback development or `server` for a shared deployment. |
+| `IFC_ATLAS_API_TOKEN` | Required in server mode; shared bearer token, at least 32 characters. |
+| `IFC_ATLAS_ENABLE_CODE_EXECUTION` | Trusted-local free-form Python/plugin execution. Defaults off in server mode. |
+| `SIDECAR_CONVERT_TIMEOUT_S` | Finite server conversion deadline; default 900 seconds. |
+| `MCP_SERVER_TOKEN` | Optional separate bearer token for `/mcp/*`; server mode otherwise inherits the main API token. |
 | `MCP_ALLOW_WRITES` | Set `1` to expose the write tier over MCP. |
 
 ### Frontend build-time environment variables

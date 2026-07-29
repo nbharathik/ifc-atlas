@@ -42,18 +42,39 @@ describe('registerWasmServiceWorker', () => {
     });
   });
 
-  it('returns already-active when a registration with an active SW exists', async () => {
-    mockGetRegistration.mockResolvedValue({ active: { state: 'activated' } });
+  it('returns already-active when the active SW carries the current build stamp', async () => {
+    mockGetRegistration.mockResolvedValue(undefined);
+    mockRegister.mockResolvedValue({ installing: {} });
+    await registerWasmServiceWorker();
+    const registeredUrl = mockRegister.mock.calls[0][0] as string;
+    mockRegister.mockClear();
+
+    mockGetRegistration.mockResolvedValue({
+      active: { state: 'activated', scriptURL: `https://example.test${registeredUrl}` },
+    });
     const result = await registerWasmServiceWorker();
     expect(result.status).toBe('already-active');
     expect(mockRegister).not.toHaveBeenCalled();
   });
 
-  it('calls register with /sw.js when no existing registration exists', async () => {
+  it('re-registers when the active SW was installed by a different build', async () => {
+    mockGetRegistration.mockResolvedValue({
+      active: { state: 'activated', scriptURL: 'https://example.test/sw.js?v=stale-build' },
+    });
+    mockRegister.mockResolvedValue({ installing: {} });
+    const result = await registerWasmServiceWorker();
+    expect(mockRegister).toHaveBeenCalledOnce();
+    expect(result.status).toBe('registered');
+  });
+
+  it('registers /sw.js with a build stamp so the cache namespace cannot go stale', async () => {
     mockGetRegistration.mockResolvedValue(undefined);
     mockRegister.mockResolvedValue({ installing: {} });
     const result = await registerWasmServiceWorker();
-    expect(mockRegister).toHaveBeenCalledWith('/sw.js', { scope: '/' });
+    expect(mockRegister).toHaveBeenCalledOnce();
+    const [url, options] = mockRegister.mock.calls[0];
+    expect(url).toMatch(/^\/sw\.js\?v=.+/);
+    expect(options).toEqual({ scope: '/' });
     expect(result.status).toBe('registered');
   });
 

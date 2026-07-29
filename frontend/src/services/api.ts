@@ -19,22 +19,6 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
-/**
- * Upload an IFC file and get project + tree + stats in one response.
- * Saves two round-trips compared to calling /project + /tree + /stats
- * after upload separately.
- */
-export async function uploadIfc(file: File): Promise<ModelMeta> {
-  const form = new FormData();
-  form.append('file', file);
-  return fetchJson<ModelMeta>('/ifc/upload', { method: 'POST', body: form });
-}
-
-/** Re-hydrate from the currently-loaded backend model (no re-upload). */
-export async function getMeta(): Promise<ModelMeta> {
-  return fetchJson<ModelMeta>('/ifc/meta');
-}
-
 export async function uploadIfcWithMode(
   file: File,
   mode: 'minimal' | 'full',
@@ -72,14 +56,6 @@ export async function getMetaWithMode(mode: 'minimal' | 'full'): Promise<ModelMe
   return fetchJson<ModelMeta>(`/ifc/meta?response=${mode}`);
 }
 
-export async function applyIfcEdits(request: EditApplyRequest): Promise<EditApplyResponse> {
-  return fetchJson<EditApplyResponse>('/ifc/edits/apply', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Operation layer - editor UI direct edits (ADR 003). Every call goes through
 // /api/ifc/operations/* with actor=USER; the backend logs it and emits the
@@ -112,13 +88,6 @@ export async function undoOperation(): Promise<OperationResult> {
 
 export async function redoOperation(): Promise<OperationResult> {
   return fetchJson<OperationResult>('/ifc/operations/redo', { method: 'POST' });
-}
-
-export async function getOperationsCatalogue(): Promise<OperationCatalogueEntry[]> {
-  const r = await fetchJson<{ operations: OperationCatalogueEntry[] }>(
-    '/ifc/operations/catalogue',
-  );
-  return r.operations;
 }
 
 export async function getOperationsHistory(limit = 100): Promise<Record<string, unknown>[]> {
@@ -221,14 +190,6 @@ export async function newProject(template = 'single_storey'): Promise<ArrayBuffe
 // Invariant-4 pending edits (sandboxed diff preview)
 // ---------------------------------------------------------------------------
 
-export async function listPendingEdits(): Promise<PendingEditEnvelope[]> {
-  return fetchJson<PendingEditEnvelope[]>('/ifc/edits/pending');
-}
-
-export async function getPendingEdit(editId: string): Promise<PendingEditEnvelope> {
-  return fetchJson<PendingEditEnvelope>(`/ifc/edits/pending/${editId}`);
-}
-
 /**
  * Apply a staged edit. If the backend returns 409 + `edit_in_progress`
  * (serialisation gate), the response body's `retry_after_ms` is
@@ -306,10 +267,6 @@ export async function discardPendingEdit(editId: string): Promise<PendingEditEnv
   });
 }
 
-export async function getProject(): Promise<ProjectInfo> {
-  return fetchJson<ProjectInfo>('/ifc/project');
-}
-
 export async function getSpatialTree(): Promise<SpatialNode> {
   return fetchJson<SpatialNode>('/ifc/tree');
 }
@@ -359,10 +316,6 @@ export interface ElementRelations {
 
 export async function getElementRelations(id: number): Promise<ElementRelations> {
   return fetchJson<ElementRelations>(`/ifc/elements/${id}/relations`);
-}
-
-export async function getStats(): Promise<ModelStats> {
-  return fetchJson<ModelStats>('/ifc/stats');
 }
 
 export async function getStoreys(): Promise<ElementSummary[]> {
@@ -510,17 +463,6 @@ export interface NearbyResult {
   note?: string;
 }
 
-export async function findNearbyElements(
-  elementId: number,
-  radiusM: number = 5.0,
-  ifcTypes?: string[],
-  limit: number = 20,
-): Promise<NearbyResult> {
-  const params = new URLSearchParams({ radius_m: String(radiusM), limit: String(limit) });
-  if (ifcTypes?.length) params.set('ifc_types', ifcTypes.join(','));
-  return fetchJson<NearbyResult>(`/ifc/elements/${elementId}/nearby?${params}`);
-}
-
 export type PropertyFilterOperator =
   | 'eq'
   | 'neq'
@@ -561,14 +503,6 @@ export interface PropertyFilterResult {
   truncated: boolean;
   elements: PropertyFilterElement[];
   element_ids: number[];
-}
-
-export async function filterByPropertyValue(req: PropertyFilterRequest): Promise<PropertyFilterResult> {
-  return fetchJson<PropertyFilterResult>('/ifc/elements/filter-by-property', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
-  });
 }
 
 /** One predicate evaluated against IFC identity attributes, psets or quantities. */
@@ -656,39 +590,12 @@ export async function undoLastEdit(): Promise<UndoResult> {
   return fetchJson<UndoResult>('/ifc/undo', { method: 'POST' });
 }
 
-export async function getEditHistory(): Promise<EditHistoryEntry[]> {
-  return fetchJson<EditHistoryEntry[]>('/ifc/edit-history');
-}
-
 // ---------------------------------------------------------------------------
 // Agent Manager
 // ---------------------------------------------------------------------------
 
 export async function listAgents(): Promise<{ agents: AgentPreset[] }> {
   return fetchJson<{ agents: AgentPreset[] }>('/chat/agents');
-}
-
-export async function createAgent(payload: AgentCreatePayload): Promise<{ agent: AgentPreset }> {
-  return fetchJson<{ agent: AgentPreset }>('/chat/agents', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function updateAgent(
-  agentId: string,
-  payload: AgentCreatePayload,
-): Promise<{ agent: AgentPreset }> {
-  return fetchJson<{ agent: AgentPreset }>(`/chat/agents/${agentId}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function deleteAgent(agentId: string): Promise<{ deleted: string }> {
-  return fetchJson<{ deleted: string }>(`/chat/agents/${agentId}`, { method: 'DELETE' });
 }
 
 export async function listTools(): Promise<{ tools: import('../types/ifc').ToolCatalogEntry[] }> {
@@ -722,36 +629,6 @@ export interface ToolSetPayload {
   description?: string;
   tools: string[];
   icon?: string;
-}
-
-export async function listToolSets(): Promise<{ tool_sets: import('../types/ifc').ToolSet[] }> {
-  return fetchJson('/chat/tool-sets');
-}
-
-export async function createToolSet(payload: ToolSetPayload): Promise<{ tool_set: import('../types/ifc').ToolSet }> {
-  const r = await fetchJson<{ tool_set: import('../types/ifc').ToolSet }>('/chat/tool-sets', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  invalidateChatManagerBootstrap();
-  return r;
-}
-
-export async function updateToolSet(setId: string, payload: ToolSetPayload): Promise<{ tool_set: import('../types/ifc').ToolSet }> {
-  const r = await fetchJson<{ tool_set: import('../types/ifc').ToolSet }>(`/chat/tool-sets/${setId}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  invalidateChatManagerBootstrap();
-  return r;
-}
-
-export async function deleteToolSet(setId: string): Promise<{ deleted: string }> {
-  const r = await fetchJson<{ deleted: string }>(`/chat/tool-sets/${setId}`, { method: 'DELETE' });
-  invalidateChatManagerBootstrap();
-  return r;
 }
 
 // ---------------------------------------------------------------------------
@@ -928,11 +805,6 @@ export async function reorderModels(order: string[]): Promise<{ models: ModelT[]
   return r;
 }
 
-export async function getModelContext(): Promise<{ context_block: string; has_model: boolean }> {
-  return fetchJson('/chat/context');
-}
-
-
 // ---------------------------------------------------------------------------
 // MCP server registry
 // ---------------------------------------------------------------------------
@@ -1026,11 +898,6 @@ export async function listCheckpoints(limit = 50): Promise<import('../types/ifc'
 /** Restore the IFC model to a specific checkpoint SHA. */
 export async function rollbackToCheckpoint(sha: string): Promise<{ sha: string; model_version: number; model_fingerprint: string }> {
   return fetchJson(`/ifc/checkpoints/rollback/${encodeURIComponent(sha)}`, { method: 'POST' });
-}
-
-/** Diff a checkpoint snapshot against the current model. */
-export async function getCheckpointDiff(sha: string): Promise<import('../types/ifc').CheckpointDiffResult> {
-  return fetchJson(`/ifc/checkpoints/${encodeURIComponent(sha)}/diff`);
 }
 
 // ── Budget dashboard ──────────────────────────────────────────────────────────
@@ -1201,29 +1068,6 @@ export interface AabbBulkResponseDto {
   missing: number[];
 }
 
-export async function getAabbStatus(): Promise<AabbCacheStatusDto> {
-  return fetchJson<AabbCacheStatusDto>('/ifc/aabb/status');
-}
-
-/** Return the cached AABB for one element, or `null` on 404 (not yet warm). */
-export async function getAabbOne(expressId: number): Promise<AabbResponseDto | null> {
-  const res = await fetch(apiUrl(`${BASE}/ifc/aabb/${expressId}`));
-  if (res.status === 404) return null;
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`API error ${res.status}: ${body}`);
-  }
-  return res.json();
-}
-
-export async function getAabbBulk(expressIds: number[]): Promise<AabbBulkResponseDto> {
-  return fetchJson<AabbBulkResponseDto>('/ifc/aabb/bulk', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ express_ids: expressIds }),
-  });
-}
-
 /**
  * Fetch the current model's preprocessed spatial partition.
  *
@@ -1307,18 +1151,6 @@ export async function fetchSpatialTileFragment(
   };
 }
 
-export async function clearAabbCache(opts?: { sha?: string; disk?: boolean }):
-  Promise<{ cleared: string; disk_files_removed: number }> {
-  const params = new URLSearchParams();
-  if (opts?.sha) params.set('sha', opts.sha);
-  if (opts?.disk) params.set('disk', 'true');
-  const qs = params.toString();
-  return fetchJson<{ cleared: string; disk_files_removed: number }>(
-    `/ifc/aabb/cache${qs ? '?' + qs : ''}`,
-    { method: 'DELETE' },
-  );
-}
-
 // ---------------------------------------------------------------------------
 // System / data-storage endpoints (Settings → Storage panel)
 // ---------------------------------------------------------------------------
@@ -1368,15 +1200,6 @@ export async function updateCacheConfig(cacheMaxBytes: number): Promise<{
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ cache_max_bytes: cacheMaxBytes }),
   });
-}
-
-export async function enforceCacheCap(): Promise<{
-  scope: string;
-  cap_bytes: number;
-  bytes_freed: number;
-  files_removed: number;
-}> {
-  return fetchJson('/system/cache/enforce-cap', { method: 'POST' });
 }
 
 // ---------------------------------------------------------------------------

@@ -150,10 +150,8 @@ export class StoreyFrustumCuller {
 
       if (localIds.length === 0 || this._disposed) continue;
 
-      // Compute AABB from element geometry, fetched in GEOMETRY_CHUNK-sized
-      // batches. model.getItemsGeometry returns Array<Array<{ positions,
-      // indices, transform }>> - outer dim is parallel to the requested
-      // localIds, inner dim is per mesh face group.
+      // Union the worker-computed per-item boxes; shipping raw vertex buffers
+      // to the main thread to recompute them was the dominant build cost.
       const box = new THREE.Box3();
       for (let start = 0; start < localIds.length; start += GEOMETRY_CHUNK) {
         if (this._disposed) return;
@@ -168,25 +166,10 @@ export class StoreyFrustumCuller {
 
         const chunk = localIds.slice(start, start + GEOMETRY_CHUNK);
         try {
-          const perItem = await model.getItemsGeometry(chunk) as Array<Array<{
-            positions?: Float32Array | Float64Array;
-            indices?: ArrayLike<number>;
-            transform: THREE.Matrix4;
-          }> | null>;
-          if (!perItem) continue;
-
-          for (const itemMeshes of perItem) {
-            if (!itemMeshes) continue;
-            for (const md of itemMeshes) {
-              if (this._disposed) return;
-              if (!md?.positions) continue;
-              const pos = md.positions;
-              const mat = md.transform as THREE.Matrix4;
-              for (let i = 0; i < pos.length; i += 3) {
-                tmp.set(pos[i], pos[i + 1], pos[i + 2]).applyMatrix4(mat);
-                box.expandByPoint(tmp);
-              }
-            }
+          const boxes = await model.getBoxes(chunk);
+          for (const itemBox of boxes) {
+            if (this._disposed) return;
+            if (itemBox && !itemBox.isEmpty()) box.union(itemBox);
           }
         } catch { /* chunk geometry unavailable - its elements skipped */ }
       }

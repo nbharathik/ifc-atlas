@@ -6,38 +6,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0d1016" />
     <title>IFC Atlas</title>
-    <!--
-      Warm web-ifc.wasm during HTML parse so
-      ifcLoader.setup() inside ViewerPanel.init() hits the HTTP cache
-      instead of the network. Saves ~300-500ms off first-model-open on
-      cold starts.
-
-      Browser conversion intentionally forces web-ifc's single-thread mode:
-      conversion already runs in an application worker, while web-ifc's nested
-      classic workers are incompatible with the module-worker URLs emitted by
-      this build. Always preload the ST binary actually consumed by Init().
-      Cross-origin isolation remains useful platform telemetry, but it does not
-      select the MT binary until nested-worker support is explicitly enabled.
-    -->
-    <script>
-      (function () {
-        var isolated =
-          typeof self !== 'undefined' &&
-          self.crossOriginIsolated === true &&
-          typeof SharedArrayBuffer !== 'undefined';
-        var href = '/web-ifc.wasm';
-        var link = document.createElement('link');
-        link.rel = 'preload';
-        link.as = 'fetch';
-        link.type = 'application/wasm';
-        link.crossOrigin = 'anonymous';
-        link.href = href;
-        document.head.appendChild(link);
-        // Keep this literal aligned with services/ifc/webIfcRuntime.ts.
-        window.__ifcWasmVariant = 'st';
-        window.__crossOriginIsolated = !!isolated;
-      })();
-    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -109,3 +109,65 @@ export async function prewarmExpressToLocalCache(
     cancelled,
   };
 }
+
+export interface ResolveExpressToLocalOptions {
+  readonly batchSize?: number;
+  /** Second-level cache consulted before falling back to the model. */
+  readonly getRemembered?: (expressId: number) => number | null;
+}
+
+/**
+ * Resolve express IDs to local IDs, in request order, populating `cache`.
+ *
+ * Unlike {@link prewarmExpressToLocalCache} this returns the ids, so it serves
+ * the interactive selection and highlight paths rather than a warm-up pass.
+ * Unresolvable ids are omitted rather than represented by a sentinel.
+ */
+export async function resolveExpressToLocal(
+  model: LocalIdLookupModel,
+  expressIds: readonly number[],
+  cache: Map<number, number>,
+  options: ResolveExpressToLocalOptions = {},
+): Promise<number[]> {
+  const out: number[] = [];
+  const misses: number[] = [];
+  for (const id of expressIds) {
+    const cached = cache.get(id);
+    if (cached !== undefined) {
+      out.push(cached);
+      continue;
+    }
+    const remembered = options.getRemembered?.(id) ?? null;
+    if (remembered !== null) {
+      cache.set(id, remembered);
+      out.push(remembered);
+    } else {
+      misses.push(id);
+    }
+  }
+  if (misses.length === 0) return out;
+
+  const batchSize = normalizeBatchSize(options.batchSize ?? 64);
+  for (let start = 0; start < misses.length; start += batchSize) {
+    const batch = misses.slice(start, start + batchSize);
+    const results = await Promise.all(
+      batch.map(async (expressId) => {
+        try {
+          const localId = await model.getItem(expressId).getLocalId();
+          return localId == null ? null : { expressId, localId };
+        } catch {
+          return null;
+        }
+      }),
+    );
+    for (const entry of results) {
+      if (!entry) continue;
+      cache.set(entry.expressId, entry.localId);
+      out.push(entry.localId);
+    }
+    if (start + batchSize < misses.length) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+  }
+  return out;
+}

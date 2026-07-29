@@ -6,7 +6,6 @@ in-memory PendingEditElement objects and verify the patch payloads produced.
 
 from __future__ import annotations
 
-import pytest
 
 from app.models.ifc_models import PendingEditElement
 from app.models.patch import (

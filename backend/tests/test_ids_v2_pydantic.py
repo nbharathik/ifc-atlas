@@ -5,7 +5,6 @@ Pure Python / in-memory tests.  No disk I/O; no SIGSEGV risk on Windows.
 """
 from __future__ import annotations
 
-import pytest
 
 
 # ─────────────────────────────────────────────────────────────────────

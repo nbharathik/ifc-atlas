@@ -19,6 +19,7 @@
  */
 
 import { apiUrl } from '../../lib/platform';
+import type { components } from '../../generated/api-schema';
 
 /** Exact binary runtime expected by the browser-side FragmentsManager. */
 export const EXPECTED_FRAGMENTS_FORMAT_VERSION = '3.4.3';
@@ -278,7 +279,25 @@ export interface FragmentManifest {
   size_bytes: number | null;
   serve_url: string | null;
   fragments_format_version?: string;
+  /** Versioned engine-neutral contract; compatibility fields above are
+   * retained while callers migrate. */
+  artifact_manifest: components['schemas']['ArtifactManifestV1'] | null;
 }
+
+type ArtifactManifestLookup =
+  components['schemas']['ArtifactManifestLookupV1'];
+
+const EMPTY_FRAGMENT_MANIFEST = (
+  fingerprint: string,
+  profile: string,
+): FragmentManifest => ({
+  cached: false,
+  fingerprint,
+  profile,
+  size_bytes: null,
+  serve_url: null,
+  artifact_manifest: null,
+});
 
 /**
  * Ask the server whether it has cached fragments for the given SHA-256
@@ -291,13 +310,23 @@ export async function checkFragmentManifest(
 ): Promise<FragmentManifest> {
   try {
     const resp = await fetch(
-      apiUrl(`/api/ifc/fragment-manifest?fingerprint=${encodeURIComponent(fingerprint)}&profile=${encodeURIComponent(profile)}`),
+      apiUrl(`/api/ifc/artifact-manifest?fingerprint=${encodeURIComponent(fingerprint)}&profile=${encodeURIComponent(profile)}`),
       { method: 'GET' },
     );
-    if (!resp.ok) return { cached: false, fingerprint, profile, size_bytes: null, serve_url: null };
-    return (await resp.json()) as FragmentManifest;
+    if (!resp.ok) return EMPTY_FRAGMENT_MANIFEST(fingerprint, profile);
+    const lookup = (await resp.json()) as ArtifactManifestLookup;
+    const manifest = lookup.manifest ?? null;
+    return {
+      cached: lookup.cached && manifest !== null,
+      fingerprint: lookup.fingerprint,
+      profile: lookup.profile,
+      size_bytes: manifest?.artifact.byte_length ?? null,
+      serve_url: manifest?.artifact.serve_url ?? null,
+      fragments_format_version: manifest?.fragments_format_version,
+      artifact_manifest: manifest,
+    };
   } catch {
-    return { cached: false, fingerprint, profile, size_bytes: null, serve_url: null };
+    return EMPTY_FRAGMENT_MANIFEST(fingerprint, profile);
   }
 }
 

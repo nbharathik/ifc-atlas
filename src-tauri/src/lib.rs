@@ -15,6 +15,10 @@ struct AnnouncedPort(Mutex<u16>);
 /// Live backend child process, shared by restart and shutdown paths.
 struct BackendChild(Mutex<Option<CommandChild>>);
 
+/// Random per-launch bearer token shared only with the managed backend and
+/// this application's webview through a Tauri command.
+struct BackendAuthToken(String);
+
 /// Suppresses stale crash events from a backend process replaced by restart.
 struct BackendGeneration(AtomicU64);
 
@@ -63,6 +67,28 @@ fn ifc_path_from_argv<S: AsRef<str>>(args: &[S]) -> Option<String> {
 fn get_backend_url(state: tauri::State<'_, AnnouncedPort>) -> String {
     let port = *state.0.lock().unwrap_or_else(|e| e.into_inner());
     format!("http://127.0.0.1:{}", port)
+}
+
+/// Tauri command: bearer token for the managed loopback backend.
+///
+/// The token is never logged or included in a URL/event payload. The frontend
+/// retrieves it over Tauri IPC and attaches it to API requests.
+#[tauri::command]
+fn get_backend_auth_token(state: tauri::State<'_, BackendAuthToken>) -> String {
+    state.0.clone()
+}
+
+fn generate_backend_auth_token() -> Result<String, String> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes)
+        .map_err(|error| format!("Could not generate backend authentication token: {error}"))?;
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        write!(&mut encoded, "{byte:02x}")
+            .map_err(|error| format!("Could not encode backend authentication token: {error}"))?;
+    }
+    Ok(encoded)
 }
 
 /// Tauri command: take the first-launch file association path once.
@@ -136,7 +162,11 @@ fn safe_graphics_marker_path() -> Option<std::path::PathBuf> {
 fn get_safe_graphics() -> Option<bool> {
     #[cfg(target_os = "linux")]
     {
-        Some(safe_graphics_marker_path().map(|p| p.exists()).unwrap_or(false))
+        Some(
+            safe_graphics_marker_path()
+                .map(|p| p.exists())
+                .unwrap_or(false),
+        )
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -149,8 +179,8 @@ fn get_safe_graphics() -> Option<bool> {
 fn set_safe_graphics(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
-        let path = safe_graphics_marker_path()
-            .ok_or_else(|| "No home directory found".to_string())?;
+        let path =
+            safe_graphics_marker_path().ok_or_else(|| "No home directory found".to_string())?;
         if enabled {
             if let Some(dir) = path.parent() {
                 std::fs::create_dir_all(dir)
@@ -257,9 +287,16 @@ fn kill_process_tree(child: CommandChild) {
 /// Spawn the FastAPI backend sidecar and watch for readiness.
 fn spawn_backend(app: &tauri::AppHandle) -> Result<(), String> {
     let shell = app.shell();
+    let auth_token = app
+        .try_state::<BackendAuthToken>()
+        .ok_or_else(|| "Backend authentication token is unavailable".to_string())?
+        .0
+        .clone();
     let (mut rx, child) = shell
         .sidecar("ifc-backend")
         .map_err(|e| format!("{e}"))?
+        .env("IFC_ATLAS_SECURITY_MODE", "local")
+        .env("IFC_ATLAS_API_TOKEN", auth_token)
         .args(["--host", "127.0.0.1", "--port", &BACKEND_PORT.to_string()])
         .spawn()
         .map_err(|e| format!("{e}"))?;
@@ -371,6 +408,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             get_backend_url,
+            get_backend_auth_token,
             get_open_with_path,
             read_ifc_file,
             restart_backend,
@@ -384,6 +422,8 @@ pub fn run() {
             app.manage(AnnouncedPort(Mutex::new(BACKEND_PORT)));
             app.manage(BackendChild(Mutex::new(None)));
             app.manage(BackendGeneration(AtomicU64::new(0)));
+            let auth_token = generate_backend_auth_token().map_err(std::io::Error::other)?;
+            app.manage(BackendAuthToken(auth_token));
             let argv: Vec<String> = std::env::args().skip(1).collect();
             let pending = ifc_path_from_argv(&argv);
             if let Some(ref p) = pending {
@@ -425,7 +465,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{ifc_path_from_argv, safe_graphics_marker_from_home};
+    use super::{generate_backend_auth_token, ifc_path_from_argv, safe_graphics_marker_from_home};
 
     #[test]
     fn picks_first_ifc_path() {
@@ -471,5 +511,12 @@ mod tests {
                 .join(".ifc-atlas")
                 .join("safe-graphics")
         );
+    }
+
+    #[test]
+    fn backend_auth_token_is_256_bit_lower_hex() {
+        let token = generate_backend_auth_token().expect("OS random source should be available");
+        assert_eq!(token.len(), 64);
+        assert!(token.chars().all(|ch| ch.is_ascii_hexdigit()));
     }
 }

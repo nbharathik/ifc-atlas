@@ -742,10 +742,6 @@ interface AppState {
   viewerToolsHidden: boolean;
   setViewerToolsHidden: (v: boolean) => void;
   /** Progressive storey-reveal animation: enabled by user (persisted), active right now. */
-  streamingRevealEnabled: boolean;
-  setStreamingRevealEnabled: (v: boolean) => void;
-  streamingRevealActive: boolean;
-  setStreamingRevealActive: (v: boolean) => void;
   /** Whether the full-screen Agent Manager is open. */
   agentManagerOpen: boolean;
   setAgentManagerOpen: (v: boolean) => void;
@@ -804,6 +800,13 @@ interface AppState {
   clearClipPlanes: () => void;
   /** Partial merge patch for a plane by id. Switching axis resets offset to 0. */
   updateClipPlane: (id: string, patch: Partial<Omit<ClipPlaneState, 'id'>>) => void;
+  /**
+   * Live drag offset that does not touch localStorage. A range input fires
+   * onChange per pointer sample, so persisting there costs a JSON.stringify
+   * plus a synchronous setItem roughly 60 times a second. Commit the final
+   * value once through updateClipPlane on drag end.
+   */
+  setClipPlaneOffsetTransient: (id: string, offset: number) => void;
   /** Compat shim - patches the first (primary) plane. */
   setClipPlane: (patch: Partial<Omit<ClipPlaneState, 'id'>>) => void;
   /** Convenience for the keyboard shortcut (X). Toggles the first plane's enabled state. */
@@ -1093,8 +1096,6 @@ const initialState = {
   viewerToolsHidden: false,
   // Default off - the storey-by-storey reveal made the model feel like
   // it loaded in batches. Show the whole model at once when ready.
-  streamingRevealEnabled: false,
-  streamingRevealActive: false,
   agentManagerOpen: false,
   swReady: false,
   fragmentCachePersisted: null,
@@ -1630,8 +1631,6 @@ export const useStore = create<AppState>()(
     setFloatingChatMinimized: (v) => { writePref('pref.floatingChatMinimized', v); set({ floatingChatMinimized: v }); },
     setViewerToolsOpen: (v) => set({ viewerToolsOpen: v }),
     setViewerToolsHidden: (v) => set({ viewerToolsHidden: v }),
-    setStreamingRevealEnabled: (v) => set({ streamingRevealEnabled: v }),
-    setStreamingRevealActive: (v) => set({ streamingRevealActive: v }),
     setAgentManagerOpen: (v) => set({ agentManagerOpen: v }),
     setSwReady: (v) => set({ swReady: v }),
     setFragmentCachePersisted: (state) => set({ fragmentCachePersisted: state }),
@@ -1866,6 +1865,9 @@ export const useStore = create<AppState>()(
       writePref('pref.clipPlanes.v2', next);
       return { clipPlanes: next };
     }),
+    setClipPlaneOffsetTransient: (id, offset) => set((s) => ({
+      clipPlanes: s.clipPlanes.map((p) => (p.id === id ? { ...p, offset } : p)),
+    })),
     setClipPlane: (patch) => set((s) => {
       // Compat shim - updates the first (primary) plane
       const primary = s.clipPlanes[0];

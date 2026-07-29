@@ -15,15 +15,18 @@
     "install:all": "npm install && cd frontend && npm install",
     "verify:backend:tests": "cd backend && python -m pytest -q -m \"not requires_ifc_load and not subprocess_sandbox\"",
     "verify:backend:smoke": "cd backend && python -c \"from app.services.agent_registry import agent_registry; from app.services.ids_service import validate_ids; from app.services.mcp_registry import mcp_registry; print('ok')\"",
-    "verify:backend": "npm run verify:backend:tests && npm run verify:backend:smoke",
+    "verify:backend:lint": "cd backend && python -m ruff check app tests",
+    "verify:backend:audit": "cd backend && python -m pip_audit -r requirements.lock --disable-pip",
+    "verify:backend": "npm run verify:backend:lint && npm run verify:backend:audit && npm run verify:backend:tests && npm run verify:backend:smoke",
     "verify:frontend:typecheck": "npm --prefix frontend run typecheck",
     "verify:frontend:tests": "npm --prefix frontend test",
     "verify:frontend:build": "npm --prefix frontend run build",
     "verify:frontend": "npm run verify:frontend:typecheck && npm run verify:frontend:tests && npm run verify:frontend:build",
-    "verify:sidecar": "npm --prefix backend/sidecar run typecheck",
+    "verify:sidecar": "npm --prefix backend/sidecar run typecheck && npm --prefix backend/sidecar test && npm --prefix backend/sidecar run build",
+    "verify:desktop": "cd src-tauri && cargo fmt --all --check && cargo test --locked",
     "verify:docs:generated": "python scripts/generate_api_doc.py --check && python scripts/generate_tools_doc.py --check",
     "verify:docs": "npm run verify:docs:generated && python -m mkdocs build --strict",
-    "verify": "npm run verify:backend && npm run verify:frontend && npm run verify:sidecar && npm run verify:docs"
+    "verify": "npm run verify:backend && npm run verify:frontend && npm run verify:sidecar && npm run verify:desktop && npm run verify:docs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

@@ -8,12 +8,14 @@ import { installThreeWarningFilter } from './services/viewer/threeWarningFilter'
 // main-thread consumer - OBC.IfcLoader's live-parse fallback - now awaits the
 // patch lazily right before IfcAPI.Init() (see ViewerPanel init()).
 import { installBackendReadyListener } from './services/tauriBackendReady';
+import { installApiAuthentication } from './lib/platform';
 import { BackendGate } from './components/BackendGate';
 import App from './App';
 import './index.css';
 
 installThreeWarningFilter();
 installBackendReadyListener();
+installApiAuthentication();
 
 // BackendGate is a transparent pass-through on web; on the Tauri desktop build
 // it holds a "Starting…" splash until the spawned backend sidecar answers.

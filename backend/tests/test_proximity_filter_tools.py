@@ -7,10 +7,13 @@ Tool routing is tested via execute_tool with a patched ifc_service.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+if TYPE_CHECKING:
+    from app.services.ifc_service import IfcService
 
 
 # ---------------------------------------------------------------------------

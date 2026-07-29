@@ -18,6 +18,7 @@
     "preview:web": "vite preview --mode webdemo",
     "test": "vitest run",
     "test:watch": "vitest",
+    "generate:api-types": "openapi-typescript src/generated/openapi.json -o src/generated/api-schema.ts",
     "test:e2e:renderer": "playwright test --config playwright.renderer.config.ts",
     "test:e2e:renderer:headed": "cross-env IFC_E2E_HEADED=1 playwright test --config playwright.renderer.config.ts",
     "tauri:dev": "cd .. && npm run tauri -- dev",
@@ -28,7 +29,6 @@
     "@thatopen/components-front": "^3.4.2",
     "@thatopen/fragments": "3.4.3",
     "camera-controls": "^3.1.2",
-    "ifc-atlas-desktop": "file:..",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.3",
@@ -48,9 +48,10 @@
     "@vitejs/plugin-react": "^4.3.4",
     "cross-env": "^7.0.3",
     "fake-indexeddb": "^6.2.5",
+    "openapi-typescript": "7.13.0",
     "pngjs": "^7.0.0",
     "typescript": "~5.6.2",
-    "vite": "^6.4.2",
-    "vitest": "^2.1.8"
+    "vite": "^6.4.3",
+    "vitest": "^3.2.7"
   }
 }

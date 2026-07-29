@@ -6,9 +6,7 @@ are fully isolated from one another and from the production cache state.
 """
 
 import time
-from unittest.mock import MagicMock
 
-import pytest
 
 from app.services.tool_memo import (
     MEMOIZABLE_TOOLS,

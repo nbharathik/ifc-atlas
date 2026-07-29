@@ -8,6 +8,8 @@ import {
   type HistoryDiffResult,
 } from '../../services/api';
 import { formatCheckpointTs, restoreButtonTitle } from '../../services/viewer/checkpointHelpers';
+import { useShallow } from 'zustand/react/shallow';
+
 import { useStore } from '../../store/useStore';
 import {
   ACTOR_FILTERS,
@@ -207,7 +209,21 @@ export function TimelinePanel() {
     addToast,
     logActivity,
     flashHighlightIds,
-  } = useStore();
+  } = useStore(
+    useShallow((s) => ({
+      checkpointPanelOpen: s.checkpointPanelOpen,
+      setCheckpointPanelOpen: s.setCheckpointPanelOpen,
+      checkpoints: s.checkpoints,
+      checkpointsAvailable: s.checkpointsAvailable,
+      checkpointsLoading: s.checkpointsLoading,
+      setCheckpoints: s.setCheckpoints,
+      setCheckpointsLoading: s.setCheckpointsLoading,
+      modelLoaded: s.modelLoaded,
+      addToast: s.addToast,
+      logActivity: s.logActivity,
+      flashHighlightIds: s.flashHighlightIds,
+    })),
+  );
 
   const [ops, setOps] = useState<OperationLogEntry[]>([]);
   const [opsError, setOpsError] = useState<string | null>(null);

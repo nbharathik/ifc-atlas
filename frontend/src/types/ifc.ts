@@ -1,3 +1,7 @@
+import type { components } from '../generated/api-schema';
+
+export type ModelIdentity = components['schemas']['ModelIdentityV1'];
+
 export interface ProjectInfo {
   name: string;
   description: string | null;
@@ -63,6 +67,7 @@ export interface ModelMeta {
   model_version: number;
   model_fingerprint: string;
   edit_id: string | null;
+  identity: ModelIdentity;
 }
 
 export type EditOpType =

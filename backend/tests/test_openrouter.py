@@ -7,7 +7,7 @@ Uses unittest.mock to patch the AsyncOpenAI client and config values.
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +249,6 @@ def test_build_streaming_agent_openrouter_with_key():
 def test_model_catalogue_has_openrouter_group():
     """The frontend MODEL_CATALOGUE export includes an 'openrouter' provider group."""
     # We can't import the TSX directly from Python, but we can grep the source.
-    import re
     from pathlib import Path
 
     chat_panel = Path(__file__).parents[2] / "frontend" / "src" / "components" / "chat" / "ChatPanel.tsx"

@@ -47,6 +47,13 @@ binaries/ifc-backend-{x86_64-pc-windows-msvc,aarch64-apple-darwin,...}.exe
 
 The spawn passes `--host 127.0.0.1` (loopback only) and `--port 8000` as the *preferred* port; `run.py` falls back to a free port if 8000 is taken. In `tauri dev` a developer iterating on backend code can kill the sidecar and run `python run.py` instead; the dev webview reaches whatever answers on 8000 through the Vite proxy.
 
+For every Tauri application launch, Rust generates a new random 256-bit API
+token. It passes the token and `IFC_ATLAS_SECURITY_MODE=local` to each managed Python
+process, keeps the token in memory, and exposes it to the trusted webview only
+through the `get_backend_auth_token` IPC command. The frontend attaches it to
+Atlas REST requests and WebSocket handshakes. The token is not written to disk,
+logged or included in the `backend-ready` event.
+
 ### Port announce
 
 The sidecar writes to stdout on startup:

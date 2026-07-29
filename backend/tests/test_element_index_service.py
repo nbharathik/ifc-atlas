@@ -4,12 +4,8 @@ Tests for IFCElementIndex - pure-Python BM25 + optional numpy rerank.
 All tests use a mock IFC model so no IfcOpenShell file I/O occurs.
 """
 
-import math
-import sys
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from app.services.element_index_service import (
     IFCElementIndex,
@@ -121,7 +117,7 @@ def test_bm25_score_rare_term_higher():
 def _mock_ifcopenshell_util(entities: list):
     """Context manager that patches ifcopenshell.util.element.get_container
     and ifcopenshell.util.element.get_psets so no real IfcOpenShell is needed."""
-    import importlib, types
+    import types
 
     # Build a fake ifcopenshell.util.element module
     fake_module = types.ModuleType("ifcopenshell.util.element")
@@ -215,7 +211,6 @@ def test_search_returns_hits():
         (3, "IfcSlab", "Ground Slab", "Ground Floor", "IfcSlab Ground Slab Ground Floor"),
     ]
     doc_tokens = [_tokenise(d[4]) for d in docs]
-    from collections import Counter
     doc_freq: dict = {}
     for tokens in doc_tokens:
         for t in set(tokens):

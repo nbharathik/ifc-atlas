@@ -16,6 +16,7 @@ The two generated pages are refreshed by `python scripts/generate_api_doc.py`. A
 | Prefix | Module | Purpose |
 |---|---|---|
 | `/api/health` | [`main.py`](https://github.com/nbharathik/ifc-atlas/blob/main/backend/app/main.py) | Liveness probe. |
+| `/api/security` | [`main.py`](https://github.com/nbharathik/ifc-atlas/blob/main/backend/app/main.py) | Public security-profile bootstrap and protected token verification. |
 | `/api/ifc/*` | [`ifc_routes.py`](https://github.com/nbharathik/ifc-atlas/blob/main/backend/app/api/ifc_routes.py) | IFC upload, geometry, edit-preview / apply / discard, IDS validation, checkpoints. |
 | `/api/chat/*` | [`chat_routes.py`](https://github.com/nbharathik/ifc-atlas/blob/main/backend/app/api/chat_routes.py) | Agents, tools, prompts, snippets, budgets, document index, WebSocket chat. |
 | `/api/settings/*` | [`settings_routes.py`](https://github.com/nbharathik/ifc-atlas/blob/main/backend/app/api/settings_routes.py) | Provider info and the secrets store (`~/.ifc-atlas/secrets.json`). |
@@ -40,9 +41,22 @@ The two generated pages are refreshed by `python scripts/generate_api_doc.py`. A
 
 ## Authentication
 
-The REST API has no built-in auth. In production, terminate auth at the reverse proxy (basic auth, JWT middleware in Caddyfile, etc.).
+`IFC_ATLAS_SECURITY_MODE=local` is restricted to loopback development. The
+Tauri desktop supplies a random per-launch token automatically.
 
-The MCP server at `/mcp/*` honours an optional bearer token via the `MCP_SERVER_TOKEN` environment variable. Without it set, the endpoint is unauthenticated. See [MCP Clients](../agent/MCP_CLIENTS.md) for connection samples.
+`IFC_ATLAS_SECURITY_MODE=server` requires a 32-character-or-longer
+`IFC_ATLAS_API_TOKEN`. Send it as `Authorization: Bearer <token>` for HTTP.
+Browser WebSocket clients use the bootstrap gate, which adds the same token to
+the WebSocket handshake. `/api/health` and `/api/security` remain public so a
+client can discover and monitor the service.
+
+This is a shared deployment credential, not per-user authorization. Use TLS and
+an external identity-aware proxy when individual identities or roles are
+required.
+
+The MCP server at `/mcp/*` honours `MCP_SERVER_TOKEN`. In server mode it
+inherits `IFC_ATLAS_API_TOKEN` when no separate MCP token is configured. See
+[MCP Clients](../agent/MCP_CLIENTS.md) for connection samples.
 
 ## OpenAPI and Swagger UI
 

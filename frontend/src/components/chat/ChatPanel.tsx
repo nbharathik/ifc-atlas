@@ -14,7 +14,7 @@ import {
 import type { ModelEntry } from '../../types/ifc';
 import { exportChatHistory } from '../../services/chat/chatExport';
 import { exportFilename } from '../../services/exportFilename';
-import { apiUrl, wsUrl as backendWsUrl } from '../../lib/platform';
+import { apiUrl, authenticatedWsUrl } from '../../lib/platform';
 import type { ThreadState } from '../../services/api';
 import Icon, { type IconName } from '../ui/Icon';
 import AiKeysModal from './AiKeysModal';
@@ -1269,8 +1269,8 @@ export default function ChatPanel({ embedded = false }: ChatPanelProps = {}) {
       });
     }
 
-    const wsUrl = backendWsUrl('/api/chat/ws');
-    const ws = new WebSocket(wsUrl);
+    const socketUrl = await authenticatedWsUrl('/api/chat/ws');
+    const ws = new WebSocket(socketUrl);
     ws.onmessage = handleWsMessage;
     ws.onclose = () => {
       if (wsRef.current === ws) {

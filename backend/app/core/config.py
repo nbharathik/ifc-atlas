@@ -39,6 +39,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from app.core.security import SecuritySettings
+
 logger = logging.getLogger(__name__)
 
 
@@ -119,9 +121,21 @@ CACHE_MAX_BYTES = int(os.getenv("IFC_VIEWER_CACHE_MAX_BYTES", str(2 * 1024 * 102
 # to work, while production deployments can tighten it through .env.
 MAX_IFC_UPLOAD_BYTES = int(os.getenv("IFC_VIEWER_MAX_UPLOAD_BYTES", str(512 * 1024 * 1024)))
 
-HOST = os.getenv("HOST", "0.0.0.0")
+# Local development and the desktop sidecar should never listen on every
+# interface by default. Container/server deployments must opt into a public
+# bind and the server security profile explicitly.
+HOST = os.getenv("HOST", "127.0.0.1")
 PORT = int(os.getenv("PORT", "8000"))
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+SECURITY_SETTINGS = SecuritySettings.from_env(os.environ)
+# Free-form Python is trusted-local by default and disabled in server mode.
+# This is intentionally separate from structured edit operations.
+CODE_EXECUTION_ENABLED = _truthy(
+    os.getenv(
+        "IFC_ATLAS_ENABLE_CODE_EXECUTION",
+        "1" if SECURITY_SETTINGS.mode.value == "local" else "0",
+    )
+)
 
 # LLM settings.
 #

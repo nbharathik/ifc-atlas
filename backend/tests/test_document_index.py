@@ -45,7 +45,7 @@ def test_chunk_long_text_produces_multiple_chunks():
 
 def test_chunk_overlap_text():
     """Adjacent chunks should share some content (overlap > 0)."""
-    from app.services.document_index_service import _chunk_text, CHUNK_SIZE, CHUNK_OVERLAP
+    from app.services.document_index_service import _chunk_text, CHUNK_OVERLAP
     text = "word " * 300  # 1500 chars
     chunks = _chunk_text(text)
     assert len(chunks) >= 2
@@ -270,7 +270,6 @@ def semantic_index(tmp_index, monkeypatch):
     Fixture that wires mock fastembed + hnswlib into a fresh service instance.
     Uses dim=4 to keep tests fast; the real model uses dim=384.
     """
-    import numpy as np
     import app.services.document_index_service as mod
 
     monkeypatch.setattr(mod, "EMBEDDING_DIM", 4)

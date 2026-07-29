@@ -404,7 +404,7 @@ class DocumentIndexService:
         Falls back to BM25-only when semantic index is unavailable.
         """
         self._ensure_loaded()
-        if not self._chunks:
+        if not query.strip() or not self._chunks:
             return []
 
         # ── BM25 scores (always available)

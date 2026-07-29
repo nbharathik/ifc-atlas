@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import * as OBC from '@thatopen/components';
 import * as OBCF from '@thatopen/components-front';
@@ -7,7 +7,7 @@ import { ViewHelper } from 'three/examples/jsm/helpers/ViewHelper.js';
 import { useStore } from '../../store/useStore';
 import type { ViewerPerformanceMode } from '../../store/useStore';
 import { apiUrl } from '../../lib/platform';
-import { BROWSER_ONLY, RENDER_ON_DEMAND, STRUCTURAL_EDIT_ENABLED } from '../../config/featureFlags';
+import { BROWSER_ONLY, STRUCTURAL_EDIT_ENABLED } from '../../config/featureFlags';
 import { modelService } from '../../services/ifc/ModelService';
 import { ClipPlaneController } from '../../services/viewer/clipPlaneController';
 import { SectionBoxController } from '../../services/viewer/sectionBoxController';
@@ -33,11 +33,12 @@ import {
   type EngineSnapHit,
 } from '../../services/viewer/constructionSnapCandidates';
 import {
-  shortestDistanceBetweenTriangles,
+  shortestDistanceBetweenTriangleSets,
   type Triangle3,
 } from '../../services/viewer/constructionMeasurement';
 // B5 mount point: wall drawing tool - all logic lives in services/editor/.
 import { WallDrawController } from '../../services/editor/wallDrawController';
+import { useLoadProgressPacer } from '../../hooks/useLoadProgressPacer';
 import EditToolbar from './EditToolbar';
 import HighlightBadge from './HighlightBadge';
 import SelectionSummaryChip from './SelectionSummaryChip';
@@ -117,12 +118,19 @@ import {
 } from '../../services/viewer/lodTierPolicy';
 import { solveCameraFrame } from '../../services/viewer/frameCameraMath';
 import {
-  createFragmentUpdateScheduler,
   type FragmentUpdatePriority,
   type FragmentUpdateReason,
   type FragmentUpdateScheduler,
 } from '../../services/viewer/fragmentUpdateScheduler';
-import { prewarmExpressToLocalCache } from '../../services/viewer/localIdCachePrewarm';
+import { prewarmExpressToLocalCache, resolveExpressToLocal } from '../../services/viewer/localIdCachePrewarm';
+import {
+  anyCullerBuilt,
+  clearCullPass,
+  hideTickPass,
+  showCullPass,
+  type CullerPassPorts,
+  type TileViewOptions,
+} from '../../services/viewer/cullerCoordinationHelpers';
 import {
   PANEL_RESIZE_END_EVENT,
   PANEL_RESIZE_START_EVENT,
@@ -187,7 +195,6 @@ import {
 import {
   computeSceneBVH,
   getBVHCoverage,
-  installBVH,
 } from '../../services/viewer/bvhSetup';
 import {
   applyFragmentZFightingMitigation,
@@ -203,7 +210,6 @@ import {
   extractStoreyNodes,
 } from '../../services/viewer/storeyFrustumCuller';
 import { ElementFrustumCuller } from '../../services/viewer/elementFrustumCuller';
-import { createInvalidationRenderLoop } from '../../services/viewer/invalidationRenderLoop';
 import { getSpatialTileManifest } from '../../services/api';
 import { SpatialTileLodService } from '../../services/viewer/spatialTileLod';
 import {
@@ -216,6 +222,12 @@ import {
   runCullerPlan,
   type CullerSnapshot,
 } from '../../services/viewer/cullerCoordinationHelpers';
+import { ViewerSession } from '../../services/viewer/viewerSession';
+import { createViewerRuntime } from '../../services/viewer/viewerRuntime';
+import {
+  createViewerStateCapabilities,
+  type ViewerStateCapabilities,
+} from '../../services/viewer/viewerStateCapabilities';
 import { decideCullerPolicy } from '../../services/viewer/cullerStatePolicy';
 import {
   INITIAL_TREE_HOVER_STATE,
@@ -427,7 +439,12 @@ interface ViewerPanelProps {
   onRestoreViewpointRef?: React.MutableRefObject<((id: string) => void) | null>;
 }
 
-export default function ViewerPanel({
+/**
+ * Memoized: all five props are stable useRef instances from App, so an App
+ * re-render (theme flip, tree patch, chat state) must not re-run this body.
+ * Remounts still work through the key prop at the call site.
+ */
+function ViewerPanel({
   onCameraViewRef,
   onFitModelRef,
   onScreenshotRef,
@@ -436,15 +453,13 @@ export default function ViewerPanel({
 }: ViewerPanelProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<ViewerRefs | null>(null);
+  const stateCapabilitiesRef = useRef<ViewerStateCapabilities | null>(null);
   const sceneThemeTargetsRef = useRef<Pick<ViewerRefs, 'world' | 'grid'> | null>(null);
-  // Kept for the viewer lifetime; subsequent fragment loads reuse this worker URL.
-  const workerBlobUrlRef = useRef<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingFading, setLoadingFading] = useState(false);
   const [loadingSlow, setLoadingSlow] = useState(false);
   // Drives the loader's elapsed/remaining time line.
-  const [loadElapsedSec, setLoadElapsedSec] = useState<number | null>(null);
   const [loadProgress, setLoadProgress] = useState<ViewerLoadProgress>({
     title: 'Initializing 3D viewport',
     detail: 'Preparing renderer, camera, and worker...',
@@ -816,55 +831,15 @@ export default function ViewerPanel({
 
   // Translate IFC Express IDs into FragmentsModel local IDs; mixing them breaks
   // visibility/highlight operations.
-  const expressToLocalIds = useCallback(async (
+  const expressToLocalIds = useCallback((
     model: FRAGS.FragmentsModel,
     expressIds: number[],
-  ): Promise<number[]> => {
-    const cache = expressToLocalCacheRef.current;
-    const out: number[] = [];
-    const misses: number[] = [];
-    for (const id of expressIds) {
-      const cached = cache.get(id);
-      if (cached !== undefined) {
-        out.push(cached);
-      } else {
-        const remembered = modelService.getRememberedLocalId(id);
-        if (remembered !== null) {
-          cache.set(id, remembered);
-          out.push(remembered);
-        } else {
-          misses.push(id);
-        }
-      }
-    }
-    if (misses.length === 0) return out;
-    // Resolve cache misses in chunks.
-    const MISS_CHUNK = 64;
-    for (let i = 0; i < misses.length; i += MISS_CHUNK) {
-      const slice = misses.slice(i, i + MISS_CHUNK);
-      const resolved = await Promise.all(
-        slice.map(async (id) => {
-          try {
-            const item = model.getItem(id);
-            const localId = await item.getLocalId();
-            return localId != null ? { express: id, local: localId } : null;
-          } catch {
-            return null;
-          }
-        }),
-      );
-      for (const entry of resolved) {
-        if (entry) {
-          cache.set(entry.express, entry.local);
-          out.push(entry.local);
-        }
-      }
-      if (i + MISS_CHUNK < misses.length) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      }
-    }
-    return out;
-  }, []);
+  ): Promise<number[]> => resolveExpressToLocal(
+    model,
+    expressIds,
+    expressToLocalCacheRef.current,
+    { getRemembered: (id) => modelService.getRememberedLocalId(id) },
+  ), []);
 
 
   /**
@@ -1315,6 +1290,10 @@ export default function ViewerPanel({
     const clipper = components.get(OBC.Clipper);
     const edgesService = new ClipEdgesService(components, world as unknown as OBC.World);
     clipEdgesServiceRef.current = edgesService;
+    // The load path registers the model too, but it runs before this effect
+    // exists, so without this the styler never learns a model and every cap
+    // fill renders as a hollow shell.
+    edgesService.setModel(viewerRef.current.model.modelId);
     const controller = new ClipPlaneController(clipper, world as unknown as OBC.World, modelCenter, modelSize, {
       onOffsetChanged: (id, offset) => updateClipPlane(id, { offset }),
       clipEdgesService: edgesService,
@@ -1440,7 +1419,10 @@ export default function ViewerPanel({
           box: null,
         });
     void workspaceCtrl.setDefinition(desired).catch(() => {});
-  }, [sectionBoxEnabled, sectionWorkspace, setSectionWorkspace]);
+    // viewerReady gates the controller's existence. Without it here, a section
+    // change made between model-loaded and viewer-ready is dropped for good:
+    // ViewerToolsPanel renders on modelLoaded, which is the earlier of the two.
+  }, [viewerReady, sectionBoxEnabled, sectionWorkspace, setSectionWorkspace]);
 
   // Alt+B toggles the section box.
   useEffect(() => {
@@ -1483,7 +1465,7 @@ export default function ViewerPanel({
   const editModeAvailable = useStore((s) => s.editModeAvailable);
   const pickPlaneMode = useStore((s) => s.pickPlaneMode);
   const measurementControllerRef = useRef<MeasurementController | null>(null);
-  const clearanceFirstTriangleRef = useRef<Triangle3 | null>(null);
+  const clearanceFirstTriangleRef = useRef<Triangle3[] | null>(null);
   const [measurementSnapshot, setMeasurementSnapshot] = useState<MeasurementSnapshot | null>(null);
 
   /** Active furnishing merge, disposed on toggle-off. */
@@ -1500,6 +1482,48 @@ export default function ViewerPanel({
   const storeyCullerTransitionRef = useRef<Promise<void>>(Promise.resolve());
   const elementCullerTransitionRef = useRef<Promise<void>>(Promise.resolve());
   const spatialTileCullerTransitionRef = useRef<Promise<void>>(Promise.resolve());
+
+  // Canonical tile-culler view options: selection pinning (cache first, then
+  // the remembered-localId fallback) and the viewport height fallback chain.
+  const getTileViewOptions = useCallback((): TileViewOptions => {
+    const state = useStore.getState();
+    const selectedExpressIds = new Set<number>([
+      ...state.selectedIds,
+      ...(state.selectedElementId == null ? [] : [state.selectedElementId]),
+    ]);
+    const pinnedLocalIds = new Set<number>();
+    for (const expressId of selectedExpressIds) {
+      const localId = expressToLocalCacheRef.current.get(expressId)
+        ?? modelService.getRememberedLocalId(expressId)
+        ?? undefined;
+      if (localId !== undefined) pinnedLocalIds.add(localId);
+    }
+    return {
+      pinnedLocalIds,
+      viewportHeightPx: viewerRef.current?.world.renderer?.three.domElement.clientHeight
+        || containerRef.current?.clientHeight
+        || window.innerHeight,
+    };
+  }, []);
+
+  // One ports snapshot for the shared ownership-ladder passes. Reads every
+  // ref at call time so all four culler sites see the same live state.
+  const cullerPassPorts = useCallback((): CullerPassPorts | null => {
+    const refs = viewerRef.current;
+    if (!refs) return null;
+    const model = refs.model as never;
+    return {
+      camera: refs.world.camera.three,
+      model,
+      tile: spatialTileCullerRef.current,
+      storey: storeyFrustumCullerRef.current,
+      element: elementFrustumCullerRef.current,
+      tileTarget: (spatialTileVisibilityRef.current ?? refs.model) as never,
+      storeyTarget: (storeyCullerVisibilityRef.current ?? refs.model) as never,
+      elementTarget: (elementCullerVisibilityRef.current ?? refs.model) as never,
+      viewOptions: getTileViewOptions,
+    };
+  }, [getTileViewOptions]);
   useEffect(() => {
     if (!viewerReady || !viewerRef.current) return;
     const { world, model } = viewerRef.current;
@@ -1654,70 +1678,21 @@ export default function ViewerPanel({
         // Furnishing disposal restores its source ids directly. First release
         // app-culler ownership so their autoCulled flags cannot claim ids that
         // were just made visible, then rebuild the authoritative user policy.
-        const storeyCuller = storeyFrustumCullerRef.current;
-        const elementCuller = elementFrustumCullerRef.current;
-        const spatialTileCuller = spatialTileCullerRef.current;
-        if (spatialTileCuller?.isBuilt) {
-          await spatialTileCuller.clearCull(spatialTileVisibilityRef.current ?? model);
-        } else if (storeyCuller?.isBuilt) {
-          await storeyCuller.clearCull(model, storeyCullerVisibilityRef.current ?? model);
-        }
-        if (!spatialTileCuller?.isBuilt && elementCuller?.isBuilt) {
-          await elementCuller.clearCull(model, elementCullerVisibilityRef.current ?? model);
-        }
+        const ports = cullerPassPorts();
+        if (!ports) return;
+        await clearCullPass(ports);
         await visibilityRepairRef.current?.();
 
         const state = useStore.getState();
-        let culledStoreys = 0;
-        let culledElements = 0;
+        let counts = { culledStoreys: 0, culledElements: 0 };
         if (state.isolatedIds.length === 0 && state.hiddenIds.length === 0) {
-          const camera = world.camera.three as THREE.Camera;
-          if (spatialTileCuller?.isBuilt) {
-            // Mirror getSpatialTileViewOptions: the selection's tile stays
-            // pinned through this idle hide pass.
-            const selectedExpressIds = new Set<number>([
-              ...state.selectedIds,
-              ...(state.selectedElementId == null ? [] : [state.selectedElementId]),
-            ]);
-            const pinnedLocalIds = new Set<number>();
-            for (const expressId of selectedExpressIds) {
-              const localId = expressToLocalCacheRef.current.get(expressId)
-                ?? modelService.getRememberedLocalId(expressId)
-                ?? undefined;
-              if (localId !== undefined) pinnedLocalIds.add(localId);
-            }
-            const result = await spatialTileCuller.tick(
-              camera,
-              spatialTileVisibilityRef.current ?? model,
-              {
-                pinnedLocalIds,
-                viewportHeightPx: world.renderer?.three.domElement.clientHeight
-                  || containerRef.current?.clientHeight
-                  || window.innerHeight,
-              },
-            );
-            culledElements = result.hiddenElementCount;
-          } else if (storeyCuller?.isBuilt) {
-            culledStoreys = await storeyCuller.tick(
-              camera,
-              model,
-              storeyCullerVisibilityRef.current ?? model,
-            );
-          }
-          if (!spatialTileCuller?.isBuilt && elementCuller?.isBuilt) {
-            const ownedByStorey = storeyCuller?.isBuilt
-              ? new Set(storeyCuller.getCulledMemberIds())
-              : undefined;
-            culledElements = await elementCuller.tick(
-              camera,
-              model,
-              ownedByStorey,
-              elementCullerVisibilityRef.current ?? model,
-            );
-          }
+          counts = await hideTickPass(ports);
         }
-        if (spatialTileCuller?.isBuilt || storeyCuller?.isBuilt || elementCuller?.isBuilt) {
-          useStore.getState().updatePerfMetrics({ culledStoreys, culledElements });
+        if (anyCullerBuilt(ports)) {
+          useStore.getState().updatePerfMetrics({
+            culledStoreys: counts.culledStoreys,
+            culledElements: counts.culledElements,
+          });
         }
 
         // Keep all repairs inside the serialized lifecycle. A new merge cannot
@@ -2016,27 +1991,12 @@ export default function ViewerPanel({
           spatialTileCullerRef.current = controller;
           try {
             const state = useStore.getState();
-            if (state.isolatedIds.length === 0 && state.hiddenIds.length === 0) {
-              const selectedExpressIds = new Set<number>([
-                ...state.selectedIds,
-                ...(state.selectedElementId == null ? [] : [state.selectedElementId]),
-              ]);
-              const pinnedLocalIds = new Set<number>();
-              for (const expressId of selectedExpressIds) {
-                const localId = expressToLocalCacheRef.current.get(expressId);
-                if (localId !== undefined) pinnedLocalIds.add(localId);
-              }
-              const viewportHeightPx = viewerRef.current?.world.renderer?.three.domElement.clientHeight
-                || containerRef.current?.clientHeight
-                || window.innerHeight;
-              const result = await controller.tick(
-                viewerRef.current!.world.camera.three as THREE.Camera,
-                spatialTileVisibilityRef.current ?? model,
-                { pinnedLocalIds, viewportHeightPx },
-              );
+            const ports = cullerPassPorts();
+            if (ports && state.isolatedIds.length === 0 && state.hiddenIds.length === 0) {
+              const counts = await hideTickPass(ports);
               useStore.getState().updatePerfMetrics({
-                culledStoreys: 0,
-                culledElements: result.hiddenElementCount,
+                culledStoreys: counts.culledStoreys,
+                culledElements: counts.culledElements,
               });
             }
           } catch (tickError) {
@@ -2203,15 +2163,24 @@ export default function ViewerPanel({
       }, 0);
     });
     exactPickLeaseRef.current = exactPickLease;
-    const components = new OBC.Components();
+    // ViewerSession is the sole owner of the engine instance and its final
+    // asynchronous teardown. Capability-specific cleanup remains registered
+    // below while it is migrated behind explicit capability boundaries.
+    const viewerSession = new ViewerSession(new OBC.Components());
+    const components = viewerSession.engine;
+    const stateCapabilities = createViewerStateCapabilities(() => useStore.getState());
+    stateCapabilitiesRef.current = stateCapabilities;
+    viewerSession.addCleanup(() => {
+      stateCapabilities.dispose();
+      if (stateCapabilitiesRef.current === stateCapabilities) {
+        stateCapabilitiesRef.current = null;
+      }
+    });
     const initStart = performance.now();
     let perfSamplingCleanup: (() => void) | null = null;
     let firstFrameCaptured = false;
     let removePanelResizeHooks: (() => void) | null = null;
     let viewHelperCleanup: (() => void) | null = null;
-    let pixelRatioCleanup: (() => void) | null = null;
-    let renderOnDemandCleanup: (() => void) | null = null;
-    let contextRecoveryCleanup: (() => void) | null = null;
     let zFightingCleanup: (() => void) | null = null;
     let fragmentUpdateScheduler: FragmentUpdateScheduler | null = null;
     let devPickAtHook: ((x: number, y: number) => Promise<{
@@ -2251,7 +2220,6 @@ export default function ViewerPanel({
     let storeySubModel: FRAGS.FragmentsModel | null = null;
     // Native preview - hoisted so the cleanup return can abort + dispose.
     let nativePreview: NativeGeometryPreview | null = null;
-    const nativePreviewAbort = new AbortController();
 
     async function init() {
       // Show slow-load feedback after 20 s on any loading path.
@@ -2259,109 +2227,34 @@ export default function ViewerPanel({
         if (!disposed) setLoadingSlow(true);
       }, 20_000);
       try {
-        // Install three-mesh-bvh global monkey-patch once at viewer boot so
-        // all THREE.Raycaster.intersectObjects calls are BVH-accelerated.
-        installBVH();
-
-        // Set up the 3D world
-        const worlds = components.get(OBC.Worlds);
-        const world = worlds.create<
-          OBC.SimpleScene,
-          OBC.SimpleCamera,
-          OBC.SimpleRenderer
-        >();
-
-        world.scene = new OBC.SimpleScene(components);
-        // Renderer flags are construction-time only and come from the graphics profile.
-        const rendererFlags = getRendererFlagsForProfile(graphicsProfile);
-        world.renderer = new OBCF.PostproductionRenderer(components, container!, {
-          antialias: rendererFlags.antialias,
-          logarithmicDepthBuffer: rendererFlags.logarithmicDepthBuffer,
-          powerPreference: 'high-performance',
-          stencil: false,
-          preserveDrawingBuffer: false,
-        });
-        world.renderer.showLogo = false;
-        try {
-          const ppRenderer = world.renderer as unknown as OBCF.PostproductionRenderer;
-          // Keep postprocessing manual-mode churn off when the composer is disabled.
-          ppRenderer.turnOffOnManualMode = false;
-          ppRenderer.manualModeDelay = 120;
-        } catch {
-          /* older @thatopen/components-front versions may not expose these knobs */
-        }
-        // On-demand rendering keeps engine updates alive while drawing only after visual changes.
-        let renderKick: (ms?: number) => void = () => {};
-        if (RENDER_ON_DEMAND) {
-          try {
-            const onDemandRenderer = world.renderer as unknown as {
-              mode: OBC.RendererMode;
-              needsUpdate: boolean;
-            };
-            onDemandRenderer.mode = OBC.RendererMode.MANUAL;
-            const invalidationLoop = createInvalidationRenderLoop({
-              now: () => performance.now(),
-              raf: (callback) => window.requestAnimationFrame(callback),
-              cancelRaf: (handle) => window.cancelAnimationFrame(handle),
-              invalidate: () => { onDemandRenderer.needsUpdate = true; },
-              initialWindowMs: 1_500,
-            });
-            renderKick = (ms = 300) => invalidationLoop.kick(ms);
-            renderOnDemandCleanup = () => {
-              invalidationLoop.stop();
-              try {
-                onDemandRenderer.mode = OBC.RendererMode.AUTO;
-              } catch { /* renderer may already be disposed */ }
-            };
-            // Input-level kicks cover interactions outside the fragment scheduler.
-            const kickOnPointer = (e: PointerEvent) => {
-              if (e.buttons !== 0) renderKick(200);
-            };
-            const kickOnWheel = () => renderKick(400);
-            container!.addEventListener('pointermove', kickOnPointer, { passive: true });
-            container!.addEventListener('pointerdown', kickOnPointer, { passive: true });
-            container!.addEventListener('wheel', kickOnWheel, { passive: true });
-            // Store-driven visuals without camera events still need draw kicks.
-            const unsubThemeKick = useStore.subscribe(
-              (s) => s.theme,
-              () => renderKick(400),
+        const runtime = await viewerSession.start((session) => createViewerRuntime(session, {
+          container: container!,
+          rendererFlags: getRendererFlagsForProfile(graphicsProfile),
+          getRestoredPixelRatioCap: () => (
+            getRuntimeQualitySettings(interactionQualityRef.current.active).pixelRatioCap
+          ),
+          subscribeVisualChanges: (kick) => {
+            const unsubscribeTheme = useStore.subscribe(
+              (state) => state.theme,
+              () => kick(400),
             );
-            const unsubClipKick = useStore.subscribe(
-              (s) => s.clipPlanes,
-              () => renderKick(400),
+            const unsubscribeClipPlanes = useStore.subscribe(
+              (state) => state.clipPlanes,
+              () => kick(400),
             );
-            const prevCleanup = renderOnDemandCleanup;
-            renderOnDemandCleanup = () => {
-              container!.removeEventListener('pointermove', kickOnPointer);
-              container!.removeEventListener('pointerdown', kickOnPointer);
-              container!.removeEventListener('wheel', kickOnWheel);
-              unsubThemeKick();
-              unsubClipKick();
-              prevCleanup?.();
+            return () => {
+              unsubscribeTheme();
+              unsubscribeClipPlanes();
             };
-          } catch {
-            /* flag is best-effort: any shape mismatch keeps AUTO mode */
-          }
-        }
-        renderKickRef.current = renderKick;
-        // The @thatopen renderer recreates its THREE.WebGLRenderer on context
-        // restore, but application render state (selection highlights,
-        // visibility masks, ghost opacity) lives in the coordinator's applied
-        // caches and must be replayed onto the fresh GPU state.
-        {
-          const rendererCanvas = world.renderer!.three.domElement;
-          const onContextLost = () => {
+          },
+          onContextLost: () => {
             useStore.getState().logActivity({
               kind: 'error',
               summary: 'WebGL context lost',
               detail: 'Waiting for the browser to restore the 3D context.',
             });
-          };
-          const onContextRestored = () => {
-            renderKick(600);
-            // repair() invalidates the applied caches, so visibility AND
-            // appearance replay in full - invalidateAppearance alone would
-            // leave hidden/isolated masks unrepainted.
+          },
+          onContextRestored: () => {
             void renderStateCoordinatorRef.current
               ?.repair({ urgency: 'visual', reason: 'webgl-context-restored' })
               .catch(() => {});
@@ -2371,179 +2264,46 @@ export default function ViewerPanel({
               summary: 'WebGL context restored',
               detail: 'Reapplied selection, visibility, and appearance state.',
             });
-          };
-          rendererCanvas.addEventListener('webglcontextlost', onContextLost);
-          rendererCanvas.addEventListener('webglcontextrestored', onContextRestored);
-          contextRecoveryCleanup = () => {
-            rendererCanvas.removeEventListener('webglcontextlost', onContextLost);
-            rendererCanvas.removeEventListener('webglcontextrestored', onContextRestored);
-          };
-        }
-        // Postproduction starts disabled until an effect needs it.
-        try {
-          const pp = (world.renderer as unknown as OBCF.PostproductionRenderer).postproduction;
-          pp.enabled = false;
-          pp.edgesPass.mode = OBCF.EdgeDetectionPassMode.GLOBAL;
-          postproductionRef.current = pp;
-        } catch {
-          postproductionRef.current = null;
-        }
-        // Disable the unused engine CSS2D pass; measurement labels use their own renderer.
-        try {
-          const with2D = world.renderer as unknown as {
-            three2D?: { render: (...args: unknown[]) => void };
-          };
-          if (with2D.three2D) with2D.three2D.render = () => {};
-        } catch { /* engine internals may change shape - stub is best-effort */ }
-        world.camera = new OBC.SimpleCamera(components);
-        // Tune camera controls for responsive orbiting and close indoor zoom.
-        try {
-          const feel = world.camera.controls;
-          feel.smoothTime = 0.12;
-          feel.draggingSmoothTime = 0.05;
-          feel.minDistance = 0.5;
-        } catch { /* camera-controls API varies by version - best-effort */ }
-
-        // Use a close near plane so indoor orbiting does not clip nearby faces.
-        try {
-          const cam = world.camera.three;
-          if (cam instanceof THREE.PerspectiveCamera) {
-            cam.near = 0.05;
-            cam.far = 5000;
-            cam.updateProjectionMatrix();
-          }
-        } catch { /* best-effort */ }
-
-        // Match device pixel ratio within a bounded cap for sharper orbiting.
-        const HARD_PIXEL_RATIO_CAP = 2;
-        const targetPixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
-        const navigationPixelRatioCap = 1.0;
-        const cameraSettleDelayMs = 320;
-        const cullerShowPassMinIntervalMs = 220;
-        let activePixelRatioCap = targetPixelRatio;
-        const applyPixelRatio = () => {
-          try {
-            const r = world.renderer!.three;
-            const nextPixelRatio = Math.min(window.devicePixelRatio || 1, activePixelRatioCap);
-            const cont = container!;
-            // Skip setSize when the ratio and backing buffer are already correct.
-            const wantW = Math.floor(cont.clientWidth * nextPixelRatio);
-            const wantH = Math.floor(cont.clientHeight * nextPixelRatio);
-            const canvasEl = r.domElement;
-            if (
-              r.getPixelRatio() === nextPixelRatio
-              && canvasEl.width === wantW
-              && canvasEl.height === wantH
-            ) {
-              return;
-            }
-            if (r.getPixelRatio() !== nextPixelRatio) {
-              r.setPixelRatio(nextPixelRatio);
-            }
-            // setSize applies the new ratio to the canvas backing buffer.
-            r.setSize(cont.clientWidth, cont.clientHeight, true);
-            // The realloc cleared the drawing buffer; repaint it.
-            renderKick(250);
-          } catch { /* best-effort */ }
+          },
+          fragments: {
+            onForcedUpdateTiming: ({ paceWaitMs, flushMs }) => {
+              if (!import.meta.env.DEV) return;
+              clickFlushAttributionRef.current.paceWaitMs = paceWaitMs;
+              clickFlushAttributionRef.current.flushMs = flushMs;
+            },
+            onClickHighlightRunStart: (timestamp) => {
+              clickFlushAttributionRef.current.runStartTs = timestamp;
+            },
+          },
+        }));
+        const {
+          world,
+          grid,
+          renderKick,
+          pixelRatio,
+          navigationPixelRatioCap,
+          cameraSettleDelayMs,
+          cullerShowPassMinIntervalMs,
+        } = runtime;
+        const setInteractionPixelRatioCap = (cap: number) => pixelRatio.setCap(cap);
+        const restoreLadderPixelRatioCap = () => pixelRatio.restoreCap();
+        const cancelDprDrop = () => pixelRatio.cancelDeferredDrop();
+        const fragmentsManager = runtime.fragments.manager;
+        fragmentUpdateScheduler = runtime.fragments.scheduler;
+        fragmentUpdateSchedulerRef.current = fragmentUpdateScheduler;
+        renderKickRef.current = renderKick;
+        postproductionRef.current = runtime.postproduction;
+        sceneThemeTargetsRef.current = {
+          world: world as unknown as ViewerRefs['world'],
+          grid: grid as unknown as ViewerRefs['grid'],
         };
-        const setInteractionPixelRatioCap = (cap: number) => {
-          activePixelRatioCap = Math.min(HARD_PIXEL_RATIO_CAP, Math.max(1, cap));
-          applyPixelRatio();
-        };
-        // Restore the pixel-ratio cap chosen by the interaction-quality ladder.
-        const restoreLadderPixelRatioCap = () => {
-          setInteractionPixelRatioCap(
-            getRuntimeQualitySettings(interactionQualityRef.current.active).pixelRatioCap,
-          );
-        };
-        applyPixelRatio();
-
-        // Lower DPR only for sustained drags; wheel zoom and short nudges stay sharp.
-        const DPR_DROP_DELAY_MS = 180;
-        const WHEEL_GESTURE_WINDOW_MS = 300;
-        // Deferred drops require recent camera motion to avoid pointless reallocs.
-        const DPR_DROP_RECENT_MOTION_MS = 120;
-        let lastCameraUpdateTs = -Infinity;
-        let dprDropTimer: number | null = null;
-        let lastWheelTs = -Infinity;
-        try {
-          world.renderer!.three.domElement.addEventListener(
-            'wheel',
-            () => { lastWheelTs = performance.now(); },
-            { passive: true },
-          );
-        } catch { /* best-effort */ }
-        const isWheelGesture = () => performance.now() - lastWheelTs < WHEEL_GESTURE_WINDOW_MS;
-        const cancelDprDrop = () => {
-          if (dprDropTimer !== null) {
-            window.clearTimeout(dprDropTimer);
-            dprDropTimer = null;
-          }
-        };
-
-        // Explicit color management keeps materials and highlights stable across bundles.
-        try {
-          const r = world.renderer!.three;
-          r.outputColorSpace = THREE.SRGBColorSpace;
-          r.toneMapping = THREE.NeutralToneMapping;
-          r.toneMappingExposure = 1.0;
-        } catch { /* best-effort */ }
-
-        // Re-apply pixelRatio after container resize.
-        const pixelRatioObserver = new ResizeObserver(() => {
-          applyPixelRatio();
-        });
-        pixelRatioObserver.observe(container!);
-        pixelRatioCleanup = () => pixelRatioObserver.disconnect();
-
-        components.init();
+        applyTheme(useStore.getState().theme);
         updateLoadProgress({
           title: 'Booting 3D runtime',
           detail: 'Creating scene, camera controls, and fragment worker...',
           progress: 10,
           sourceHint: 'Startup',
         });
-
-        // Configure scene; applyTheme keeps the background theme-aware.
-        world.scene.setup({
-          backgroundColor: new THREE.Color(0x0a0a1a),
-        });
-        // Rebalance default lights so face orientation remains readable.
-        try {
-          const sceneThree = world.scene.three as THREE.Scene;
-          for (const child of sceneThree.children) {
-            if (child instanceof THREE.AmbientLight) child.intensity = 0.4;
-            else if (child instanceof THREE.DirectionalLight) child.intensity = 2.0;
-          }
-        } catch { /* lighting fallback not critical */ }
-        sceneThemeTargetsRef.current = { world: world as unknown as ViewerRefs['world'] };
-        applyTheme(useStore.getState().theme);
-
-        // Fill lighting keeps dark IFC materials readable from all directions.
-        try {
-          const sceneThree = world.scene.three as THREE.Scene;
-
-          // Sky/ground hemisphere fill for shadowed surfaces.
-          const hemi = new THREE.HemisphereLight(0xffffff, 0x6b7280, 0.75);
-          hemi.name = 'hemi-fill';
-          sceneThree.add(hemi);
-
-          // Soft ambient floor so even fully-shadowed regions stay visible.
-          const amb = new THREE.AmbientLight(0xffffff, 0.55);
-          amb.name = 'ambient-fill';
-          sceneThree.add(amb);
-
-          // Counter-key light for faces turned away from the primary light.
-          const counterKey = new THREE.DirectionalLight(0xffffff, 0.6);
-          counterKey.position.set(-30, 40, -30);
-          counterKey.name = 'counter-key';
-          sceneThree.add(counterKey);
-        } catch {
-          /* lighting fallback not critical */
-        }
-
-        // Camera position
-        world.camera.controls.setLookAt(15, 15, 15, 0, 0, 0);
 
         // Interactive 3D view gizmo (three.js ViewHelper). Renders a 128px
         // axis indicator in the TOP-right of the canvas that rotates with
@@ -2723,237 +2483,6 @@ export default function ViewerPanel({
           try { viewHelper.dispose(); } catch { /* best-effort */ }
         };
 
-        // Grid
-        const grids = components.get(OBC.Grids);
-        const grid = grids.create(world);
-        sceneThemeTargetsRef.current = {
-          world: world as unknown as ViewerRefs['world'],
-          grid: grid as unknown as ViewerRefs['grid'],
-        };
-        applyTheme(useStore.getState().theme);
-
-        // Initialize fragments with a blob-backed worker for broader runtime compatibility.
-        const fragmentsManager = components.get(OBC.FragmentsManager);
-        // Assigned once any load path converges. Scheduler runs after that
-        // point wait for this model's FINISH event before the next run starts,
-        // preventing a late camera event from acknowledging a later selection.
-        let fragmentModelForUpdateAck: FRAGS.FragmentsModel | null = null;
-        // Captured after FragmentsManager.init(). Normal engine calls are then
-        // routed through the scheduler, while the scheduler itself invokes this
-        // original method to avoid recursively enqueueing its own update.
-        let rawCoreUpdate: ((force?: boolean) => Promise<void>) | null = null;
-        // Pace forced flushes around the engine maxUpdateRate guard.
-        let droppedForcedFlushes = 0;
-        // Non-forced acknowledgement waits register here so newly enqueued
-        // immediate work (a click flush, an orbit camera batch) can release
-        // them instead of queueing behind a silent no-change tick.
-        const ackPreemptors = new Set<() => void>();
-        // Resolve `core` lazily because the getter is unavailable before init().
-        const readEngineLastUpdate = (): number | null => {
-          const enginePacing = fragmentsManager.core as unknown as { _lastUpdate?: unknown };
-          return typeof enginePacing._lastUpdate === 'number' ? enginePacing._lastUpdate : null;
-        };
-        const invokeRawCoreUpdate = (force: boolean): Promise<void> => {
-          if (rawCoreUpdate) return rawCoreUpdate(force);
-          return fragmentsManager.core.update(force);
-        };
-        const coreUpdatePaced = async (force: boolean): Promise<boolean> => {
-          if (!force) {
-            const callAt = performance.now();
-            await invokeRawCoreUpdate(false);
-            const after = readEngineLastUpdate();
-            // A rate-limited no-op has no model FINISH event to await.
-            return after === null || after >= callAt;
-          }
-          const tForcedStart = performance.now();
-          for (let attempt = 0; attempt < 3; attempt += 1) {
-            // Route disposed updates through the scheduler error path.
-            if (disposed) throw new Error('viewer-disposed');
-            const last = readEngineLastUpdate();
-            const rate = fragmentsManager.core.settings.maxUpdateRate;
-            if (last !== null && rate > 0) {
-              const since = performance.now() - last;
-              if (since < rate) {
-                await new Promise((resolve) => {
-                  window.setTimeout(resolve, Math.max(1, Math.ceil(rate - since) + 1));
-                });
-              }
-            }
-            const callAt = performance.now();
-            await invokeRawCoreUpdate(true);
-            const after = readEngineLastUpdate();
-            // _lastUpdate advancing past callAt means the engine accepted the run.
-            if (after === null || after >= callAt) {
-              if (import.meta.env.DEV) {
-                const attribution = clickFlushAttributionRef.current;
-                attribution.paceWaitMs = callAt - tForcedStart;
-                attribution.flushMs = performance.now() - callAt;
-              }
-              return true;
-            }
-            droppedForcedFlushes += 1;
-            if (import.meta.env.DEV) {
-              console.debug('[viewer] forced fragment flush dropped by engine pacing - retrying', {
-                attempt: attempt + 1,
-                droppedForcedFlushes,
-              });
-            }
-          }
-          // Surface exhausted retries as a scheduler error.
-          throw new Error('fragments forced update dropped by engine pacing (3 attempts)');
-        };
-        const coreUpdatePacedAndAcknowledged = async (force: boolean): Promise<void> => {
-          const acknowledgedModel = fragmentModelForUpdateAck;
-          if (!acknowledgedModel) {
-            await coreUpdatePaced(force);
-            return;
-          }
-          let finished = false;
-          let acknowledgementTimeout = 0;
-          let resolveFinished!: () => void;
-          const finish = new Promise<void>((resolve) => {
-            resolveFinished = resolve;
-          });
-          const onViewUpdated = () => {
-            finished = true;
-            resolveFinished();
-          };
-          acknowledgedModel.onViewUpdated.add(onViewUpdated);
-          try {
-            const accepted = await coreUpdatePaced(force);
-            // A forced FragmentsModels update resolves only after
-            // forceUpdateFinish has consumed the model's FINISH request, so its
-            // returned promise is already the acknowledgement. Non-forced
-            // camera work returns earlier and must wait for onViewUpdated.
-            if (accepted && !force && !finished) {
-              // A no-change tick never emits FINISH. Newly enqueued immediate
-              // work preempts this wait so clicks never queue behind it, and
-              // bounded silence resolves as a benign no-op acknowledgement.
-              let preempted = false;
-              const preempt = () => {
-                preempted = true;
-                resolveFinished();
-              };
-              ackPreemptors.add(preempt);
-              try {
-                acknowledgementTimeout = window.setTimeout(resolveFinished, 2_500);
-                await finish;
-              } finally {
-                ackPreemptors.delete(preempt);
-              }
-              if (import.meta.env.DEV && !finished) {
-                console.debug('[viewer] non-forced view-update acknowledgement released', {
-                  reason: preempted ? 'preempted-by-immediate-work' : 'no-view-change-timeout',
-                });
-              }
-            }
-          } finally {
-            window.clearTimeout(acknowledgementTimeout);
-            try { acknowledgedModel.onViewUpdated.remove(onViewUpdated); } catch { /* disposed */ }
-          }
-        };
-        fragmentUpdateScheduler = createFragmentUpdateScheduler({
-          raf: (cb) => window.requestAnimationFrame(cb),
-          cancelRaf: (handle) => window.cancelAnimationFrame(handle),
-          update: (force) => coreUpdatePacedAndAcknowledged(force),
-          // Queued immediate work must not sit behind a silent no-change
-          // tick's acknowledgement watchdog; release those waits right away.
-          onEnqueue: (request) => {
-            if (request.priority === 'idle') return;
-            for (const preempt of Array.from(ackPreemptors)) preempt();
-          },
-          // Stamp click-highlight flush starts for latency attribution.
-          onRunStart: (run) => {
-            // Every scheduler run mutates visuals; keep painting through it.
-            renderKick(350);
-            if (import.meta.env.DEV && run.reasons.includes('click-highlight')) {
-              clickFlushAttributionRef.current.runStartTs = performance.now();
-            }
-          },
-          onRunEnd: () => {
-            // The flush just landed worker results - paint them.
-            renderKick(350);
-          },
-        });
-        fragmentUpdateSchedulerRef.current = fragmentUpdateScheduler;
-        if (import.meta.env.DEV) {
-          (window as unknown as Record<string, unknown>).__ifcSchedSnapshot =
-            () => fragmentUpdateSchedulerRef.current?.snapshot() ?? null;
-        }
-        {
-          const workerHttpUrl = new URL('/worker.mjs', window.location.origin).href;
-          let workerInitUrl = workerHttpUrl;
-          try {
-            const workerResp = await fetch(workerHttpUrl);
-            if (workerResp.ok) {
-              const workerText = await workerResp.text();
-              const workerBlob = new Blob([workerText], { type: 'application/javascript' });
-              workerInitUrl = URL.createObjectURL(workerBlob);
-            }
-          } catch {
-            // Fallback to http URL if fetch fails
-          }
-          fragmentsManager.init(workerInitUrl);
-          // Keep the blob URL alive; FragmentsManager reuses it on later loads.
-          if (workerInitUrl !== workerHttpUrl) {
-            workerBlobUrlRef.current = workerInitUrl;
-          }
-        }
-
-        // Tune fragment update pacing for interaction-driven redraws.
-        fragmentsManager.core.settings.maxUpdateRate = 8;
-        fragmentsManager.core.settings.forceUpdateRate = 1;
-        fragmentsManager.core.settings.forceUpdateBuffer = 2;
-
-        // Guard fragments.core.load() against a disposed manager. When HMR or
-        // any fast remount fires during the CPU-intensive WASM parse phase,
-        // components.dispose() kills the fragment workers. The subsequent
-        // core.load() call then creates a Worker that never sends 'ready' -
-        // hanging the Promise chain forever at "Finalizing fragment model".
-        // Patching the method lets the abandoned init() bail out cleanly.
-        {
-          const coreRef = fragmentsManager.core as unknown as { load: (...a: unknown[]) => Promise<unknown> };
-          const origLoad = coreRef.load.bind(fragmentsManager.core);
-          coreRef.load = (...args: unknown[]) => {
-            if (disposed) return Promise.reject(new Error('viewer-disposed'));
-            return origLoad(...args);
-          };
-        }
-
-        // The engine's auto-redraw timer calls core.update directly after
-        // worker messages. Route those calls through the same single-flight
-        // scheduler as camera and appearance work so an unrelated FINISH event
-        // can never acknowledge a later selection/visibility flush.
-        try {
-          const coreAny = fragmentsManager.core as unknown as {
-            update: (force?: boolean) => Promise<void>;
-          };
-          rawCoreUpdate = coreAny.update.bind(fragmentsManager.core);
-          coreAny.update = async (force = false) => {
-            if (RENDER_ON_DEMAND) renderKick(350);
-            const scheduler = fragmentUpdateScheduler;
-            if (!scheduler || disposed) {
-              if (disposed) return;
-              await rawCoreUpdate?.(force);
-              return;
-            }
-            try {
-              await scheduler.requestAndWait({
-                priority: force ? 'visual' : 'camera',
-                force,
-                reason: 'camera',
-              });
-            } catch (error) {
-              // Auto-redraw calls are fire-and-forget inside the fragments
-              // engine. Keep teardown cancellations and a lost FINISH event
-              // from becoming unhandled promise rejections.
-              if (!disposed && (error as { name?: string })?.name !== 'AbortError') {
-                console.warn('[viewer] scheduled engine update failed', error);
-              }
-            }
-          };
-        } catch { /* best-effort: direct app updates still use the scheduler */ }
-
         // Adaptive graphics quality is now driven by the
         // interaction-quality ladder (interactionQualityController.ts) instead
         // of a hardcoded GQ_IDLE/GQ_ORBIT binary. `applyInteractionQuality`
@@ -3012,23 +2541,10 @@ export default function ViewerPanel({
           // non-navigation changes apply immediately. A pending deferred drop
           // is cancelled by ANY later quality apply (e.g. the settle restore),
           // so short gestures never touch the backbuffer at all.
-          cancelDprDrop();
-          const droppingForNav =
-            interactionQualityRef.current.navigating
-            && settings.pixelRatioCap < activePixelRatioCap;
-          if (!droppingForNav) {
-            setInteractionPixelRatioCap(settings.pixelRatioCap);
-            return;
-          }
-          if (isWheelGesture()) return;
-          dprDropTimer = window.setTimeout(() => {
-            dprDropTimer = null;
-            if (disposed) return;
-            if (!cameraNavigatingRef.current || isWheelGesture()) return;
-            // Real sustained motion only - see DPR_DROP_RECENT_MOTION_MS.
-            if (performance.now() - lastCameraUpdateTs > DPR_DROP_RECENT_MOTION_MS) return;
-            setInteractionPixelRatioCap(settings.pixelRatioCap);
-          }, DPR_DROP_DELAY_MS);
+          pixelRatio.applyQualityCap(settings.pixelRatioCap, {
+            navigating: interactionQualityRef.current.navigating,
+            isCameraNavigating: () => !disposed && cameraNavigatingRef.current,
+          });
         };
         const dispatchQuality = (event: InteractionQualityEvent) => {
           const prev = interactionQualityRef.current;
@@ -3182,10 +2698,10 @@ export default function ViewerPanel({
           nativePreview = previewShell;
 
           void streamNativeGeometry(
-            { ifcBytes: fileBytes!, signal: nativePreviewAbort.signal },
+            { ifcBytes: fileBytes!, signal: viewerSession.signal },
             {
               onBatch: (_batchIndex, decoded: DecodedMesh[]) => {
-                if (disposed || nativePreviewAbort.signal.aborted) return;
+                if (disposed || viewerSession.signal.aborted) return;
                 if (firstBatchAt === null) {
                   firstBatchAt = performance.now();
                   useStore.getState().logActivity({
@@ -3214,8 +2730,8 @@ export default function ViewerPanel({
             // Leave any arrived batches in place; the main load replaces them shortly.
           });
         } else if (shouldRunNativePreview) {
-          void fetchNativeGeometryPreview(fileBytes!, nativePreviewAbort.signal).then((preview) => {
-            if (disposed || nativePreviewAbort.signal.aborted || !preview) return;
+          void fetchNativeGeometryPreview(fileBytes!, viewerSession.signal).then((preview) => {
+            if (disposed || viewerSession.signal.aborted || !preview) return;
             nativePreview = preview;
             // Add preview group to the Three.js scene.
             const scene = world.scene?.three as THREE.Scene | undefined;
@@ -3429,7 +2945,7 @@ export default function ViewerPanel({
                   fragmentsManager,
                   fetched.bytes,
                   modelId,
-                  { autoCoordinate: coordinateModel },
+                  { autoCoordinate: coordinateModel, graphicsQuality: resolveIdleGraphicsQuality() },
                 );
                 stageTimings.cacheLoadMs = performance.now() - fragLoadStart;
                 modelLoadSource = 'server-cache';
@@ -3888,7 +3404,7 @@ export default function ViewerPanel({
         }
 
         if (!model) throw new Error('Model could not be loaded');
-        fragmentModelForUpdateAck = model;
+        runtime.fragments.adoptModel(model);
 
         // Cached-load backend warm-up: when the viewer loads from cached
         // fragments (manifest fast-path, IDB cache, or server cache hit
@@ -4500,29 +4016,12 @@ export default function ViewerPanel({
           let suppressNavStartUntil = 0;
 
           const isPanelResizing = () => panelResizing || document.body.classList.contains('is-resizing');
-          const getSpatialTileViewOptions = () => {
-            const state = useStore.getState();
-            const selectedExpressIds = new Set<number>([
-              ...state.selectedIds,
-              ...(state.selectedElementId == null ? [] : [state.selectedElementId]),
-            ]);
-            const pinnedLocalIds = new Set<number>();
-            for (const expressId of selectedExpressIds) {
-              const localId = expressToLocalCacheRef.current.get(expressId)
-                ?? modelService.getRememberedLocalId(expressId)
-                ?? undefined;
-              if (localId !== undefined) pinnedLocalIds.add(localId);
-            }
-            return {
-              pinnedLocalIds,
-              viewportHeightPx: world.renderer?.three.domElement.clientHeight
-                || containerRef.current?.clientHeight
-                || window.innerHeight,
-            };
-          };
 
-          const onPanelResizeStart = () => {
-            panelResizing = true;
+          // Entered while a panel drag or a camera change during one is in
+          // flight. Both call sites must stay in lockstep: a field set in only
+          // one leaves the viewer stuck navigating, with hover raycasts
+          // suppressed and DPR capped.
+          const enterResizeNavigation = () => {
             cameraNavigatingRef.current = true;
             fragmentUpdateScheduler?.setNavigating(true);
             applyGhostPostproduction(true);
@@ -4545,7 +4044,12 @@ export default function ViewerPanel({
             }
           };
 
-          const onPanelResizeEnd = () => {
+          const onPanelResizeStart = () => {
+            panelResizing = true;
+            enterResizeNavigation();
+          };
+
+          const exitResizeNavigation = () => {
             panelResizing = false;
             cameraNavigatingRef.current = false;
             fragmentUpdateScheduler?.setNavigating(false);
@@ -4567,55 +4071,22 @@ export default function ViewerPanel({
             });
           };
 
+          const onPanelResizeEnd = () => {
+            exitResizeNavigation();
+          };
+
           const onWindowResize = () => {
             panelResizing = true;
-            cameraNavigatingRef.current = true;
-            fragmentUpdateScheduler?.setNavigating(true);
-            applyGhostPostproduction(true);
-            cancelDprDrop();
-            setInteractionPixelRatioCap(navigationPixelRatioCap);
-            hoverGenRef.current += 1;
-            if (hoverIntentTimer !== null) {
-              window.clearTimeout(hoverIntentTimer);
-              hoverIntentTimer = null;
-            }
-            if (settleTimer !== null) {
-              window.clearTimeout(settleTimer);
-              settleTimer = null;
-            }
+            enterResizeNavigation();
             if (windowResizeEndTimer !== null) {
               window.clearTimeout(windowResizeEndTimer);
               windowResizeEndTimer = null;
-            }
-            orbiting = false;
-            try {
-              fragmentsManager.core.settings.graphicsQuality = resolveIdleGraphicsQuality();
-            } catch {
-              /* ignore */
             }
 
             // Treat a resize burst as one interaction and refresh once it settles.
             windowResizeEndTimer = window.setTimeout(() => {
               windowResizeEndTimer = null;
-              panelResizing = false;
-              cameraNavigatingRef.current = false;
-              fragmentUpdateScheduler?.setNavigating(false);
-              applyGhostPostproduction(false);
-              restoreLadderPixelRatioCap();
-              if (disposed) return;
-              requestAnimationFrame(() => {
-                if (disposed || isPanelResizing()) return;
-                try {
-                  fragmentsManager.core.settings.graphicsQuality = resolveIdleGraphicsQuality();
-                  fragmentUpdateScheduler?.request({
-                    priority: 'visual',
-                    force: true,
-                    reason: 'resize',
-                  });
-                } catch {
-                  /* ignore */
-                }
-              });
+              exitResizeNavigation();
             }, 180);
           };
 
@@ -4634,30 +4105,11 @@ export default function ViewerPanel({
 
           const onCameraChange = () => {
             if (disposed) return;
-            lastCameraUpdateTs = performance.now();
+            pixelRatio.noteCameraUpdate();
 
             // During panel drag-resize, avoid LOD thrashing and forced tile refreshes.
             if (isPanelResizing()) {
-              cameraNavigatingRef.current = true;
-              fragmentUpdateScheduler?.setNavigating(true);
-              applyGhostPostproduction(true);
-              cancelDprDrop();
-              setInteractionPixelRatioCap(navigationPixelRatioCap);
-              hoverGenRef.current += 1;
-              if (hoverIntentTimer !== null) {
-                window.clearTimeout(hoverIntentTimer);
-                hoverIntentTimer = null;
-              }
-              if (settleTimer !== null) {
-                window.clearTimeout(settleTimer);
-                settleTimer = null;
-              }
-              orbiting = false;
-              try {
-                fragmentsManager.core.settings.graphicsQuality = resolveIdleGraphicsQuality();
-              } catch {
-                /* ignore */
-              }
+              enterResizeNavigation();
               return;
             }
 
@@ -4719,44 +4171,18 @@ export default function ViewerPanel({
                 if (!showPassPending && now - lastShowPassTs >= cullerShowPassMinIntervalMs) {
                   const state = useStore.getState();
                   if (state.isolatedIds.length === 0 && state.hiddenIds.length === 0) {
-                    const storeyCuller = storeyFrustumCullerRef.current;
-                    const elemCuller = elementFrustumCullerRef.current;
-                    const spatialTileCuller = spatialTileCullerRef.current;
-                    if (spatialTileCuller?.isBuilt || storeyCuller?.isBuilt || elemCuller?.isBuilt) {
+                    const ports = cullerPassPorts();
+                    if (ports && anyCullerBuilt(ports)) {
                       showPassPending = true;
                       lastShowPassTs = now;
-                      const cameraThree = world.camera.three as THREE.Camera;
                       const runShow = async () => {
-                        let revealed = 0;
                         try {
-                          if (spatialTileCuller?.isBuilt) {
-                            const result = await spatialTileCuller.showPass(
-                              cameraThree,
-                              spatialTileVisibilityRef.current ?? model,
-                              getSpatialTileViewOptions(),
-                            );
-                            revealed += result.revealedElementCount;
+                          const counts = await showCullPass(ports);
+                          if (ports.tile?.isBuilt) {
                             useStore.getState().updatePerfMetrics({
                               culledStoreys: 0,
-                              culledElements: result.hiddenElementCount,
+                              culledElements: counts.culledElements,
                             });
-                          } else if (storeyCuller?.isBuilt) {
-                            revealed += await storeyCuller.showPass(
-                              cameraThree,
-                              model,
-                              storeyCullerVisibilityRef.current ?? model,
-                            );
-                          }
-                          if (!spatialTileCuller?.isBuilt && elemCuller?.isBuilt) {
-                            const ownedByStorey = storeyCuller?.isBuilt
-                              ? new Set(storeyCuller.getCulledMemberIds())
-                              : undefined;
-                            revealed += await elemCuller.showPass(
-                              cameraThree,
-                              model,
-                              ownedByStorey,
-                              elementCullerVisibilityRef.current ?? model,
-                            );
                           }
                         } catch { /* best-effort */ }
                         // The coordinator's show target already awaited the
@@ -4862,7 +4288,7 @@ export default function ViewerPanel({
                   : spatialTileCuller.tick(
                       world.camera.three as THREE.Camera,
                       spatialTileVisibilityRef.current ?? model,
-                      getSpatialTileViewOptions(),
+                      getTileViewOptions(),
                     );
                 void tileWork.then((result) => {
                   useStore.getState().updatePerfMetrics({
@@ -4882,10 +4308,6 @@ export default function ViewerPanel({
                 hiddenCount: useStore.getState().hiddenIds.length,
               };
               const cullerPlan = decideCullerWork(cullerSnapshot);
-              // When no cullers are built (the default), runCullerPlan
-              // resolves immediately and the chained 'culler-hide' force below
-              // would be a second redundant forced flush per settle. Track it.
-              const cullerPlanIsNoop = cullerPlan === 'noop';
               void runCullerPlan(cullerPlan, cullerSnapshot, {
                 runStoreyTick: () => cullerRef!.tick(
                   cameraThree,
@@ -5094,11 +4516,31 @@ export default function ViewerPanel({
           setMeasurementTip({ x, y, ...content });
         };
 
-        const hitTriangle = (hit: FragmentRaycastHit): Triangle3 | null => {
-          if (!hit.facePoints || hit.facePoints.length < 9) return null;
+        // facePoints is a full face profile (outer loop plus any hole loops),
+        // not a triangle. Taking its first three vertices invents a 2->0 edge
+        // the mesh does not have, so a wall with a door measured clearance
+        // against a shape that is not on the model. Triangulate with the index
+        // buffer the engine supplies alongside it, and fan the profile only as
+        // a fallback.
+        const hitTriangles = (hit: FragmentRaycastHit): Triangle3[] => {
+          if (!hit.facePoints || hit.facePoints.length < 9) return [];
           const points = facePointsToVec3(hit.facePoints);
-          if (points.length < 3) return null;
-          return [points[0], points[1], points[2]];
+          if (points.length < 3) return [];
+          const triangles: Triangle3[] = [];
+          const indices = hit.faceIndices;
+          if (indices && indices.length >= 3) {
+            for (let i = 0; i + 2 < indices.length; i += 3) {
+              const a = points[indices[i]];
+              const b = points[indices[i + 1]];
+              const c = points[indices[i + 2]];
+              if (a && b && c) triangles.push([a, b, c]);
+            }
+          }
+          if (triangles.length > 0) return triangles;
+          for (let i = 1; i + 1 < points.length; i++) {
+            triangles.push([points[0], points[i], points[i + 1]]);
+          }
+          return triangles;
         };
         let downX = 0;
         let downY = 0;
@@ -5448,7 +4890,16 @@ export default function ViewerPanel({
               // would record no first triangle and silently downgrade the
               // clearance to a plain point-to-point line still labelled
               // "clearance". Treat it as a void click instead.
-              if (measurementController.getMode() === 'clearance' && !result?.point) return;
+              const clearanceTriangles = measurementController.getMode() === 'clearance' && result
+                ? hitTriangles(result)
+                : [];
+              // A hit with no usable face profile would fall through to a plain
+              // point-to-point line still labelled "clearance". Reject it here
+              // rather than report a number that is not a clearance.
+              if (
+                measurementController.getMode() === 'clearance'
+                && (!result?.point || clearanceTriangles.length === 0)
+              ) return;
               // Reuse the hover-resolved snap when neither the pointer nor the
               // camera has moved: it guarantees the committed point IS the
               // previewed one, and costs no round-trip. Touch never hovers, so
@@ -5475,10 +4926,11 @@ export default function ViewerPanel({
                   : candidate!.point.clone();
                 if (measurementController.getMode() === 'clearance') {
                   const pendingBefore = measurementController.snapshot().pending.length;
-                  const triangle = result ? hitTriangle(result) : null;
-                  const firstTriangle = clearanceFirstTriangleRef.current;
-                  if (pendingBefore > 0 && firstTriangle && triangle) {
-                    const witness = shortestDistanceBetweenTriangles(firstTriangle, triangle);
+                  const firstTriangles = clearanceFirstTriangleRef.current;
+                  const witness = pendingBefore > 0 && firstTriangles
+                    ? shortestDistanceBetweenTriangleSets(firstTriangles, clearanceTriangles)
+                    : null;
+                  if (witness) {
                     measurementController.cancel();
                     measurementController.addWitnessMeasurement(
                       'clearance',
@@ -5495,7 +4947,7 @@ export default function ViewerPanel({
                     measurementController.handleClick(hitPoint, normal, candidate);
                     const pendingAfter = measurementController.snapshot().pending.length;
                     clearanceFirstTriangleRef.current = pendingAfter > 0
-                      ? (firstTriangle ?? triangle)
+                      ? (firstTriangles ?? clearanceTriangles)
                       : null;
                   }
                 } else {
@@ -5555,7 +5007,7 @@ export default function ViewerPanel({
                 // Shift+click: toggle into multi-select set
                 useStore.getState().toggleSelectId(productId);
               } else {
-                useStore.getState().selectElement(productId);
+                stateCapabilities.selection.select(productId);
                 if (event.detail >= 2) {
                   useStore.getState().zoomToElement(productId);
                 }
@@ -5582,7 +5034,7 @@ export default function ViewerPanel({
               && isConfirmedVoidPick({ exactHit: false, error: pickError })
             ) {
               // Click on empty scene clears selection (but Shift+click on void is a no-op)
-              useStore.getState().selectElement(null);
+              stateCapabilities.selection.select(null);
               rebuildSchedulerRef.current?.cancel();
               rebuildSchedulerRef.current?.schedule();
             }
@@ -6259,7 +5711,7 @@ export default function ViewerPanel({
         globalSlowTimer = null;
       }
       // Abort any in-flight native geometry request and dispose preview meshes.
-      nativePreviewAbort.abort();
+      viewerSession.abortPendingWork();
       if (nativePreview) {
         const scene = viewerRef.current?.world?.scene?.three as THREE.Scene | undefined;
         if (scene) removeNativePreview(scene, nativePreview);
@@ -6288,9 +5740,6 @@ export default function ViewerPanel({
       perfSamplingCleanup = null;
       setHoverTooltipData(null);
       viewHelperCleanup?.();
-      pixelRatioCleanup?.();
-      renderOnDemandCleanup?.();
-      contextRecoveryCleanup?.();
       // Dispose storey frustum culler (restores any auto-culled visibility)
       if (storeyFrustumCullerRef.current) {
         deferredTeardown.push(storeyFrustumCullerRef.current.dispose());
@@ -6329,36 +5778,16 @@ export default function ViewerPanel({
         storeySubModel = null;
       }
       modelService.dispose();
-      const workerBlobUrl = workerBlobUrlRef.current;
       viewerRef.current = null;
       sceneThemeTargetsRef.current = null;
       useStore.getState().setModelHalfExtents(null);
       // React cleanup cannot itself be async. Keep the fragments components
       // alive until the coordinator's current worker mutation and the two
       // replacement/culler lifecycles have settled, then dispose exactly once.
-      const teardownBarrier = new Promise<void>((resolve) => {
-        let settled = false;
-        let timeout = 0;
-        const finish = () => {
-          if (settled) return;
-          settled = true;
-          window.clearTimeout(timeout);
-          resolve();
-        };
-        timeout = window.setTimeout(finish, 3_000);
-        void Promise.allSettled(deferredTeardown).then(finish);
-      });
-      void teardownBarrier.finally(() => {
-        try {
-          components.dispose();
-        } finally {
-          // Revoke only after FragmentsManager is fully torn down.
-          if (workerBlobUrl) {
-            try { URL.revokeObjectURL(workerBlobUrl); } catch { /* best-effort */ }
-            if (workerBlobUrlRef.current === workerBlobUrl) workerBlobUrlRef.current = null;
-          }
-        }
-      });
+      for (const operation of deferredTeardown) {
+        viewerSession.addBarrier(operation);
+      }
+      void viewerSession.dispose();
     };
   }, [
     computeFitDistance,
@@ -6879,16 +6308,14 @@ export default function ViewerPanel({
 
     // Apply visibility first, then selection/highlights. The viewer's store
     // subscribers already handle the side effects.
-    if (vp.isolatedIds.length > 0) {
-      state.setIsolatedIds(vp.isolatedIds);
-    } else if (vp.hiddenIds.length > 0) {
-      state.setHiddenIds(vp.hiddenIds);
-    } else {
-      state.clearVisibility();
-    }
-
-    state.setHighlightedIds(vp.highlightedIds);
-    state.selectElement(vp.selectedId);
+    stateCapabilitiesRef.current?.visibility.apply({
+      isolatedIds: vp.isolatedIds,
+      hiddenIds: vp.hiddenIds,
+    });
+    stateCapabilitiesRef.current?.selection.apply({
+      highlightedIds: vp.highlightedIds,
+      selectedId: vp.selectedId,
+    });
 
     // Viewpoints saved before the section workspace existed lack these fields
     // and must leave the current section state untouched.
@@ -6956,26 +6383,22 @@ export default function ViewerPanel({
       applyViewState: async (req) => {
         if (!viewerRef.current) return;
         try {
-          const state = useStore.getState();
           if (req.camera) {
             const [px, py, pz] = req.camera.pos;
             const [tx, ty, tz] = req.camera.target;
             viewerRef.current.world.camera.controls.setLookAt(px, py, pz, tx, ty, tz, true);
           }
           if (req.isolatedIds !== undefined || req.hiddenIds !== undefined) {
-            if (req.isolatedIds && req.isolatedIds.length > 0) {
-              state.setIsolatedIds(req.isolatedIds);
-            } else if (req.hiddenIds && req.hiddenIds.length > 0) {
-              state.setHiddenIds(req.hiddenIds);
-            } else {
-              state.clearVisibility();
-            }
+            stateCapabilitiesRef.current?.visibility.apply({
+              isolatedIds: req.isolatedIds ?? [],
+              hiddenIds: req.hiddenIds ?? [],
+            });
           }
           if (req.highlightedIds !== undefined) {
-            state.setHighlightedIds(req.highlightedIds);
+            stateCapabilitiesRef.current?.selection.highlight(req.highlightedIds);
           }
           if (req.selectedId !== undefined) {
-            state.selectElement(req.selectedId);
+            stateCapabilitiesRef.current?.selection.select(req.selectedId);
           }
         } catch {
           // World disposed mid-apply - leave the viewer as it is.
@@ -7019,114 +6442,14 @@ export default function ViewerPanel({
     onSaveViewpointRef, onRestoreViewpointRef,
   ]);
 
-  // Tick elapsed seconds for the whole load. Feeds the overlay's time line
-  // (elapsed always, a remaining estimate when history backs it) instead of
-  // only waking up after the slow-load threshold.
-  useEffect(() => {
-    if (!loading) {
-      setLoadElapsedSec(null);
-      return;
-    }
-    const startedAt = Date.now();
-    setLoadElapsedSec(0);
-    const id = window.setInterval(() => {
-      setLoadElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [loading]);
 
-  // Display progress runs through the pace model in loadProgressPresenter:
-  // monotonic (raw checkpoints can regress on fallback paths, the bar never
-  // does), never frozen (asymptotic drift toward the next checkpoint), and
-  // time-weighted so long phases creep honestly instead of stalling. The
-  // expected total comes from this machine's perf-log history with fixed
-  // priors as fallback.
-  const [displayProgress, setDisplayProgress] = useState<number>(loadProgress.progress);
-  const paceRef = useRef<PaceState | null>(null);
-  const targetProgressRef = useRef<number>(loadProgress.progress);
-  targetProgressRef.current = loadProgress.progress;
-  const expectedTotalRef = useRef<{ kind: LoadPathKind; ms: number; fromHistory: boolean }>({
-    kind: 'unknown',
-    ms: 25_000,
-    fromHistory: false,
-  });
-  const loadPathKind = pathKindForSourceHint(loadProgress.sourceHint);
-  useEffect(() => {
-    if (loadPathKind === 'unknown' || expectedTotalRef.current.kind === loadPathKind) return;
-    let history: ViewerPerfLogEntry[] | null = null;
-    try {
-      history = JSON.parse(
-        localStorage.getItem(VIEWER_PERF_LOG_STORAGE_KEY) ?? '[]',
-      ) as ViewerPerfLogEntry[];
-    } catch {
-      history = null;
-    }
-    const estimate = estimateExpectedTotal(loadPathKind, history);
-    expectedTotalRef.current = { kind: loadPathKind, ...estimate };
-    if (paceRef.current) {
-      paceRef.current = { ...paceRef.current, expectedTotalMs: estimate.ms };
-    }
-  }, [loadPathKind]);
-  // The pacing loop only runs while the overlay is visible: it spins up per
-  // load and shuts down once the overlay is gone (no idle-loop tax).
-  useEffect(() => {
-    if (!loading) {
-      paceRef.current = null;
-      return;
-    }
-    let rafId = 0;
-    let lastTs = performance.now();
-    const tick = (now: number) => {
-      const dt = Math.max(0, now - lastTs);
-      lastTs = now;
-      const previous = paceRef.current
-        ?? createPaceState(targetProgressRef.current, expectedTotalRef.current.ms);
-      const next = advancePace(previous, targetProgressRef.current, dt);
-      paceRef.current = next;
-      // Re-render at 0.1 pct granularity - finer is sub-pixel on the bar.
-      if (Math.round(next.display * 10) !== Math.round(previous.display * 10)) {
-        setDisplayProgress(next.display);
-      }
-      rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafId);
-  }, [loading]);
-  // Snap to 100 without easing so completion lands cleanly. (No snap on low
-  // values: fallback branches re-report low checkpoints and the bar must
-  // never jump backwards.)
-  useEffect(() => {
-    if (loadProgress.progress >= 100) {
-      paceRef.current = paceRef.current
-        ? { ...paceRef.current, anchor: 100, display: 100 }
-        : createPaceState(100, expectedTotalRef.current.ms);
-      setDisplayProgress(100);
-    }
-  }, [loadProgress.progress]);
-
-  const projectName = useStore((s) => s.project?.name ?? null);
-  const serverCachePref = useStore((s) => s.useServerCache);
-  const loadPresentation = useMemo(() => {
-    const bytes = useStore.getState().ifcFileBytes;
-    return presentLoadProgress(loadProgress, {
-      fileName: projectName,
-      fileSizeMB: bytes ? bytes.byteLength / (1024 * 1024) : null,
-      cachesEnabled: serverCachePref,
-    });
-  }, [loadProgress, projectName, serverCachePref]);
-  const loadEta = loadElapsedSec == null
-    ? { text: null, overrun: false }
-    : formatEta(
-      loadElapsedSec * 1000,
-      expectedTotalRef.current.ms,
-      expectedTotalRef.current.fromHistory,
-    );
-
-  const loadPercent = Math.round(Math.max(0, Math.min(100, displayProgress)));
-  const loadBarPercent = Math.max(6, loadPercent);
-  // Once the first frame is on screen (96+), collapse the pill to a compact
-  // one-row chip so the user watches their model, not the loader.
-  const loadCompact = loadProgress.progress >= 96;
+  const {
+    loadPercent,
+    loadBarPercent,
+    loadCompact,
+    loadEta,
+    loadPresentation,
+  } = useLoadProgressPacer(loadProgress, loading);
 
   return (
     <div
@@ -7356,3 +6679,5 @@ export default function ViewerPanel({
     </div>
   );
 }
+
+export default memo(ViewerPanel);

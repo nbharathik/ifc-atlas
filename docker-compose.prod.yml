@@ -2,12 +2,13 @@
 #
 # Prerequisites:
 #   1. Build the frontend: cd frontend && npm run build (outputs dist/)
-#   2. Set env vars: DOMAIN, ANTHROPIC_API_KEY, OPENAI_API_KEY (optional),
+#   2. Set env vars: DOMAIN, IFC_ATLAS_API_TOKEN (required, 32+ characters),
+#      ANTHROPIC_API_KEY, OPENAI_API_KEY (optional),
 #      IFC_VIEWER_MAX_UPLOAD_BYTES (optional)
 #
 # Quick start (self-host):
 #   DOMAIN=your-domain.com \
-#   ANTHROPIC_API_KEY=sk-ant-... \
+#   IFC_ATLAS_API_TOKEN='generate-a-random-value-with-at-least-32-characters' \
 #   docker compose -f docker-compose.prod.yml up -d
 #
 # Local HTTPS (no domain): DOMAIN=localhost - Caddy uses a self-signed cert.
@@ -29,7 +30,8 @@ services:
     environment:
       - DOMAIN=${DOMAIN:-localhost}
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
   backend:
     # Note: the backend image has no Node.js, so the optional Node sidecar
@@ -45,10 +47,12 @@ services:
     volumes:
       # All writable state (uploads, fragment cache, secrets, edit history)
       # lives in the per-user dotfolder - persist it across recreates.
-      - ifc-atlas-data:/root/.ifc-atlas
-      - ifc-sandbox:/tmp/ifc_sandbox
+      - ifc-atlas-data:/home/ifcatlas/.ifc-atlas
     environment:
       - FRONTEND_URL=https://${DOMAIN:-localhost}
+      - HOST=0.0.0.0
+      - IFC_ATLAS_SECURITY_MODE=server
+      - IFC_ATLAS_API_TOKEN=${IFC_ATLAS_API_TOKEN:?Set a random token with at least 32 characters}
       - IFC_VIEWER_MAX_UPLOAD_BYTES=${IFC_VIEWER_MAX_UPLOAD_BYTES:-536870912}
       - LOG_LEVEL=info
       # LLM provider keys, forwarded from the shell that runs compose (see
@@ -60,6 +64,25 @@ services:
       # Optional overrides; the file does not exist in a fresh clone.
       - path: ./backend/.env
         required: false
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 2g
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     # IfcOpenShell can be memory-hungry on large models
     deploy:
       resources:
@@ -70,6 +93,5 @@ services:
 
 volumes:
   ifc-atlas-data:
-  ifc-sandbox:
   caddy-data:
   caddy-config:

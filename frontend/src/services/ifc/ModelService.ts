@@ -55,7 +55,6 @@ class ModelServiceImpl {
   fragmentsModel: FRAGS.FragmentsModel | null = null;
   rawBytes: Uint8Array | null = null;
   components: OBC.Components | null = null;
-  classifier: OBC.Classifier | null = null;
 
   // Resolves when register() completes so consumers (e.g. useIfcUpload)
   // can wait for the service to be usable.
@@ -134,16 +133,6 @@ class ModelServiceImpl {
     this.rawBytes = fileBytes;
     this.components = components;
 
-    try {
-      const Cls = (OBC as unknown as { Classifier?: new (c: OBC.Components) => OBC.Classifier })
-        .Classifier;
-      if (Cls) {
-        this.classifier = components.get(Cls);
-      }
-    } catch (err) {
-      console.warn('[ModelService] Classifier unavailable', err);
-      this.classifier = null;
-    }
 
     const startupMode = useStore.getState().startupMode;
     const eagerStartup = startupMode === 'full_upfront';
@@ -518,7 +507,6 @@ class ModelServiceImpl {
     this.fragmentsModel = null;
     this.rawBytes = null;
     this.components = null;
-    this.classifier = null;
     this.expressToLocalCache.clear();
     this._storeyCache = null;
     this._statsCache = null;

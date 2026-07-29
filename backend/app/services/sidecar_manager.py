@@ -57,6 +57,13 @@ _SIDECAR_DIR = Path(
 _DEFAULT_PORT = int(os.environ.get("SIDECAR_PORT", "9100"))
 _DEFAULT_HOST = os.environ.get("SIDECAR_HOST", "127.0.0.1")
 _SPAWN_TIMEOUT_S = float(os.environ.get("SIDECAR_SPAWN_TIMEOUT_S", "15"))
+_CONVERT_TIMEOUT_S = float(os.environ.get("SIDECAR_CONVERT_TIMEOUT_S", "900"))
+_SIDECAR_TIMEOUT = httpx.Timeout(
+    connect=5.0,
+    read=_CONVERT_TIMEOUT_S,
+    write=_CONVERT_TIMEOUT_S,
+    pool=5.0,
+)
 _HEALTH_URL = f"http://{_DEFAULT_HOST}:{_DEFAULT_PORT}/health"
 _CONVERT_URL = f"http://{_DEFAULT_HOST}:{_DEFAULT_PORT}/convert"
 _DECIMATE_URL = f"http://{_DEFAULT_HOST}:{_DEFAULT_PORT}/decimate"
@@ -544,7 +551,7 @@ class SidecarManager:
                 profile,
                 len(ifc_bytes) / (1024 * 1024),
             )
-            async with httpx.AsyncClient(timeout=None) as client:
+            async with httpx.AsyncClient(timeout=_SIDECAR_TIMEOUT) as client:
                 resp = await client.post(
                     _CONVERT_URL,
                     content=ifc_bytes,

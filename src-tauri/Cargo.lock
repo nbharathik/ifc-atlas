@@ -1746,6 +1746,7 @@ dependencies = [
 name = "ifc-atlas"
 version = "1.2.0"
 dependencies = [
+ "getrandom 0.3.4",
  "serde",
  "serde_json",
  "tauri",

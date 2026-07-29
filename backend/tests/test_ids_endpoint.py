@@ -9,9 +9,8 @@ All tests are pure - no disk I/O, no real IFC parsing.
 from __future__ import annotations
 
 import base64
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -113,7 +112,6 @@ def test_ids_validate_csv_has_header_row():
     b64 = _make_ids_b64()
 
     # Use the real service function but against an empty model (no walls → header only)
-    from app.services.ids_service import validate_ids_base64_to_csv
 
     with patch("app.api.ifc_routes.ifc_service") as mock_svc:
         mock_svc.is_loaded = True

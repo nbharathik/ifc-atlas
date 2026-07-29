@@ -24,7 +24,10 @@ from pathlib import Path
 import ifcopenshell
 import pytest
 
-from app.services.code_runner import MAX_CODE_CHARS, run_ifc_code
+from app.services.code_runner import (
+    MAX_CODE_CHARS,
+    run_ifc_code,
+)
 from app.services.ifc_service import IfcService
 from app.services.sandbox_service import SandboxService
 

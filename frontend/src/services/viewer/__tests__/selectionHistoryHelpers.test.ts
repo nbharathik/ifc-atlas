@@ -9,7 +9,6 @@ import {
   goForward,
   pushSelection,
   resetHistory,
-  shouldShowSelectionHistoryNav,
 } from '../selectionHistoryHelpers';
 
 describe('selectionHistoryHelpers', () => {
@@ -161,36 +160,6 @@ describe('selectionHistoryHelpers', () => {
       expect(fresh.stack).toEqual([]);
       expect(fresh.pointer).toBe(-1);
       expect(s.stack.length).toBe(2); // original untouched
-    });
-  });
-
-  describe('shouldShowSelectionHistoryNav', () => {
-    it('false when no model is loaded', () => {
-      const two = pushSelection(pushSelection(EMPTY_HISTORY, 1), 2);
-      expect(shouldShowSelectionHistoryNav(false, two)).toBe(false);
-    });
-
-    it('false on an empty stack even when a model is loaded', () => {
-      expect(shouldShowSelectionHistoryNav(true, EMPTY_HISTORY)).toBe(false);
-    });
-
-    it('false with only one selection - no useful navigation yet', () => {
-      const one = pushSelection(EMPTY_HISTORY, 42);
-      expect(shouldShowSelectionHistoryNav(true, one)).toBe(false);
-    });
-
-    it('true once at least two selections have been made', () => {
-      const two = pushSelection(pushSelection(EMPTY_HISTORY, 1), 2);
-      expect(shouldShowSelectionHistoryNav(true, two)).toBe(true);
-    });
-
-    it('stays true after walking back through history', () => {
-      let s = pushSelection(EMPTY_HISTORY, 1);
-      s = pushSelection(s, 2);
-      s = pushSelection(s, 3);
-      s = goBack(s);
-      // Pointer moved, but stack length is unchanged - still navigable.
-      expect(shouldShowSelectionHistoryNav(true, s)).toBe(true);
     });
   });
 });

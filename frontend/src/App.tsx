@@ -24,7 +24,7 @@ import {
 } from './services/ifc/webIfcRuntime';
 import { isRecoverableServerConvertFailure } from './services/viewer/loadStrategy';
 import { useStore } from './store/useStore';
-import { wsUrl as backendWsUrl } from './lib/platform';
+import { authenticatedWsUrl } from './lib/platform';
 import { BROWSER_ONLY } from './config/featureFlags';
 import { executeViewerCommand, type ViewerCommandPayload } from './services/viewer/viewerCommandExecutor';
 import { viewerStateReporter } from './services/viewer/viewerStateReporter';
@@ -126,10 +126,6 @@ export default function App() {
   const checkpointPanelOpen = useStore((s) => s.checkpointPanelOpen);
   const budgetPanelOpen = useStore((s) => s.budgetPanelOpen);
   const snippetPanelOpen = useStore((s) => s.snippetPanelOpen);
-  const theme = useStore((s) => s.theme);
-  const accentPreset = useStore((s) => s.accentPreset);
-  const spatialTree = useStore((s) => s.spatialTree);
-  const streamingRevealEnabled = useStore((s) => s.streamingRevealEnabled);
 
   const rightSidebarMode = useStore((s) => s.rightSidebarMode);
   const rightSidebarOpen = useStore((s) => s.rightSidebarOpen);
@@ -171,9 +167,17 @@ export default function App() {
     restoreViewpointRef.current?.(id);
   }, []);
 
+  // Theme and accent apply to the document, not to this tree: subscribe
+  // instead of selecting so a theme flip does not re-render the whole app.
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
+    const applyTheme = (theme: string) => {
+      document.documentElement.dataset.theme = theme;
+    };
+    applyTheme(useStore.getState().theme);
+    return useStore.subscribe((s, prev) => {
+      if (s.theme !== prev.theme) applyTheme(s.theme);
+    });
+  }, []);
 
   // Remove legacy welcome tour overlays (if any stale/cached runtime script
   // still injects them) so the viewer opens directly without onboarding UI.
@@ -224,8 +228,11 @@ export default function App() {
   }, [modelLoaded]);
 
   useEffect(() => {
-    applyAccentPreset(accentPreset);
-  }, [accentPreset]);
+    applyAccentPreset(useStore.getState().accentPreset);
+    return useStore.subscribe((s, prev) => {
+      if (s.accentPreset !== prev.accentPreset) applyAccentPreset(s.accentPreset);
+    });
+  }, []);
 
   // Pre-warm the Chat Manager bootstrap after the shell/model has had time
   // to paint. This keeps the initial route and model load path focused on
@@ -256,36 +263,6 @@ export default function App() {
     };
   }, [modelLoaded]);
 
-  // Progressive storey reveal - after the spatial tree arrives from the
-  // backend, animate the model by revealing storeys from ground up.
-  // The reveal uses isolatedIds transiently; it clears isolation when done.
-  // Cancelled automatically if the model changes (spatialTree -> null -> new).
-  useEffect(() => {
-    if (!modelLoaded || !spatialTree || !streamingRevealEnabled) return;
-    let ctrl: import('./services/viewer/streamingLoader').RevealController | null = null;
-    void import('./services/viewer/streamingLoader').then(({ revealStoreyByStorey }) => {
-      const state = useStore.getState();
-      state.setStreamingRevealActive(true);
-      ctrl = revealStoreyByStorey(
-        spatialTree,
-        {
-          setIsolatedIds: (ids) => useStore.getState().setIsolatedIds(ids),
-          clearVisibility: () => useStore.getState().clearVisibility(),
-          onProgress: (_step, total) => {
-            if (_step >= total) useStore.getState().setStreamingRevealActive(false);
-          },
-        },
-        { delayMs: 350 },
-      );
-    });
-    return () => {
-      ctrl?.cancel();
-      useStore.getState().setStreamingRevealActive(false);
-    };
-  // Deliberately depend on spatialTree identity (not content): the effect re-runs
-  // each time the backend delivers a new tree (model reload).
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelLoaded, spatialTree, streamingRevealEnabled]);
 
   // Register service worker to pre-cache WASM + worker files.
   // Non-blocking - runs at idle, never delays startup.
@@ -476,8 +453,6 @@ export default function App() {
     let ws: WebSocket | null = null;
     let reconnectTimer: number | null = null;
     let reconnectAttempt = 0;
-    const wsUrl = backendWsUrl('/api/ifc/sync/ws');
-
     const handleMessage = (event: MessageEvent<string>) => {
       let msg: ModelSyncEvent;
       try {
@@ -680,9 +655,11 @@ export default function App() {
       reconnectTimer = window.setTimeout(connect, delay);
     };
 
-    function connect() {
+    async function connect() {
       if (disposed) return;
-      ws = new WebSocket(wsUrl);
+      const socketUrl = await authenticatedWsUrl('/api/ifc/sync/ws');
+      if (disposed) return;
+      ws = new WebSocket(socketUrl);
       ws.onopen = () => {
         reconnectAttempt = 0;
       };
@@ -694,7 +671,7 @@ export default function App() {
       ws.onclose = scheduleReconnect;
     }
 
-    connect();
+    void connect();
     // Begin pushing viewer state (camera, selection, visibility) to the
     // backend for the CLI / MCP read path. Idempotent and self-guarded for
     // browser-only builds, so it simply follows this effect's lifecycle.

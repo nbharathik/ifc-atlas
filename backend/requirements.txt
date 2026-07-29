@@ -1,26 +1,26 @@
-fastapi==0.115.6
-starlette>=0.40,<1.0
+fastapi==0.140.0
+starlette==1.3.1
 uvicorn[standard]==0.34.0
-python-multipart==0.0.20
+python-multipart==0.0.32
 ifcopenshell>=0.8.3
-pydantic==2.10.4
-websockets==14.1
+pydantic==2.13.4
+websockets==15.0.1
 httpx==0.28.1
-python-dotenv==1.0.1
+python-dotenv==1.2.2
 anthropic==0.109.1
 openai==2.41.0
 # SDK majors match the LangChain 1.x integrations and the Responses API path.
-langgraph==1.0.9
-# langgraph 1.0.9 declares prebuilt<1.1.0,>=1.0.8 but 1.0.9-1.0.13 import
-# ExecutionInfo from langgraph.runtime, which only exists in langgraph>=1.0.10.
-# Without this pin a fresh install resolves prebuilt 1.0.13 and the whole
-# create_agent graph path dies at import time (silently downgrading every chat
-# turn to the 5-round fallback streamers). Keep in lockstep with langgraph.
-langgraph-prebuilt==1.0.8
-langchain==1.0.8
-langchain-openai==1.1.10
-langchain-anthropic==1.3.1
-mcp>=1.7,<2
+langgraph==1.2.9
+# Keep prebuilt in the resolver-compatible line with LangGraph. Earlier
+# combinations resolved incompatible ExecutionInfo imports and silently
+# downgraded chat turns to the fallback streamers.
+langgraph-prebuilt==1.1.0
+langchain==1.3.9
+langchain-openai==1.1.16
+langchain-anthropic==1.4.8
+# Explicit security floor for the transitive tracing client.
+langsmith==0.8.18
+mcp==1.28.1
 gitpython>=3.1,<4
 # Semantic IFC diff for the history timeline (GET /api/ifc/history/diff).
 # Maintained alongside ifcopenshell (same release train); pure Python + deepdiff.

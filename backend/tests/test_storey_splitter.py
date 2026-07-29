@@ -4,8 +4,7 @@ All tests are pure (no IfcOpenShell file I/O): IFC model objects are
 constructed with MagicMock so the suite runs on any platform.
 """
 
-from unittest.mock import MagicMock, patch
-import pytest
+from unittest.mock import MagicMock
 
 from app.services.storey_splitter import StoreyFragmentSplitter, StoreyInfo, StoreyManifest
 

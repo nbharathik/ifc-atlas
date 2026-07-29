@@ -8,6 +8,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBudgetSummary, resetAgentBudget } from '../../services/api';
 import type { BudgetAgentRow, BudgetSummary } from '../../services/api';
+import { useShallow } from 'zustand/react/shallow';
+
 import { useStore } from '../../store/useStore';
 
 import { statusColor, usedPercent } from './budgetDashboardHelpers';
@@ -64,7 +66,13 @@ function BudgetBar({ row, onReset, resetting }: BudgetBarProps) {
 // ─── BudgetDashboardPanel ─────────────────────────────────────────────────────
 
 export function BudgetDashboardPanel() {
-  const { budgetPanelOpen, setBudgetPanelOpen, addToast } = useStore();
+  const { budgetPanelOpen, setBudgetPanelOpen, addToast } = useStore(
+    useShallow((s) => ({
+      budgetPanelOpen: s.budgetPanelOpen,
+      setBudgetPanelOpen: s.setBudgetPanelOpen,
+      addToast: s.addToast,
+    })),
+  );
 
   const [summary, setSummary] = useState<BudgetSummary | null>(null);
   const [loading, setLoading] = useState(false);

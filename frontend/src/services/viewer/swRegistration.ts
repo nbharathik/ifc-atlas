@@ -13,16 +13,33 @@ export interface SwRegistrationResult {
   error?: string;
 }
 
+/**
+ * Build stamp forwarded to the service worker as its cache namespace.
+ *
+ * The worker caches cache-first, so without a per-build namespace a returning
+ * visitor keeps the previous build's `worker.mjs` and wasm forever. The stamp
+ * changes on every build, which makes the old cache unreachable and lets the
+ * worker's activate handler delete it.
+ */
+declare const __SW_BUILD_ID__: string | undefined;
+
+const SW_BUILD_ID: string =
+  typeof __SW_BUILD_ID__ === 'string' ? __SW_BUILD_ID__ : 'dev';
+
+const SW_QUERY = `?v=${encodeURIComponent(SW_BUILD_ID)}`;
+
 export async function registerWasmServiceWorker(): Promise<SwRegistrationResult> {
   if (!('serviceWorker' in navigator)) {
     return { status: 'unsupported' };
   }
   try {
     const existing = await navigator.serviceWorker.getRegistration('/');
-    if (existing?.active) {
+    // Suffix compare rather than URL parsing: this module is exercised in a
+    // node test environment with no global location to resolve against.
+    if (existing?.active?.scriptURL?.endsWith(SW_QUERY)) {
       return { status: 'already-active' };
     }
-    await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    await navigator.serviceWorker.register(`/sw.js${SW_QUERY}`, { scope: '/' });
     return { status: 'registered' };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

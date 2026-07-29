@@ -1,5 +1,4 @@
 """Tests for the IFC entity dependency graph."""
-import pytest
 from app.services.entity_dependency_graph import (
     EntityDependencyGraph,
     build_from_ifc,

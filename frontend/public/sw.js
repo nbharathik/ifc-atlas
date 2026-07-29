@@ -3,15 +3,16 @@
 //
 // Scope: / (serves all paths from the same origin)
 // Cache strategy: cache-first for WASM/worker files; passthrough for all else.
-// Versioning: bump CACHE_NAME when the WASM files are updated (npm upgrade).
+//
+// The cache namespace comes from the `?v=` build stamp the registration adds,
+// never from a literal edited by hand. Cache-first plus a hand-bumped name is
+// how a stale worker.mjs survives across releases: the classifier that decides
+// which geometry is visible runs inside that worker, so a skew is not benign.
+const BUILD_ID = new URL(self.location.href).searchParams.get('v') || 'dev';
+const CACHE_NAME = `ifc-wasm-${BUILD_ID}`;
 
-const CACHE_NAME = 'ifc-wasm-v2-st';
-
-// These files are loaded on every IFC parse/viewer startup. web-ifc is forced
-// to single-thread mode by the browser runtime patch, so pre-caching the MT
-// binary wastes bandwidth and storage without shortening the active path.
-// Pre-caching them means the first parse after a page refresh doesn't block
-// on a network round-trip for the WASM binary.
+// web-ifc is forced to single-thread mode by the browser runtime patch, so the
+// MT binary is never fetched and is not shipped.
 const PRECACHE_URLS = ['/web-ifc.wasm', '/worker.mjs'];
 
 // Install: fetch and cache WASM + worker files, then take control immediately.

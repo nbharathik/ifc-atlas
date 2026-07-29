@@ -1,6 +1,5 @@
 """Tests for SessionMemory - per-WS fact accumulator."""
 import json
-import pytest
 from app.services.session_memory import SessionMemory
 
 

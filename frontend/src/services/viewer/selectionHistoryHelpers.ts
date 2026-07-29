@@ -95,15 +95,3 @@ export function goForward(state: SelectionHistoryState): SelectionHistoryState {
 export function resetHistory(): SelectionHistoryState {
   return { stack: [], pointer: -1 };
 }
-
-/**
- * Visibility predicate for the floating SelectionHistoryNav overlay. Hidden
- * until the user has actually selected at least two elements so a fresh
- * model has zero extra viewport chrome.
- */
-export function shouldShowSelectionHistoryNav(
-  modelLoaded: boolean,
-  state: SelectionHistoryState,
-): boolean {
-  return modelLoaded && state.stack.length >= 2;
-}

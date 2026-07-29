@@ -1,7 +1,6 @@
 """Tests for model_health.py - rule engine (no IfcOpenShell file I/O)."""
 
-from unittest.mock import MagicMock, patch
-import pytest
+from unittest.mock import MagicMock
 
 from app.services.model_health import (
     run_health_check,

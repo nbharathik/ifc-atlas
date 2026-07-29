@@ -87,6 +87,125 @@ export function wsUrl(path: string): string {
   return `${proto}//${host}${path}`;
 }
 
+const API_TOKEN_STORAGE_KEY = 'ifc-atlas.api-token';
+let desktopTokenPromise: Promise<string | null> | null = null;
+let authenticatedFetchInstalled = false;
+
+/** Store a shared-server bootstrap token for the lifetime of this browser tab. */
+export function setServerApiToken(token: string): void {
+  if (typeof sessionStorage === 'undefined') return;
+  const normalized = token.trim();
+  if (normalized) {
+    sessionStorage.setItem(API_TOKEN_STORAGE_KEY, normalized);
+  } else {
+    sessionStorage.removeItem(API_TOKEN_STORAGE_KEY);
+  }
+}
+
+export function clearServerApiToken(): void {
+  if (typeof sessionStorage !== 'undefined') {
+    sessionStorage.removeItem(API_TOKEN_STORAGE_KEY);
+  }
+}
+
+export function getStoredServerApiToken(): string | null {
+  if (typeof sessionStorage === 'undefined') return null;
+  return sessionStorage.getItem(API_TOKEN_STORAGE_KEY)?.trim() || null;
+}
+
+/**
+ * Resolve the credential for the current deployment profile.
+ *
+ * Desktop receives a random per-launch token over Tauri IPC. Web/server mode
+ * uses a per-tab token entered through BackendGate; it is deliberately not
+ * persisted to localStorage or compiled into the frontend bundle.
+ */
+export async function getApiAccessToken(): Promise<string | null> {
+  if (!isDesktop) return getStoredServerApiToken();
+  if (desktopTokenPromise === null) {
+    desktopTokenPromise = invokeCommand<string>('get_backend_auth_token')
+      .then((token) => token?.trim() || null)
+      .catch(() => null);
+  }
+  return desktopTokenPromise;
+}
+
+function requestUrl(input: RequestInfo | URL): URL | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const value =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+    return new URL(value, window.location.href);
+  } catch {
+    return null;
+  }
+}
+
+function isBackendApiRequest(input: RequestInfo | URL): boolean {
+  const url = requestUrl(input);
+  if (url === null || !url.pathname.startsWith('/api/')) return false;
+  if (!isDesktop) return url.origin === window.location.origin;
+  try {
+    return url.origin === new URL(backendOrigin()).origin;
+  } catch {
+    return false;
+  }
+}
+
+function mergeAuthorization(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  token: string,
+): RequestInit {
+  const headers = new Headers(input instanceof Request ? input.headers : undefined);
+  new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
+  if (!headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  return { ...init, headers };
+}
+
+/**
+ * Install one narrowly-scoped fetch interceptor for Atlas API URLs.
+ *
+ * Existing feature modules currently call `fetch(apiUrl(...))` directly. This
+ * central boundary secures all of them now; Phase 1's generated API client can
+ * replace the interceptor without another backend authentication change.
+ */
+export function installApiAuthentication(): void {
+  if (
+    authenticatedFetchInstalled
+    || typeof window === 'undefined'
+    || typeof window.fetch !== 'function'
+  ) {
+    return;
+  }
+  authenticatedFetchInstalled = true;
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (!isBackendApiRequest(input)) {
+      return nativeFetch(input, init);
+    }
+    const token = await getApiAccessToken();
+    return nativeFetch(
+      input,
+      token ? mergeAuthorization(input, init, token) : init,
+    );
+  };
+}
+
+/** Build an authenticated browser WebSocket URL without logging the token. */
+export async function authenticatedWsUrl(path: string): Promise<string> {
+  const url = new URL(wsUrl(path));
+  const token = await getApiAccessToken();
+  if (token) url.searchParams.set('access_token', token);
+  return url.toString();
+}
+
 /**
  * Call a Tauri IPC command (Rust handler). Returns null on web.
  * Caller must handle the null case gracefully.

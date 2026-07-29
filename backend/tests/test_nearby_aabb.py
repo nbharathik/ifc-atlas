@@ -1,6 +1,6 @@
 """Tests for the AABB-backed find_nearby_elements upgrade.
 
-Covers the pure geometry helpers in app.services.spatial_proximity plus the
+Covers the pure geometry helpers in app.services.aabb_service plus the
 tool-router path selection: real-box surface distances when the AABB cache is
 warm (geometry: "aabb"), and the legacy placement-origin fallback flagged as
 approximate (geometry: "placement_origin") when it is cold.
@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.services.spatial_proximity import (
+from app.services.aabb_service import (
     aabb_center_distance,
     aabb_surface_distance,
     find_nearby_via_aabbs,
@@ -155,7 +155,9 @@ def test_execute_tool_uses_aabb_path_when_cache_warm():
         svc.model = _model(entities)
         svc._get_storey = lambda e: "Level 1"
         aabb.get_all_aabbs.return_value = BOXES
-        result = execute_tool("find_nearby_elements", {"element_id": 1, "radius_m": 2.0})
+        result = execute_tool(
+            "query_elements", {"mode": "near", "element_id": 1, "radius_m": 2.0}
+        )
 
     assert result["geometry"] == "aabb"
     assert result["count"] == 2
@@ -179,7 +181,9 @@ def test_execute_tool_falls_back_when_cache_cold():
             "count": 1,
             "elements": [{"id": 2}],
         }
-        result = execute_tool("find_nearby_elements", {"element_id": 1, "radius_m": 2.0})
+        result = execute_tool(
+            "query_elements", {"mode": "near", "element_id": 1, "radius_m": 2.0}
+        )
 
     assert result["geometry"] == "placement_origin"
     assert "approximate" in result["geometry_note"]
@@ -203,7 +207,9 @@ def test_execute_tool_falls_back_when_ref_element_uncached():
             "count": 0,
             "elements": [],
         }
-        result = execute_tool("find_nearby_elements", {"element_id": 1, "radius_m": 2.0})
+        result = execute_tool(
+            "query_elements", {"mode": "near", "element_id": 1, "radius_m": 2.0}
+        )
 
     assert result["geometry"] == "placement_origin"
     svc.find_nearby_elements.assert_called_once()
@@ -223,7 +229,7 @@ def test_execute_tool_non_string_fingerprint_skips_aabb_probe():
             "count": 0,
             "elements": [],
         }
-        result = execute_tool("find_nearby_elements", {"element_id": 1})
+        result = execute_tool("query_elements", {"mode": "near", "element_id": 1})
 
     aabb.get_all_aabbs.assert_not_called()
     assert result["geometry"] == "placement_origin"
@@ -234,5 +240,5 @@ def test_execute_tool_missing_element_id_still_errors():
 
     with patch("app.services.tools.ifc_service") as svc:
         svc.is_loaded = True
-        result = execute_tool("find_nearby_elements", {})
+        result = execute_tool("query_elements", {"mode": "near"})
     assert "error" in result

@@ -44,9 +44,8 @@ renderer, chat, edit, or sync code.
 │  │  ↳ ifc_service.py       (IfcOpenShell reads + writes)     │ │
 │  │  ↳ llm_service.py       (OpenAI/Anthropic/OpenRouter)     │ │
 │  │  ↳ tools.py             (tool registry + router)          │ │
-│  │  ↳ agent_registry.py    (agent presets)                   │ │
-│  │  ↳ ids_service.py       (IDS 1.0 validator)               │ │
-│  │  ↳ mcp_registry.py      (MCP scaffold)                    │ │
+│  │  ↳ … plus ~60 more service modules (agents, IDS,          │ │
+│  │    fragments, spatial tiles, MCP, …); see BACKEND.md      │ │
 │  └───────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -67,9 +66,9 @@ Both paths refer to the same uploaded file, so the backend can serve semantic he
 3. Backend's `chat_routes.py` resolves the agent preset → system prompt + tool allowlist + model.
 4. `llm_service.py` streams a function-calling request to OpenAI / Anthropic / OpenRouter.
 5. For each tool call the LLM emits, `tools.py` routes it:
-   - **Read-only** (e.g. `get_model_stats`, `search_elements`) → `ifc_service.py` → IfcOpenShell → JSON reply. (In the default hybrid tool mode the basic read tools run in the browser against the in-memory model index instead, via a `tool_call_request` round trip.)
-   - **Viewer op** (e.g. `highlight_elements`, `isolate_elements`) → dedicated WebSocket event (`highlight`, `isolate`, ...) → frontend mutates the Zustand store.
-   - **Write** (e.g. `delete_element`, `execute_ifc_code`) → sandboxed IfcOpenShell copy → structural diff → `pending_edit` envelope (tool result + model-sync WS broadcast) → user Applies or Discards over REST.
+   - **Read-only** (e.g. `describe_model`, `query_elements`) → `ifc_service.py` → IfcOpenShell → JSON reply. (In the default hybrid tool mode the basic read calls run in the browser against the in-memory model index instead, via a `tool_call_request` round trip.)
+   - **Viewer op** (`viewer_control` actions such as `highlight` or `isolate`) → executed in the browser (or shipped as a dedicated WebSocket event when run server-side) → frontend mutates the Zustand store.
+   - **Write** (e.g. `edit_structural`, `execute_ifc_code`) → sandboxed IfcOpenShell copy → structural diff → `pending_edit` envelope (tool result + model-sync WS broadcast) → user Applies or Discards over REST.
 6. Every tool call + result is streamed back as `tool_call` / `tool_result` events for the per-message log.
 7. The LLM's text streams back as `chunk` events; a final `done` event carries the full reply.
 
@@ -79,16 +78,16 @@ The Edit surface is enabled by default and gates on the backend's
 `EDIT_MODE_ENABLED` runtime setting. Set it to `0` for a read-only deployment;
 the frontend probes the same capability so UI and backend cannot disagree.
 
-Simple attribute edits (`rename_element`, `update_property_value`, and their
-batch variants) take a direct fast path: they mutate the live model
-immediately, record an inverse-delta undo entry, and stream a
-`metadata_changed` event. Everything else goes through the sandbox:
+Simple metadata edits (`edit_semantic` ops from the human editor UI or MCP)
+take a direct fast path: they mutate the live model immediately, record an
+inverse-delta undo entry, and stream a `metadata_changed` event. Everything
+else goes through the sandbox:
 
 ```
 User: "delete the duplicate wall"
       │
       ▼
-Edit-Assistant agent ─── tool_call: delete_element(…)
+Edit-Assistant agent ─── tool_call: edit_structural(ops=[{op: 'delete_element', …}])
       │
       ▼
 Backend sandbox ────────► snapshot the live .ifc to a scratch copy
@@ -138,5 +137,5 @@ Frontend DiffPreviewPanel renders before/after
 - [`EDIT_PROTOCOL.md`](EDIT_PROTOCOL.md), sandbox / diff / Apply / Discard contract in detail.
 - [`DEPLOY.md`](DEPLOY.md), web / Tauri / GH-Pages matrices.
 - [`TAURI.md`](TAURI.md), desktop architecture specifics.
-- [`BIM_VIEWER_DALUX_REVIEW.md`](BIM_VIEWER_DALUX_REVIEW.md), viewer stability,
-  performance, Dalux benchmark, and prioritized implementation plan.
+- [`history/`](history/README.md), completed phase plans and reviews, including
+  the July 2026 viewer audit ([`BIM_VIEWER_DALUX_REVIEW.md`](history/BIM_VIEWER_DALUX_REVIEW.md)).

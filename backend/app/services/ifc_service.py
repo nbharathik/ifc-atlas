@@ -269,7 +269,7 @@ class IfcService:
 
         # Rebuild the entity dependency graph for dirty-set computation.
         try:
-            from app.services.entity_dependency_graph import rebuild_graph
+            from app.services.element_relationships import rebuild_graph
             rebuild_graph(self._model)
         except Exception:
             pass

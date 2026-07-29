@@ -8,6 +8,7 @@ dev/
 memory/
 CLAUDE.md
 AGENTS.md
+!docs/agent/AGENTS.md
 dev.py
 reset-and-start.ps1
 scripts/make-tester-zip.ps1

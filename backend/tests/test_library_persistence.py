@@ -6,7 +6,8 @@ must never corrupt or truncate the file, and no temp files may be left behind.
 
 from __future__ import annotations
 
-from app.services import carbon_service, cost_service
+from app.services import qto_service as carbon_service
+from app.services import qto_service as cost_service
 
 
 def test_cost_rates_roundtrip_and_no_temp_leftovers(tmp_path, monkeypatch):

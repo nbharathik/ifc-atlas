@@ -1,10 +1,12 @@
 import { Suspense, lazy, useCallback, useEffect, useRef } from 'react';
 import { applyIfcPatchBatch } from './services/viewer/patchApplier';
-import type { IfcPatch } from './types/ifcPatch';
+import type { IfcPatch } from './types/ifc';
 
-import DemoModeBanner from './components/layout/DemoModeBanner';
-import EditScopeBanner from './components/layout/EditScopeBanner';
-import UpdateBanner from './components/layout/UpdateBanner';
+import {
+  DemoModeBanner,
+  EditScopeBanner,
+  UpdateBanner,
+} from './components/layout/banners';
 import KeyboardShortcuts from './components/layout/KeyboardShortcuts';
 import Menubar from './components/layout/Menubar';
 import { applyAccentPreset } from './utils/accentPreset';
@@ -22,12 +24,15 @@ import {
   BROWSER_WEB_IFC_RUNTIME,
   webIfcRuntimeActivitySummary,
 } from './services/ifc/webIfcRuntime';
-import { isRecoverableServerConvertFailure } from './services/viewer/loadStrategy';
+import { isRecoverableServerConvertFailure } from './services/viewer/loadPipeline';
 import { useStore } from './store/useStore';
 import { authenticatedWsUrl } from './lib/platform';
 import { BROWSER_ONLY } from './config/featureFlags';
-import { executeViewerCommand, type ViewerCommandPayload } from './services/viewer/viewerCommandExecutor';
-import { viewerStateReporter } from './services/viewer/viewerStateReporter';
+import {
+  executeViewerCommand,
+  viewerStateReporter,
+  type ViewerCommandPayload,
+} from './services/viewer/viewerBridge';
 import type {
   ElementSummary,
   ModelSyncEvent,

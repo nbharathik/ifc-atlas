@@ -6,7 +6,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../useStore';
-import { createSelectionSectionPreset } from '../../services/viewer/sectionWorkspace';
+import { createSelectionSectionPreset } from '../../services/viewer/sectionTools';
 
 function reset() {
   useStore.setState({

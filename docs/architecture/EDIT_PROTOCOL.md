@@ -13,14 +13,15 @@ to make edits **reviewable, reversible, and race-safe.**
 
 Not every write goes through the sandbox:
 
-- **Direct fast path**, for trusted, bounded, attribute-level edits:
-  `rename_element`, `update_property_value`, `rename_elements_batch`,
-  `update_properties_batch`. These mutate the live IfcOpenShell handle
-  immediately, push an inverse op onto the in-memory undo stack, and stream a
+- **Direct fast path**, for trusted, bounded, metadata edits from the human
+  editor UI or MCP: `edit_semantic` ops (`set_name`, `set_property`,
+  `set_attribute`). These mutate the live IfcOpenShell handle immediately,
+  push an inverse op onto the in-memory undo stack, and stream a
   `metadata_changed` event over the chat WebSocket so the UI patches the tree
   and caches in place.
-- **Sandbox path**, for everything that creates, deletes, or runs arbitrary
-  code: `propose_edit`, `create_wall_from_ends`, `delete_element`,
+- **Sandbox path**, for chat-agent writes and for everything that creates,
+  deletes, or runs arbitrary code: chat-agent `edit_semantic` batches,
+  `edit_structural` (`create_wall` / `delete_element` ops), and
   `execute_ifc_code`. These stage a hash-gated pending edit that the user
   must Apply or Discard.
 
@@ -30,7 +31,7 @@ Not every write goes through the sandbox:
            user: "delete the duplicate wall"
                      |
                      v
-       [LLM] emits delete_element(...)
+       [LLM] emits edit_structural(ops=[{op: "delete_element", ...}])
                      |
                      v
   [router] mode gate (EDIT_MODE_ENABLED + agent category)
@@ -135,9 +136,9 @@ an entry like:
 `undo_last_edit` pops the top of the stack and applies the inverse ops
 directly to the live model (it is itself an immediate edit and emits
 `metadata_changed`). The stack is capped at 20 entries. Bulk operations
-(`rename_elements_batch`, `update_properties_batch`) record a **single undo
-entry** covering all affected elements, so a 100-element batch rename is one
-undo step. `get_edit_history` returns the stack newest-first.
+(multi-op `edit_semantic` batches) record a **single undo entry** covering
+all affected elements, so a 100-element batch rename is one undo step.
+`get_edit_history` returns the stack newest-first.
 
 **Sandbox applies are atomic file swaps**, so they are outside the
 inverse-delta stack; applying a sandbox edit reloads the handle and clears

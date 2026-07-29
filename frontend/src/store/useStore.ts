@@ -5,7 +5,7 @@ import type {
   AgentPreset, ChatAttachment, PendingEditEnvelope, OperationResult,
 } from '../types/ifc';
 import type { ServerConvertCapabilities } from '../services/ifc/serverConvert';
-import { invalidateModelElementDetails } from '../services/ifc/elementDetailInvalidation';
+import { invalidateModelElementDetails } from '../services/ifc/modelHelpers';
 import {
   DEFAULT_PREBUILD_WAIT_PREFS,
   PREBUILD_POLL_MAX_MS,
@@ -44,7 +44,7 @@ import {
   reconcileWorkspaceClipPlanes,
   type RelativeClipPlaneState,
   type SectionWorkspaceDefinition,
-} from '../services/viewer/sectionWorkspace';
+} from '../services/viewer/sectionTools';
 import { STRUCTURAL_EDIT_ENABLED } from '../config/featureFlags';
 
 /**

@@ -1,6 +1,6 @@
 """Unit tests for the embodied-carbon service (pure estimate over a QTO summary)."""
 
-from app.services.carbon_service import (
+from app.services.qto_service import (
     apply_factors,
     carbon_to_csv,
     resolve_factor,

@@ -1,4 +1,4 @@
-"""Tests for the run_model_audit tool + app.services.model_audit.
+"""Tests for the run_model_audit tool + the audit half of app.services.model_health.
 
 The audit model is authored in memory with ifcopenshell.api (mirroring
 test_qto_service): two concrete walls with quantities, a door, and a proxy
@@ -14,8 +14,8 @@ import ifcopenshell
 import ifcopenshell.api
 import pytest
 
-from app.services import model_audit
-from app.services.model_audit import run_model_audit
+from app.services import model_health as model_audit
+from app.services.model_health import run_model_audit
 
 SECTION_NAMES = ["health", "quantities", "cost", "carbon", "ids"]
 VALID_STATUSES = {"ok", "warnings", "issues"}
@@ -30,10 +30,10 @@ def _isolated_rate_libraries(tmp_path, monkeypatch):
     """Pin the cost/carbon libraries to a fresh temp path so the audit prices
     with the shipped defaults (and the empty carbon library + keyword
     fallback) regardless of what other tests persisted earlier."""
-    from app.services import carbon_service, cost_service
+    from app.services import qto_service
 
-    monkeypatch.setattr(cost_service, "_RATES_PATH", tmp_path / "rates.json")
-    monkeypatch.setattr(carbon_service, "_FACTORS_PATH", tmp_path / "factors.json")
+    monkeypatch.setattr(qto_service, "_RATES_PATH", tmp_path / "rates.json")
+    monkeypatch.setattr(qto_service, "_FACTORS_PATH", tmp_path / "factors.json")
 
 
 @pytest.fixture(scope="module")
@@ -250,7 +250,7 @@ def test_execute_tool_run_model_audit(monkeypatch):
             "model_version": 3,
             "edit_id": None,
         }
-        result = execute_tool("run_model_audit", {"limit_per_rule": 5})
+        result = execute_tool("validate_model", {"check": "audit", "limit": 5})
 
     assert result is sentinel
     assert captured["fingerprint"] == "abc:3:None"
@@ -274,7 +274,7 @@ def test_execute_tool_run_model_audit_default_limit(monkeypatch):
             "model_version": 1,
             "edit_id": None,
         }
-        execute_tool("run_model_audit", {})
+        execute_tool("validate_model", {"check": "audit"})
     assert captured["limit_per_rule"] == 10
 
 
@@ -283,7 +283,7 @@ def test_execute_tool_run_model_audit_no_model():
 
     with patch("app.services.tools.ifc_service") as svc:
         svc.is_loaded = False
-        result = execute_tool("run_model_audit", {})
+        result = execute_tool("validate_model", {"check": "audit"})
     assert result == {"error": "No IFC model is currently loaded."}
 
 

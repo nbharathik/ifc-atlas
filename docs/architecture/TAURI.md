@@ -257,5 +257,5 @@ this software path), so the safe-mode configuration is what CI verifies boots.
 ## Related docs
 
 - [Running Tauri](../user/RUNNING_TAURI.md): step-by-step build instructions.
-- [Distribution](DISTRIBUTION.md): how the desktop edition relates to Cloud and Demo.
+- [Deployment and distribution](DEPLOY.md): how the desktop edition relates to Web and Demo.
 - [Data Storage](../user/DATA_STORAGE.md): user-facing description of `~/.ifc-atlas/`.

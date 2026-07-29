@@ -15,8 +15,7 @@ import ifcopenshell.api
 import ifcopenshell.guid
 import pytest
 
-from app.services.element_relationships import build_relationship_map
-from app.services.entity_dependency_graph import build_from_ifc
+from app.services.element_relationships import build_from_ifc, build_relationship_map
 
 
 def _api(verb: str, model, **kwargs):
@@ -211,7 +210,8 @@ def test_execute_tool_relationships(rel_model):
         svc.is_loaded = True
         svc.model = rel_model["model"]
         result = execute_tool(
-            "get_element_relationships", {"element_id": rel_model["wall"].id()}
+            "get_element",
+            {"element_id": rel_model["wall"].id(), "include": ["relationships"]},
         )
     assert result["element"]["name"] == "Wall-A"
     assert result["contained_in"][0]["name"] == "Level 1"
@@ -223,7 +223,7 @@ def test_execute_tool_relationships_missing_arg():
 
     with patch("app.services.tools.ifc_service") as svc:
         svc.is_loaded = True
-        result = execute_tool("get_element_relationships", {})
+        result = execute_tool("get_element", {"include": ["relationships"]})
     assert "error" in result
     assert "element_id" in result["error"]
 
@@ -234,7 +234,9 @@ def test_execute_tool_relationships_unknown_element(rel_model):
     with patch("app.services.tools.ifc_service") as svc:
         svc.is_loaded = True
         svc.model = rel_model["model"]
-        result = execute_tool("get_element_relationships", {"element_id": 999999})
+        result = execute_tool(
+            "get_element", {"element_id": 999999, "include": ["relationships"]}
+        )
     assert "error" in result
     assert "not found" in result["error"]
 
@@ -244,5 +246,7 @@ def test_execute_tool_relationships_no_model():
 
     with patch("app.services.tools.ifc_service") as svc:
         svc.is_loaded = False
-        result = execute_tool("get_element_relationships", {"element_id": 1})
+        result = execute_tool(
+            "get_element", {"element_id": 1, "include": ["relationships"]}
+        )
     assert result == {"error": "No IFC model is currently loaded."}

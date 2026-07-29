@@ -28,14 +28,13 @@ def test_structural_and_semantic_partition_the_write_tools():
 
 def test_geometry_tools_are_structural():
     structural = structural_write_tool_names()
-    for name in ("create_wall_from_ends", "delete_element", "execute_ifc_code", "propose_edit"):
+    for name in ("edit_structural", "execute_ifc_code"):
         assert name in structural, name
 
 
 def test_metadata_tools_are_semantic():
     semantic = semantic_write_tool_names()
-    for name in ("rename_element", "update_property_value",
-                 "rename_elements_batch", "update_properties_batch"):
+    for name in ("edit_semantic", "undo_last_edit"):
         assert name in semantic, name
 
 
@@ -76,7 +75,7 @@ async def _run_and_capture_allowed(edit_scope: str):
          patch("app.services.llm_service.stream_via_langgraph", side_effect=_fake_stream), \
          patch("app.services.llm_service.get_api_key", return_value="key"), \
          patch("app.services.llm_service.EDIT_MODE_ENABLED", True), \
-         patch("app.services.model_context_injector.model_context_injector.inject",
+         patch("app.services.chat_context.model_context_injector.inject",
                side_effect=lambda p, c: p):
         from app.services.llm_service import stream_chat
         async for _ in stream_chat("do it", [], provider="anthropic", edit_scope=edit_scope):
@@ -89,19 +88,16 @@ async def test_semantic_scope_strips_structural_tools():
     allowed = await _run_and_capture_allowed("semantic")
     assert allowed is not None
     # Structural tools gone; semantic write tools + reads remain.
-    assert "create_wall_from_ends" not in allowed
-    assert "delete_element" not in allowed
+    assert "edit_structural" not in allowed
     assert "execute_ifc_code" not in allowed
-    assert "rename_element" in allowed
-    assert "update_property_value" in allowed
-    assert "search_elements" in allowed
+    assert "edit_semantic" in allowed
+    assert "query_elements" in allowed
 
 
 @pytest.mark.asyncio
 async def test_structural_scope_keeps_structural_tools():
     allowed = await _run_and_capture_allowed("structural")
     assert allowed is not None
-    assert "create_wall_from_ends" in allowed
-    assert "delete_element" in allowed
+    assert "edit_structural" in allowed
     assert "execute_ifc_code" in allowed
-    assert "rename_element" in allowed
+    assert "edit_semantic" in allowed

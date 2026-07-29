@@ -1,20 +1,48 @@
-# Deployment Architecture
+# Deployment and Distribution
 
-Three deployment targets share the same frontend codebase, controlled by build flags.
+IFC Atlas ships from a single repository as three editions that share the same
+frontend tree and the same Python backend. The edition is chosen at build time
+via Vite build flags.
 
-| Target | Frontend | Backend | Output |
-|---|---|---|---|
-| **Web (self-hosted)** | Full | Full | Caddy + uvicorn on a VM. |
-| **GitHub Pages demo** | Viewer-only (`VITE_PUBLIC_DEMO=true`) | None | Static `gh-pages` branch. |
-| **Tauri desktop** | Full (`VITE_PLATFORM=tauri`) | Sidecar (bundled) | `src-tauri/target/release/bundle/*` installers. |
+| Edition | Frontend | Backend | Chat | Edit | Output |
+|---|---|---|---|---|---|
+| **Web (self-hosted)** | Full | FastAPI + IfcOpenShell + Node sidecar | Full | Semantic, on by default (`EDIT_MODE_ENABLED=0` to disable) | Caddy + uvicorn on a VM. |
+| **Tauri desktop** | Full (`VITE_PLATFORM=tauri`) | PyInstaller-frozen FastAPI sidecar (bundled) | Full | Semantic, on by default | `src-tauri/target/release/bundle/*` installers. |
+| **GitHub Pages demo** | Viewer-only (`VITE_PUBLIC_DEMO=true`) | None | Disabled | Disabled | Static `gh-pages` branch. |
 
 The user-facing version of this document is [Deploy Your Own](../user/DEPLOY_YOUR_OWN.md).
+
+---
+
+## Build flags
+
+The frontend reads two Vite flags at build time:
+
+| Flag | Effect |
+|---|---|
+| `VITE_PUBLIC_DEMO=true` | Hides the chat panel, strips Tier-3 (write) tool code from the bundle, and short-circuits `/api/*` calls with a friendly empty-state. |
+| `VITE_PLATFORM=tauri` | Enables Tauri API hooks (sidecar address listener, future native menus). Off by default (`web`). |
+
+```bash
+# Web (default)
+npm run build
+
+# Desktop (wrapped by `npm run tauri:build`)
+VITE_PLATFORM=tauri npm run build
+
+# Public demo
+VITE_PUBLIC_DEMO=true npm run build
+```
 
 ---
 
 ## Target 1: Web (self-hosted)
 
 Typical layout: Caddy in front of uvicorn on the same VM; the frontend is prebuilt and served as static files.
+
+- FastAPI serves `/api/*` and `/mcp/*`. WebSocket endpoints at `/api/chat/ws` and `/api/ifc/sync/ws`.
+- The Node sidecar (`backend/sidecar/`) handles server-side fragment conversion, orchestrated by `backend/app/services/sidecar_manager.py`.
+- Hosting that is known to work: any VM with Docker, Fly.io, or Railway. WebSocket support is required.
 
 ### Caddy
 
@@ -54,7 +82,13 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000 \
 - `FRONTEND_URL=https://viewer.example.com`: CORS allow-list.
 - `UPLOAD_DIR=/var/data/viewer-uploads` (persist across restarts).
 - `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY`: secrets manager preferred.
-- `MCP_SERVER_TOKEN`: required when exposing `/mcp/*` to the internet.
+- `IFC_ATLAS_SECURITY_MODE=server`: required for a shared/public deployment (default `local`).
+- `IFC_ATLAS_API_TOKEN`: required in server mode; shared bearer token, at least 32 characters.
+- `IFC_ATLAS_ENABLE_CODE_EXECUTION`: free-form Python/plugin execution; leave `0` on shared servers.
+- `SIDECAR_CONVERT_TIMEOUT_S`: finite server conversion deadline (default 900 s).
+- `MCP_SERVER_TOKEN`: optional separate bearer token for `/mcp/*`; server mode otherwise inherits the main API token.
+
+Full table: [Deploy Your Own](../user/DEPLOY_YOUR_OWN.md#backend-environment-variables).
 
 ### Health check
 
@@ -64,7 +98,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000 \
 
 ## Target 2: GitHub Pages demo
 
-Viewer only. No backend, no chat, no edit.
+Viewer only. No backend reachable, no chat, no edit, no API keys on the wire.
 
 ### Build
 
@@ -73,15 +107,14 @@ cd frontend
 VITE_PUBLIC_DEMO=true npm run build
 ```
 
-The flag:
-
-- removes the chat panel from the DOM,
-- strips Tier-3 (write) tool code from the bundle,
-- short-circuits any `/api/*` call with a friendly empty-state.
-
 The deploy workflow also stages the sample model at `samples/BasicHouse.ifc`
 next to the demo bundle; it is not loaded automatically - users drop a file
 (or the staged sample) into the empty viewer.
+
+### What ships / what is hidden
+
+- **Ships:** viewer, orbit / pan / zoom, selection, isolate / hide, measurement, clip planes, classification browser, aggregate inspector, share-link URLs, keyboard shortcuts.
+- **Hidden:** chat panel, LLM integrations, edit tools, MCP, IDS validator. Models load via in-browser drag-and-drop parsing (`web-ifc`); there is no backend upload. Expect a slower first parse than the server-convert path on large models.
 
 ### GitHub Actions
 
@@ -123,6 +156,8 @@ Python backend bundled as a platform-specific binary at `src-tauri/binaries/ifc-
 
 Spawned by Tauri's sidecar lifecycle API at startup; killed on exit. Listens on `127.0.0.1:8000`; the sidecar announces `BACKEND_READY port=N` on stdout and Tauri relays the port to the frontend via a `backend-ready` event.
 
+The desktop build bundles **one** sidecar (the frozen FastAPI backend). The Node fragment sidecar is **not bundled**: the installed app has no Node runtime, so server-side fragment conversion is unavailable there and model loads use the in-browser web-ifc worker parse (slower on large models). Writable state is isolated to `~/.ifc-atlas/`.
+
 ### Build
 
 ```powershell
@@ -130,18 +165,39 @@ powershell -File scripts\build_sidecar.ps1   # freeze backend
 npm run tauri:build                          # bundle installer
 ```
 
-Artefacts:
+Artefacts land in `src-tauri/target/release/bundle/`:
 
-- `src-tauri/target/release/bundle/msi/IFC Atlas_*.msi` (Windows MSI).
-- `src-tauri/target/release/bundle/nsis/IFC Atlas_*.exe` (Windows NSIS).
-- `src-tauri/target/release/bundle/appimage|deb|rpm/` (Linux, built by
-  `desktop-build.yml` on Ubuntu 22.04).
-- macOS `.dmg` is planned; unsigned bundles are blocked by Gatekeeper, so
-  it needs an Apple Developer certificate and notarization first.
+- `msi/IFC Atlas_*.msi` (Windows MSI).
+- `nsis/IFC Atlas_*.exe` (Windows NSIS).
+- `appimage/`, `deb/`, `rpm/` (Linux, built by `desktop-build.yml` on Ubuntu 22.04; freeze the sidecar with `scripts/build_sidecar.sh` first).
+- macOS `.dmg` is planned; unsigned bundles are blocked by Gatekeeper, so it needs an Apple Developer certificate and notarization first.
 
-### Auto-update (planned)
+### Not yet implemented (post-1.0 hardening)
 
-Tauri's updater plugin is wired but not yet pointed at a release feed. Code signing is also outstanding. Tracked in [TAURI.md → Known gaps](TAURI.md#known-gaps-post-10-hardening).
+- Code signing for Windows and macOS. Unsigned MSI / NSIS work but show a SmartScreen warning.
+- Auto-update: Tauri's updater plugin is wired but not yet pointed at a release feed.
+- File-association launch (`get_open_with_path` returns `None` today).
+- Native menus, recent files, multi-window pop-outs.
+
+Tracked in [TAURI.md → Known gaps](TAURI.md#known-gaps-post-10-hardening).
+
+---
+
+## License notes
+
+The project is MPL-2.0 (see [`LICENSE`](https://github.com/nbharathik/ifc-atlas/blob/main/LICENSE)). Third-party dependencies are catalogued in [`docs/THIRD_PARTY_NOTICES.md`](https://github.com/nbharathik/ifc-atlas/blob/main/docs/THIRD_PARTY_NOTICES.md).
+
+`IfcOpenShell` is LGPL-3.0 (library-copyleft, not full copyleft). The Web edition is open source so the relink requirement is moot. The Desktop edition ships IfcOpenShell as replaceable `.pyd`/`.so` files; THIRD_PARTY_NOTICES.md documents how a user would swap in their own build. The Demo edition does not ship IfcOpenShell (browser-only).
+
+---
+
+## Release artefacts per edition
+
+| Edition | Output | Where | Trigger |
+|---|---|---|---|
+| Web | Frontend `dist/` + backend source + Docker image | Container registry + tagged GitHub release | Manual |
+| Desktop | `.msi` / `.exe` / `.dmg` / `.AppImage` / `.deb` / `.rpm` | GitHub Releases | Manual |
+| Demo | Static frontend | Self-hosted (GitHub Pages, etc.) | Manual |
 
 ---
 

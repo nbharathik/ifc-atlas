@@ -22,7 +22,7 @@
  *   keeps populated fragment-delta payloads as post-release work.
  */
 
-import type { IfcPatch } from '../../types/ifcPatch';
+import type { IfcPatch } from '../../types/ifc';
 import type { SpatialNode } from '../../types/ifc';
 
 // ── ActivityEntry kind re-exported here to avoid circular store imports ──

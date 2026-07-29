@@ -319,7 +319,7 @@ def test_tools_get_project_info_uses_native_index(monkeypatch):
 
     with patch("app.services.tools.ifc_service") as mock_svc:
         mock_svc.is_loaded = True
-        result = tools_module.execute_tool("get_project_info", {})
+        result = tools_module.execute_tool("describe_model", {"part": "project"})
 
     assert result.get("name") == "Native Project"
     assert result.get("_source") == "native_index"
@@ -346,7 +346,7 @@ def test_tools_get_project_info_falls_back_when_index_not_loaded(monkeypatch):
     with patch("app.services.tools.ifc_service") as mock_svc:
         mock_svc.is_loaded = True
         mock_svc.get_project_info.return_value = mock_info
-        result = tools_module.execute_tool("get_project_info", {})
+        result = tools_module.execute_tool("describe_model", {"part": "project"})
 
     assert result.get("name") == "IfcOpenShell Project"
     # Readiness-aware routing - both paths annotate `_source` + `_complete` so
@@ -380,7 +380,9 @@ def test_tools_search_elements_uses_native_index(monkeypatch):
 
     with patch("app.services.tools.ifc_service") as mock_svc:
         mock_svc.is_loaded = True
-        result = tools_module.execute_tool("search_elements", {"query": "wall"})
+        result = tools_module.execute_tool(
+            "query_elements", {"mode": "text", "query": "wall"}
+        )
 
     assert result["_source"] == "native_index"
     assert result["total"] == 1

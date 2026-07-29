@@ -19,7 +19,7 @@ A small chip below the toolbar shows the warm-up state of the backend after an u
 
 The chip is push-driven over the model-sync WebSocket (`type: "readiness_changed"`). While pre-ready, a 10-second safety-net poll hits `GET /api/ifc/readiness`. Both signals stop once the backend settles.
 
-For agents: if a tool returns `{warming: true, …}`, pause for `retry_after_ms` and re-issue the call. Viewer-only tools (`highlight_elements`, `isolate_elements`, `select_element`, `show_all_elements`, `clip_section_box_to_element`) are exempt and run immediately.
+For agents: if a tool returns `{warming: true, …}`, pause for `retry_after_ms` and re-issue the call. The viewer tool (`viewer_control`, every action) and the knowledge tool (`get_docs`) are exempt and run immediately.
 
 ### Mode
 

@@ -46,7 +46,7 @@ async def _run(agent, entry):
          patch("app.services.llm_service.stream_via_langgraph", side_effect=_fake_stream), \
          patch("app.services.llm_service.get_api_key", return_value="key"), \
          patch("app.services.model_registry.model_registry", reg), \
-         patch("app.services.model_context_injector.model_context_injector.inject", side_effect=lambda p, c: p):
+         patch("app.services.chat_context.model_context_injector.inject", side_effect=lambda p, c: p):
         from app.services.llm_service import stream_chat
         return [
             ev async for ev in stream_chat(

@@ -1,4 +1,4 @@
-"""Tests for create_wall_from_ends and delete_element tool execution paths.
+"""Tests for the edit_structural (create_wall / delete_element ops) tool paths.
 
 Pure unit tests - no IfcOpenShell / file-system dependency.
 We mock ifc_service + sandbox_service.propose_edit to verify the ops
@@ -27,7 +27,7 @@ def _make_envelope(edit_id: str = "abc123") -> MagicMock:
 
 
 def _run_create(arguments: dict, envelope=None) -> dict:
-    """Execute create_wall_from_ends via execute_tool with mocked deps."""
+    """Execute an edit_structural create_wall op via execute_tool with mocked deps."""
     from app.services.tools import execute_tool
 
     if envelope is None:
@@ -39,12 +39,14 @@ def _run_create(arguments: dict, envelope=None) -> dict:
     ):
         mock_svc.is_loaded = True
         mock_sb.propose_edit.return_value = envelope
-        result = execute_tool("create_wall_from_ends", arguments)
+        result = execute_tool(
+            "edit_structural", {"ops": [{"op": "create_wall", **arguments}]}
+        )
         return result, mock_sb.propose_edit.call_args
 
 
 def _run_delete(arguments: dict, envelope=None, entity_name="Wall-1", entity_type="IfcWallStandardCase") -> dict:
-    """Execute delete_element via execute_tool with mocked deps."""
+    """Execute an edit_structural delete_element op via execute_tool with mocked deps."""
     from app.services.tools import execute_tool
 
     if envelope is None:
@@ -61,7 +63,9 @@ def _run_delete(arguments: dict, envelope=None, entity_name="Wall-1", entity_typ
         mock_svc.model = MagicMock()
         mock_svc.model.by_id.return_value = mock_entity
         mock_sb.propose_edit.return_value = envelope
-        result = execute_tool("delete_element", arguments)
+        result = execute_tool(
+            "edit_structural", {"ops": [{"op": "delete_element", **arguments}]}
+        )
         return result, mock_sb.propose_edit.call_args
 
 
@@ -148,7 +152,10 @@ def test_create_wall_noop_returns_pending_noop():
     ):
         mock_svc.is_loaded = True
         mock_sb.propose_edit.return_value = None
-        res = execute_tool("create_wall_from_ends", {"start": [0.0, 0.0], "end": [5.0, 0.0]})
+        res = execute_tool(
+            "edit_structural",
+            {"ops": [{"op": "create_wall", "start": [0.0, 0.0], "end": [5.0, 0.0]}]},
+        )
     assert res["action"] == "pending_noop"
 
 
@@ -160,7 +167,9 @@ def test_create_wall_missing_start_returns_error():
     from app.services.tools import execute_tool
     with patch("app.services.tools.ifc_service") as mock_svc:
         mock_svc.is_loaded = True
-        result = execute_tool("create_wall_from_ends", {"end": [5.0, 0.0]})
+        result = execute_tool(
+            "edit_structural", {"ops": [{"op": "create_wall", "end": [5.0, 0.0]}]}
+        )
     assert "error" in result
 
 
@@ -168,19 +177,33 @@ def test_create_wall_missing_end_returns_error():
     from app.services.tools import execute_tool
     with patch("app.services.tools.ifc_service") as mock_svc:
         mock_svc.is_loaded = True
-        result = execute_tool("create_wall_from_ends", {"start": [0.0, 0.0]})
+        result = execute_tool(
+            "edit_structural", {"ops": [{"op": "create_wall", "start": [0.0, 0.0]}]}
+        )
     assert "error" in result
 
 
-def test_create_wall_tool_in_definitions():
+def test_edit_structural_rejects_semantic_op():
+    from app.services.tools import execute_tool
+    with patch("app.services.tools.ifc_service") as mock_svc:
+        mock_svc.is_loaded = True
+        result = execute_tool(
+            "edit_structural",
+            {"ops": [{"op": "set_name", "element_id": 1, "new_name": "x"}]},
+        )
+    assert "error" in result
+    assert "set_name" in result["error"]
+
+
+def test_edit_structural_tool_in_definitions():
     from app.services.tools import TOOL_DEFINITIONS
     names = [t["name"] for t in TOOL_DEFINITIONS]
-    assert "create_wall_from_ends" in names
+    assert "edit_structural" in names
 
 
-def test_create_wall_where_is_server():
+def test_edit_structural_where_is_server():
     from app.services.tools import TOOL_DEFINITIONS
-    tool = next(t for t in TOOL_DEFINITIONS if t["name"] == "create_wall_from_ends")
+    tool = next(t for t in TOOL_DEFINITIONS if t["name"] == "edit_structural")
     assert tool["where"] == "server"
 
 
@@ -238,7 +261,9 @@ def test_delete_element_noop_returns_pending_noop():
         mock_svc.model = MagicMock()
         mock_svc.model.by_id.return_value = mock_entity
         mock_sb.propose_edit.return_value = None
-        result = execute_tool("delete_element", {"element_id": 42})
+        result = execute_tool(
+            "edit_structural", {"ops": [{"op": "delete_element", "element_id": 42}]}
+        )
     assert result["action"] == "pending_noop"
 
 
@@ -250,7 +275,9 @@ def test_delete_element_missing_id_returns_error():
     from app.services.tools import execute_tool
     with patch("app.services.tools.ifc_service") as mock_svc:
         mock_svc.is_loaded = True
-        result = execute_tool("delete_element", {})
+        result = execute_tool(
+            "edit_structural", {"ops": [{"op": "delete_element"}]}
+        )
     assert "error" in result
 
 
@@ -263,20 +290,28 @@ def test_delete_element_entity_not_found_returns_error():
         mock_svc.is_loaded = True
         mock_svc.model = MagicMock()
         mock_svc.model.by_id.side_effect = RuntimeError("not found")
-        result = execute_tool("delete_element", {"element_id": 9999})
+        result = execute_tool(
+            "edit_structural", {"ops": [{"op": "delete_element", "element_id": 9999}]}
+        )
     assert "error" in result
 
 
-def test_delete_element_tool_in_definitions():
-    from app.services.tools import TOOL_DEFINITIONS
-    names = [t["name"] for t in TOOL_DEFINITIONS]
-    assert "delete_element" in names
+def test_edit_structural_multi_op_batch_stages_all_ops():
+    from app.services.tools import execute_tool
 
-
-def test_delete_element_where_is_server():
-    from app.services.tools import TOOL_DEFINITIONS
-    tool = next(t for t in TOOL_DEFINITIONS if t["name"] == "delete_element")
-    assert tool["where"] == "server"
+    with (
+        patch("app.services.tools.ifc_service") as mock_svc,
+        patch("app.services.tools.sandbox_service") as mock_sb,
+    ):
+        mock_svc.is_loaded = True
+        mock_sb.propose_edit.return_value = _make_envelope()
+        result = execute_tool("edit_structural", {"ops": [
+            {"op": "create_wall", "start": [0.0, 0.0], "end": [5.0, 0.0]},
+            {"op": "delete_element", "element_id": 42},
+        ]})
+    assert result["action"] == "pending_edit"
+    ops = mock_sb.propose_edit.call_args.kwargs["operations"]
+    assert [o["op"] for o in ops] == ["create_wall", "delete_element"]
 
 
 # ---------------------------------------------------------------------------

@@ -106,22 +106,22 @@ class TestUsageEvent:
 class TestMemoizableTools:
     def test_read_model_tools_in_memoizable_set(self):
         from app.services.llm_service import _MEMOIZABLE_TOOLS
-        assert "get_project_info" in _MEMOIZABLE_TOOLS
-        assert "get_storeys" in _MEMOIZABLE_TOOLS
-        assert "search_elements" in _MEMOIZABLE_TOOLS
-        assert "get_element_details" in _MEMOIZABLE_TOOLS
+        assert "describe_model" in _MEMOIZABLE_TOOLS
+        assert "query_elements" in _MEMOIZABLE_TOOLS
+        assert "get_element" in _MEMOIZABLE_TOOLS
+        assert "quantity_summary" in _MEMOIZABLE_TOOLS
         assert "execute_ifc_query_code" in _MEMOIZABLE_TOOLS
 
     def test_write_tools_not_in_memoizable_set(self):
         from app.services.llm_service import _MEMOIZABLE_TOOLS
-        assert "rename_element" not in _MEMOIZABLE_TOOLS
-        assert "update_property_value" not in _MEMOIZABLE_TOOLS
+        assert "edit_semantic" not in _MEMOIZABLE_TOOLS
+        assert "edit_structural" not in _MEMOIZABLE_TOOLS
         assert "execute_ifc_code" not in _MEMOIZABLE_TOOLS
+        assert "undo_last_edit" not in _MEMOIZABLE_TOOLS
 
     def test_viewer_tools_not_in_memoizable_set(self):
         from app.services.llm_service import _MEMOIZABLE_TOOLS
-        assert "highlight_elements" not in _MEMOIZABLE_TOOLS
-        assert "isolate_elements" not in _MEMOIZABLE_TOOLS
+        assert "viewer_control" not in _MEMOIZABLE_TOOLS
 
 
 # ---------------------------------------------------------------------------

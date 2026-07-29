@@ -17,27 +17,27 @@ from pydantic import BaseModel
 
 from app.models.ifc_models import ChatRequest, ModelSyncEvent
 from app.core.config import EDIT_MODE_ENABLED
-from app.api.settings_routes import provider_status_payload
+from app.api.system_routes import provider_status_payload
 from app.services.agent_registry import agent_registry, list_agents
 from app.services.agent_graph import graph_manager
 from app.services.ifc_service import ifc_service
 from app.services.llm_service import stream_chat
 from app.services.mcp_registry import mcp_registry
-from app.services.model_context_injector import model_context_injector
+from app.services.chat_context import model_context_injector
 from app.services.model_registry import model_registry
 from app.services.model_sync import model_sync_broker
-from app.services.prompt_library import prompt_library
+from app.services.chat_context import prompt_library
 from app.services.snippet_service import snippet_service
 from app.services.sandbox_service import sandbox_service
-from app.services.tool_sets import tool_set_registry
+from app.services.tool_support import tool_set_registry
 from app.services.tools import (
     get_tool_catalog,
     tool_activity_kind,
     tool_tier,
     tool_where,
 )
-from app.services.tool_settings_service import tool_settings_service
-from app.services.session_memory import SessionMemory
+from app.services.tool_support import tool_settings_service
+from app.services.chat_context import SessionMemory
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -257,7 +257,7 @@ async def delete_tool_set(set_id: str):
 
 
 def _ts_dict(ts) -> dict:
-    from app.services.tool_sets import _to_dict
+    from app.services.tool_support import _to_dict
     return _to_dict(ts)
 
 
@@ -306,7 +306,7 @@ async def delete_prompt(prompt_id: str):
 
 
 def _prompt_dict(p) -> dict:
-    from app.services.prompt_library import _to_dict
+    from app.services.chat_context import _to_dict
     return _to_dict(p)
 
 
@@ -673,7 +673,7 @@ async def reference_docs_status():
     manages the *user's* uploaded documents; reference docs are the API/schema
     knowledge the ``get_docs`` tool consults.
     """
-    from app.services.reference_docs_service import reference_docs_service
+    from app.services.document_index_service import reference_docs_service
     return reference_docs_service.status()
 
 
@@ -689,7 +689,7 @@ async def reference_docs_fetch(source: str = "ifcopenshell"):
     """
     import asyncio
 
-    from app.services.reference_docs_service import reference_docs_service
+    from app.services.document_index_service import reference_docs_service
 
     if source not in ("ifcopenshell", "all"):
         return {"ok": False, "error": f"unknown source '{source}'. Use 'ifcopenshell' or 'all'."}
@@ -723,12 +723,12 @@ CLIENT_TOOL_TIMEOUT_SECONDS = 30.0
 # WS_EVENT: tool_call
 # Server -> client. The agent is invoking a tool.
 # `tier` is the permission boundary; `activity_kind` describes the visible effect so the UI can distinguish read-only work, validation, viewer actions, semantic edits, geometry edits and code execution before the result arrives.
-# Schema: {"type": "tool_call", "name": "search_elements", "arguments": {"query": "wall"}, "tier": "read_model", "tier_label": "Read - Model", "activity_kind": "read_only"}
+# Schema: {"type": "tool_call", "name": "query_elements", "arguments": {"mode": "text", "query": "wall"}, "tier": "read_model", "tier_label": "Read - Model", "activity_kind": "read_only"}
 
 # WS_EVENT: tool_result
 # Server -> client. The result of a tool call. "executed_on" is "server" or "client".
 # When a write tool stages a sandboxed edit, "result" carries {"action": "pending_edit", "edit_id": "...", ...}; the pending_edit / pending_applied / pending_discarded broadcasts themselves go out on the separate model-sync WebSocket at /api/ifc/sync/ws, not on this socket.
-# Schema: {"type": "tool_result", "name": "search_elements", "result": {"elements": [], "total": 42}, "executed_on": "server"}
+# Schema: {"type": "tool_result", "name": "query_elements", "result": {"elements": [], "total": 42}, "executed_on": "server"}
 
 # WS_EVENT: tool_call_request
 # Server -> client. Asks the browser to execute a client-side tool (viewer-state tools in "client"/"hybrid" tool mode). The client must reply within 30 seconds with a tool_result ack: {"type": "tool_result", "tool_call_id": "<same id>", "result": {...}}.
@@ -987,7 +987,9 @@ async def chat_websocket(websocket: WebSocket):
                     return _allowlist_block
 
                 effective_mode = request.tool_mode
-                target = tool_where(name)
+                # Merged tools are client-capable only for specific
+                # modes/parts, so routing is per-call (name + arguments).
+                target = tool_where(name, arguments)
                 if effective_mode == "server":
                     target = "server"
                 elif effective_mode == "client" and target == "server":

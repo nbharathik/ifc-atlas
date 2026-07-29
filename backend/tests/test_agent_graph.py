@@ -8,7 +8,7 @@ Covers:
   - GraphManager public API (save_turn, load_thread, delete_thread)
   - State append semantics (messages accumulate across turns)
   - Graceful degradation when thread has no checkpoint
-  - Helper functions in agent_graph_nodes
+  - Helper functions in agent_graph
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ def fresh_manager():
     from langgraph.graph import StateGraph, END
     from langgraph.checkpoint.memory import MemorySaver
     from app.services.agent_graph import GraphManager
-    from app.services.agent_graph_nodes import IFCAgentState
+    from app.services.agent_graph import IFCAgentState
 
     def _noop(state: IFCAgentState) -> dict:
         return {}
@@ -46,7 +46,7 @@ def fresh_manager():
 # ---------------------------------------------------------------------------
 
 def test_state_required_keys():
-    from app.services.agent_graph_nodes import IFCAgentState
+    from app.services.agent_graph import IFCAgentState
     keys = set(IFCAgentState.__annotations__.keys())
     assert "messages" in keys
     assert "thread_id" in keys
@@ -56,7 +56,7 @@ def test_state_required_keys():
 
 
 def test_make_initial_state_defaults():
-    from app.services.agent_graph_nodes import _make_initial_state
+    from app.services.agent_graph import _make_initial_state
     state = _make_initial_state("t-001")
     assert state["thread_id"] == "t-001"
     assert state["messages"] == []
@@ -67,7 +67,7 @@ def test_make_initial_state_defaults():
 
 
 def test_make_initial_state_custom():
-    from app.services.agent_graph_nodes import _make_initial_state
+    from app.services.agent_graph import _make_initial_state
     state = _make_initial_state("t-002", provider="anthropic", model_id="claude-opus-4-7")
     assert state["provider"] == "anthropic"
     assert state["model_id"] == "claude-opus-4-7"
@@ -78,23 +78,23 @@ def test_make_initial_state_custom():
 # ---------------------------------------------------------------------------
 
 def test_extract_final_text_from_chunks():
-    from app.services.agent_graph_nodes import extract_final_text
+    from app.services.agent_graph import extract_final_text
     events = [
         {"type": "chunk", "content": "Hello "},
-        {"type": "tool_call", "name": "get_project_info"},
+        {"type": "tool_call", "name": "describe_model"},
         {"type": "chunk", "content": "world"},
     ]
     assert extract_final_text(events) == "Hello world"
 
 
 def test_extract_final_text_empty():
-    from app.services.agent_graph_nodes import extract_final_text
+    from app.services.agent_graph import extract_final_text
     assert extract_final_text([]) == ""
     assert extract_final_text([{"type": "tool_call", "name": "foo"}]) == ""
 
 
 def test_build_user_turn_messages():
-    from app.services.agent_graph_nodes import build_user_turn_messages
+    from app.services.agent_graph import build_user_turn_messages
     history = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}]
     msgs = build_user_turn_messages("What walls are on floor 2?", history)
     assert msgs[-1] == {"role": "user", "content": "What walls are on floor 2?"}
@@ -102,17 +102,17 @@ def test_build_user_turn_messages():
 
 
 def test_append_assistant_turn_with_text():
-    from app.services.agent_graph_nodes import append_assistant_turn
+    from app.services.agent_graph import append_assistant_turn
     events = [{"type": "chunk", "content": "There are 5 walls."}]
-    tcs = [{"name": "search_elements", "result": '{"count":5}'}]
+    tcs = [{"name": "query_elements", "result": '{"count":5}'}]
     new_msgs = append_assistant_turn(events, tcs)
     assert new_msgs[0] == {"role": "assistant", "content": "There are 5 walls."}
     assert new_msgs[1]["role"] == "tool"
-    assert new_msgs[1]["name"] == "search_elements"
+    assert new_msgs[1]["name"] == "query_elements"
 
 
 def test_append_assistant_turn_no_text():
-    from app.services.agent_graph_nodes import append_assistant_turn
+    from app.services.agent_graph import append_assistant_turn
     new_msgs = append_assistant_turn([], [])
     assert new_msgs == []
 
@@ -215,7 +215,7 @@ def test_global_graph_manager_roundtrip():
 
 def test_make_langchain_tools_returns_list():
     """make_langchain_tools returns a non-empty list of LangChain tools."""
-    from app.services.agent_graph_nodes import make_langchain_tools
+    from app.services.agent_graph import make_langchain_tools
     tools = make_langchain_tools(allowed_tools=None, tool_executor_fn=None)
     assert isinstance(tools, list)
     assert len(tools) > 0
@@ -223,7 +223,7 @@ def test_make_langchain_tools_returns_list():
 
 def test_make_langchain_tools_all_have_name_and_description():
     """Every returned tool has a non-empty name and description."""
-    from app.services.agent_graph_nodes import make_langchain_tools
+    from app.services.agent_graph import make_langchain_tools
     tools = make_langchain_tools(allowed_tools=None, tool_executor_fn=None)
     for t in tools:
         assert t.name, f"tool missing name: {t}"
@@ -232,8 +232,8 @@ def test_make_langchain_tools_all_have_name_and_description():
 
 def test_make_langchain_tools_allowed_filter():
     """Only tools in allowed_tools frozenset are returned."""
-    from app.services.agent_graph_nodes import make_langchain_tools
-    allowed = frozenset({"get_project_info", "search_elements"})
+    from app.services.agent_graph import make_langchain_tools
+    allowed = frozenset({"describe_model", "query_elements"})
     tools = make_langchain_tools(allowed_tools=allowed, tool_executor_fn=None)
     names = {t.name for t in tools}
     assert names == allowed
@@ -241,16 +241,16 @@ def test_make_langchain_tools_allowed_filter():
 
 def test_make_langchain_tools_empty_allowed_returns_empty():
     """Empty frozenset returns no tools (strict filter)."""
-    from app.services.agent_graph_nodes import make_langchain_tools
+    from app.services.agent_graph import make_langchain_tools
     tools = make_langchain_tools(allowed_tools=frozenset(), tool_executor_fn=None)
     assert tools == []
 
 
 def test_make_langchain_tools_no_args_tool_has_schema():
     """Zero-parameter tools still have an args_schema (empty Pydantic model)."""
-    from app.services.agent_graph_nodes import make_langchain_tools
+    from app.services.agent_graph import make_langchain_tools
     tools = make_langchain_tools(
-        allowed_tools=frozenset({"get_project_info"}),
+        allowed_tools=frozenset({"get_edit_history"}),
         tool_executor_fn=None,
     )
     assert len(tools) == 1
@@ -258,23 +258,24 @@ def test_make_langchain_tools_no_args_tool_has_schema():
 
 
 def test_make_langchain_tools_parametric_tool_schema_fields():
-    """search_elements tool schema exposes 'query' as a required field."""
-    from app.services.agent_graph_nodes import make_langchain_tools
+    """query_elements tool schema exposes 'mode' (required) and 'query'."""
+    from app.services.agent_graph import make_langchain_tools
     tools = make_langchain_tools(
-        allowed_tools=frozenset({"search_elements"}),
+        allowed_tools=frozenset({"query_elements"}),
         tool_executor_fn=None,
     )
     assert len(tools) == 1
     schema = tools[0].args_schema
     assert schema is not None
     fields = schema.model_fields
+    assert "mode" in fields
     assert "query" in fields
 
 
 @pytest.mark.asyncio
 async def test_make_langchain_tools_calls_executor():
     """Tool coroutine calls tool_executor_fn with correct name and args."""
-    from app.services.agent_graph_nodes import make_langchain_tools
+    from app.services.agent_graph import make_langchain_tools
 
     calls = []
 
@@ -283,12 +284,12 @@ async def test_make_langchain_tools_calls_executor():
         return {"result": "ok"}
 
     tools = make_langchain_tools(
-        allowed_tools=frozenset({"search_elements"}),
+        allowed_tools=frozenset({"query_elements"}),
         tool_executor_fn=mock_executor,
     )
     tool = tools[0]
     result = await tool.coroutine(query="walls")
-    assert calls == [("search_elements", {"query": "walls"})]
+    assert calls == [("query_elements", {"query": "walls"})]
     import json
     parsed = json.loads(result)
     assert parsed["result"] == "ok"
@@ -297,12 +298,12 @@ async def test_make_langchain_tools_calls_executor():
 @pytest.mark.asyncio
 async def test_make_langchain_tools_no_executor_falls_back_to_execute_tool():
     """Without executor, tool coroutine calls synchronous execute_tool."""
-    from app.services.agent_graph_nodes import make_langchain_tools
+    from app.services.agent_graph import make_langchain_tools
     import json
 
     with patch("app.services.tools.execute_tool", return_value={"project_name": "TestProj"}):
         tools = make_langchain_tools(
-            allowed_tools=frozenset({"get_project_info"}),
+            allowed_tools=frozenset({"describe_model"}),
             tool_executor_fn=None,
         )
         result = await tools[0].coroutine()
@@ -313,8 +314,8 @@ async def test_make_langchain_tools_no_executor_falls_back_to_execute_tool():
 def test_build_streaming_agent_returns_none_for_unknown_provider():
     """build_streaming_agent returns None for unsupported providers."""
     from app.services.agent_graph import build_streaming_agent
-    from app.services.agent_graph_nodes import make_langchain_tools
-    tools = make_langchain_tools(frozenset({"get_project_info"}), None)
+    from app.services.agent_graph import make_langchain_tools
+    tools = make_langchain_tools(frozenset({"describe_model"}), None)
     graph = build_streaming_agent("gemini", "gemini-1.5", tools, "sys", 0.3)
     assert graph is None
 
@@ -322,10 +323,10 @@ def test_build_streaming_agent_returns_none_for_unknown_provider():
 def test_build_streaming_agent_openai_returns_compiled_graph():
     """build_streaming_agent returns a compiled graph for openai when key set."""
     from app.services.agent_graph import build_streaming_agent
-    from app.services.agent_graph_nodes import make_langchain_tools
+    from app.services.agent_graph import make_langchain_tools
     from unittest.mock import patch
 
-    tools = make_langchain_tools(frozenset({"get_project_info"}), None)
+    tools = make_langchain_tools(frozenset({"describe_model"}), None)
     with patch("app.services.secrets_service.get_api_key", return_value="fake-key-for-test"):
         graph = build_streaming_agent("openai", "gpt-4o", tools, "You are a BIM assistant.", 0.3)
     # Graph should be non-None (compiled CompiledStateGraph)
@@ -352,9 +353,9 @@ def test_build_streaming_agent_empty_tools_returns_none():
 def test_build_streaming_agent_missing_api_key_returns_none():
     """build_streaming_agent returns None when the API key is absent."""
     from app.services.agent_graph import build_streaming_agent
-    from app.services.agent_graph_nodes import make_langchain_tools
+    from app.services.agent_graph import make_langchain_tools
 
-    tools = make_langchain_tools(frozenset({"get_project_info"}), None)
+    tools = make_langchain_tools(frozenset({"describe_model"}), None)
     with patch("app.services.secrets_service.get_api_key", return_value=""):
         graph = build_streaming_agent("openai", "gpt-4o", tools, "sys", 0.3)
     assert graph is None
@@ -711,7 +712,7 @@ async def test_stream_via_langgraph_tool_result_from_toolmessage():
     graph = create_agent(model=FakeToolModel(), tools=[echo])
 
     with patch("app.services.agent_graph.build_streaming_agent", return_value=graph), \
-         patch("app.services.agent_graph_nodes.make_langchain_tools", return_value=[echo]):
+         patch("app.services.agent_graph.make_langchain_tools", return_value=[echo]):
         events = []
         async for ev in stream_via_langgraph(
             message="hi",

@@ -9,62 +9,74 @@ import type { ViewerPerformanceMode } from '../../store/useStore';
 import { apiUrl } from '../../lib/platform';
 import { BROWSER_ONLY, STRUCTURAL_EDIT_ENABLED } from '../../config/featureFlags';
 import { modelService } from '../../services/ifc/ModelService';
-import { ClipPlaneController } from '../../services/viewer/clipPlaneController';
-import { SectionBoxController } from '../../services/viewer/sectionBoxController';
+import { ClipPlaneController, ClipEdgesService } from '../../services/viewer/clipPlanes';
 import {
+  SectionBoxController,
   LatestSectionWorkspaceController,
   createSectionWorkspace,
   createSelectionSectionPreset,
   parseSectionWorkspace,
   toRelativeClipPlaneStates,
   type SectionBounds,
-} from '../../services/viewer/sectionWorkspace';
-import { ClipEdgesService } from '../../services/viewer/clipEdgesService';
+} from '../../services/viewer/sectionTools';
 import {
   MeasurementController,
   type MeasurementSnapshot,
 } from '../../services/viewer/measurementController';
-import { facePointsToVec3 } from '../../services/viewer/vertexSnapHelpers';
 import {
+  facePointsToVec3,
   engineSnapCandidates,
   anchorSnapCandidates,
   selectBestSnapCandidate,
   type ConstructionSnapCandidate,
   type EngineSnapHit,
-} from '../../services/viewer/constructionSnapCandidates';
-import {
   shortestDistanceBetweenTriangleSets,
   type Triangle3,
 } from '../../services/viewer/constructionMeasurement';
 // B5 mount point: wall drawing tool - all logic lives in services/editor/.
-import { WallDrawController } from '../../services/editor/wallDrawController';
+import { WallDrawController } from '../../services/editor/wallDraw';
 import { useLoadProgressPacer } from '../../hooks/useLoadProgressPacer';
 import EditToolbar from './EditToolbar';
-import HighlightBadge from './HighlightBadge';
-import SelectionSummaryChip from './SelectionSummaryChip';
-import PerformanceHud from './PerformanceHud';
-import PerformanceDashboard from './PerformanceDashboard';
-import FloatingChatDock, { FloatingChatPill } from './FloatingChatDock';
-import ViewerResetControl from './ViewerResetControl';
-import MeasurementControls from './MeasurementControls';
-import MeasurementLabels from './MeasurementLabels';
-import MeasurementPanel from './MeasurementPanel';
+import {
+  HighlightBadge,
+  SelectionSummaryChip,
+  FloatingChatDock,
+  FloatingChatPill,
+  ViewerResetControl,
+  ViewerHoverTooltip,
+  ViewportNavControls,
+} from './ViewerOverlays';
+import { PerformanceHud, PerformanceDashboard } from './PerformanceOverlays';
+import {
+  MeasurementControls,
+  MeasurementLabels,
+  MeasurementPanel,
+  MeasurementCursorTip,
+} from './MeasurementOverlay';
 import ViewerContextMenu, { type ContextMenuState } from './ViewerContextMenu';
-import ViewerHoverTooltip from './ViewerHoverTooltip';
-import ViewportNavControls from './ViewportNavControls';
 import ErrorBoundary from '../ui/ErrorBoundary';
 import { findIfcTypeForId, collectLeavesUnder, getSpatialNodeIndex } from '../../services/viewer/spatialTreeHelpers';
-import { setHoverTooltipData } from '../../services/viewer/hoverTooltipBridge';
-import { setMeasurementTip } from '../../services/viewer/measurementTipBridge';
-import { buildMeasurementTip } from '../../services/viewer/measurementTipContent';
-import MeasurementCursorTip from './MeasurementCursorTip';
+import {
+  setHoverTooltipData,
+  decideHoverWork,
+  HOVER_HIGHLIGHT_MATERIAL,
+  INITIAL_TREE_HOVER_STATE,
+  isResolutionStale,
+  onTreeHoverEnter,
+  onTreeHoverLeave,
+  onTreeHoverPainted,
+  shouldSkipResetForSelection,
+  type TreeHoverPreviewState,
+} from '../../services/viewer/hover';
+import { setMeasurementTip, buildMeasurementTip } from '../../services/viewer/measurementPresentation';
 import {
   registerViewerBridge,
   unregisterViewerBridge,
+  createViewerStateCapabilities,
   type ViewerBridgeCapabilities,
+  type ViewerStateCapabilities,
 } from '../../services/viewer/viewerBridge';
-import { buildColourGroups } from '../../services/viewer/colourByHelper';
-import { flattenColourLayers } from '../../services/viewer/colourLayers';
+import { buildColourGroups, flattenColourLayers } from '../../services/viewer/colourTools';
 import {
   resolveParseProfile,
   configureImporter,
@@ -72,19 +84,37 @@ import {
   getWebIfcSettingsForProfile,
   AUTO_PERF_PROFILE_THRESHOLD_BYTES,
 } from '../../services/viewer/parseProfiles';
-import { GHOST_ISOLATION_OPACITY } from '../../services/viewer/ghostModeHelpers';
+import {
+  GHOST_ISOLATION_OPACITY,
+  applyGhostPostproductionState,
+  type GhostPostproductionTarget,
+} from '../../services/viewer/ghostMode';
 import {
   pushClickLatencySample,
   medianClickLatency,
   maxClickLatency,
   p95ClickLatency,
   CLICK_LATENCY_OK_MS,
-} from '../../services/viewer/clickLatencyHelpers';
+  shouldContinueFrameSampling,
+  summarizeFrameDeltas,
+  getMainPassStats,
+  isMainPassFresh,
+  recordMainPass,
+  resetMainPassStats,
+} from '../../services/viewer/perfStats';
 import {
-  decideHoverWork,
-} from '../../services/viewer/hoverHighlightHelpers';
-import { HOVER_HIGHLIGHT_MATERIAL } from '../../services/viewer/hoverMaterialRegistry';
-import {
+  canReuseExactHoverPick,
+  canReusePrefetchedPick,
+  createPickLeaseCoordinator,
+  isClickGesture,
+  isConfirmedVoidPick,
+  isNoopSameElementClick,
+  type PickLeaseCoordinator,
+  createContextMenuPickGuard,
+  type ContextMenuPickOutcome,
+  createLatestAsyncScheduler,
+  type LatestAsyncRunContext,
+  type LatestAsyncScheduler,
   DEFAULT_INTERACTION_QUALITY_STATE,
   HOVER_INTENT_DELAY_MS,
   getRuntimeQualitySettings,
@@ -94,20 +124,7 @@ import {
   type InteractionQualityEvent,
   type InteractionQualityState,
   type RuntimeViewerQuality,
-} from '../../services/viewer/interactionQualityController';
-import {
-  canReuseExactHoverPick,
-  canReusePrefetchedPick,
-  createPickLeaseCoordinator,
-  isClickGesture,
-  isConfirmedVoidPick,
-  isNoopSameElementClick,
-  type PickLeaseCoordinator,
-} from '../../services/viewer/pickingPipeline';
-import {
-  createContextMenuPickGuard,
-  type ContextMenuPickOutcome,
-} from '../../services/viewer/contextMenuPickGuard';
+} from '../../services/viewer/interaction';
 import {
   canUseFurnishingMerge,
   canUseNavigationLod,
@@ -115,13 +132,11 @@ import {
   resolveModelGraphicsQuality,
   shouldAttachNavigationLod,
   type LodTier,
-} from '../../services/viewer/lodTierPolicy';
+  LodSwapController,
+  loadAndAttachLod,
+  type AttachedLod,
+} from '../../services/viewer/lod';
 import { solveCameraFrame } from '../../services/viewer/frameCameraMath';
-import {
-  type FragmentUpdatePriority,
-  type FragmentUpdateReason,
-  type FragmentUpdateScheduler,
-} from '../../services/viewer/fragmentUpdateScheduler';
 import { prewarmExpressToLocalCache, resolveExpressToLocal } from '../../services/viewer/localIdCachePrewarm';
 import {
   anyCullerBuilt,
@@ -130,36 +145,23 @@ import {
   showCullPass,
   type CullerPassPorts,
   type TileViewOptions,
-} from '../../services/viewer/cullerCoordinationHelpers';
+  decideCullerWork,
+  runCullerPlan,
+  type CullerSnapshot,
+  StoreyFrustumCuller,
+  extractStoreyNodes,
+  ElementFrustumCuller,
+  decideCullerPolicy,
+} from '../../services/viewer/cullers';
 import {
   PANEL_RESIZE_END_EVENT,
   PANEL_RESIZE_START_EVENT,
 } from '../../services/viewer/panelResizeSession';
 import {
-  shouldContinueFrameSampling,
-  summarizeFrameDeltas,
-} from '../../services/viewer/frameTimeRecorder';
-import {
-  getMainPassStats,
-  isMainPassFresh,
-  recordMainPass,
-  resetMainPassStats,
-} from '../../services/viewer/renderStatsSnapshot';
-import { LodSwapController, loadAndAttachLod, type AttachedLod } from '../../services/viewer/lodSwap';
-import {
-  applyGhostPostproductionState,
-  type GhostPostproductionTarget,
-} from '../../services/viewer/ghostPostproductionController';
-import {
   SELECTION_HIGHLIGHT_OPACITY,
   computeAmberIds,
   getSelectionHighlightColor,
 } from '../../services/viewer/selectionHighlightHelpers';
-import {
-  createLatestAsyncScheduler,
-  type LatestAsyncRunContext,
-  type LatestAsyncScheduler,
-} from '../../services/viewer/latestAsyncScheduler';
 import {
   RenderStateCoordinator,
   type VisibilityMutationTarget,
@@ -173,12 +175,6 @@ import {
   waitForFragmentReady,
 } from '../../services/ifc/serverConvert';
 import {
-  shouldAttemptServerConvert,
-  shouldRepromoteCapabilities,
-  defaultParsePathLabel,
-  isRecoverableServerConvertFailure,
-} from '../../services/viewer/loadStrategy';
-import {
   fetchNativeGeometryPreview,
   removeNativePreview,
   type NativeGeometryPreview,
@@ -186,16 +182,12 @@ import {
 import {
   streamNativeGeometry,
   type DecodedMesh,
-} from '../../services/viewer/streamingGeometryConsumer';
-import {
   appendBatchToGroup,
   createStreamingMaterialCache,
   disposeStreamingPreview,
-} from '../../services/viewer/streamingPreviewBuilder';
-import {
-  computeSceneBVH,
-  getBVHCoverage,
-} from '../../services/viewer/bvhSetup';
+  fetchStoreyFragment,
+  type StoreyFragmentResult,
+} from '../../services/viewer/streaming';
 import {
   applyFragmentZFightingMitigation,
   hasPendingFragmentZFightingMitigation,
@@ -205,11 +197,6 @@ import {
   applyFurnishingMerge,
   FurnishingMergeLifecycle,
 } from '../../services/viewer/furnishingMerge';
-import {
-  StoreyFrustumCuller,
-  extractStoreyNodes,
-} from '../../services/viewer/storeyFrustumCuller';
-import { ElementFrustumCuller } from '../../services/viewer/elementFrustumCuller';
 import { getSpatialTileManifest } from '../../services/api';
 import { SpatialTileLodService } from '../../services/viewer/spatialTileLod';
 import {
@@ -218,26 +205,14 @@ import {
 } from '../../services/viewer/spatialTileManifestAdapter';
 import { SpatialTileVisibilityController } from '../../services/viewer/spatialTileVisibilityController';
 import {
-  decideCullerWork,
-  runCullerPlan,
-  type CullerSnapshot,
-} from '../../services/viewer/cullerCoordinationHelpers';
-import { ViewerSession } from '../../services/viewer/viewerSession';
-import { createViewerRuntime } from '../../services/viewer/viewerRuntime';
-import {
-  createViewerStateCapabilities,
-  type ViewerStateCapabilities,
-} from '../../services/viewer/viewerStateCapabilities';
-import { decideCullerPolicy } from '../../services/viewer/cullerStatePolicy';
-import {
-  INITIAL_TREE_HOVER_STATE,
-  isResolutionStale,
-  onTreeHoverEnter,
-  onTreeHoverLeave,
-  onTreeHoverPainted,
-  shouldSkipResetForSelection,
-  type TreeHoverPreviewState,
-} from '../../services/viewer/treeHoverPreviewHelpers';
+  ViewerSession,
+  computeSceneBVH,
+  createViewerRuntime,
+  getBVHCoverage,
+  type FragmentUpdatePriority,
+  type FragmentUpdateReason,
+  type FragmentUpdateScheduler,
+} from '../../services/viewer/viewerRuntime';
 import { IfcConvertWorker } from '../../services/viewer/ifcConvertWorker';
 import {
   readFragmentCacheIDB,
@@ -248,16 +223,14 @@ import {
   type FragmentCachePolicy,
 } from '../../services/viewer/fragmentCacheIDB';
 import {
-  fetchStoreyFragment,
-  type StoreyFragmentResult,
-} from '../../services/viewer/streamingLoader';
-import {
   STOREY_FRAGMENT_LOAD_TIMEOUT_MS,
   computeFragmentLoadTimeoutMs,
   computeLiveParseTimeoutMs,
   raceWithTimeout,
-} from '../../services/viewer/loadTimeoutHelpers';
-import {
+  shouldAttemptServerConvert,
+  shouldRepromoteCapabilities,
+  defaultParsePathLabel,
+  isRecoverableServerConvertFailure,
   IMPORT_STAGE_LABELS,
   SERVER_FRAGMENT_LOAD_RETRIES,
   VIEWER_PERF_LOG_STORAGE_KEY,
@@ -286,8 +259,6 @@ import {
   type ViewerModelLoadSource,
   type ViewerLoadProgress,
   type ViewerPerfLogEntry,
-} from '../../services/viewer/loadPipelineHelpers';
-import {
   LOAD_STAGES,
   advancePace,
   createPaceState,
@@ -297,7 +268,7 @@ import {
   presentLoadProgress,
   type LoadPathKind,
   type PaceState,
-} from '../../services/viewer/loadProgressPresenter';
+} from '../../services/viewer/loadPipeline';
 
 // Shared viewer references so toolbar and other components can access them
 export interface ViewerRefs {

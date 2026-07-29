@@ -19,7 +19,7 @@ import {
   flattenVisibleRows,
   computeRowWindow,
   computeDefaultExpandedIds,
-} from '../sidebarTreeRows';
+} from '../Sidebar';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 

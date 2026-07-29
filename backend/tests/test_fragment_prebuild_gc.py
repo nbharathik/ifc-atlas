@@ -1,4 +1,4 @@
-"""Unit tests for ``fragment_prebuild_gc.gc_loop``.
+"""Unit tests for ``fragment_prebuild_service.gc_loop``.
 
 The loop is intentionally testable in isolation - it takes an injected
 ``svc`` plus a ``stop_event`` so we never need to fight ``asyncio.sleep``
@@ -12,13 +12,13 @@ import math
 
 import pytest
 
-from app.services.fragment_prebuild_gc import (
+from app.services.fragment_prebuild_service import (
     DEFAULT_INTERVAL_S,
     DEFAULT_MAX_AGE_S,
+    FragmentPrebuildService,
     _sanitise,
     gc_loop,
 )
-from app.services.fragment_prebuild_service import FragmentPrebuildService
 
 
 @pytest.fixture()

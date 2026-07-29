@@ -76,13 +76,12 @@ Edits fall into two scopes. The user chooses one with the Edit-mode scope toggle
 
 - **Semantic edits** (the default, "safe" scope): change only metadata - names,
   property/pset values, classifications. The 3D viewer updates IN PLACE with **no
-  reload**. Fast, non-disruptive, and the common case. Tools: `rename_element`,
-  `update_property_value`, `update_element_attribute`, `rename_elements_batch`,
-  `update_properties_batch`.
+  reload**. Fast, non-disruptive, and the common case. Tool: `edit_semantic`
+  (ops: set_name, set_property, set_attribute).
 - **Structural edits** ("beta" scope): change geometry - create walls, delete
   elements, or run code that does. Applying one **reloads the 3D viewer**, which is
-  briefly disruptive. Tools: `create_wall_from_ends`, `delete_element`,
-  `execute_ifc_code`, `propose_edit`.
+  briefly disruptive. Tools: `edit_structural` (ops: create_wall, delete_element),
+  `execute_ifc_code`.
 
 In **semantic** scope the structural tools are removed from your toolset entirely -
 you literally cannot call them. If the user asks for a geometry change while in
@@ -106,11 +105,12 @@ edits whenever they satisfy the request.
 3. Tell the user what was staged; they approve it inline (or it auto-applies).
 
 ## Write tools
-- `rename_element(element_id, new_name)` - change the Name of one element.
-- `update_property_value(element_id, property_name, new_value, pset_name?)` - set a
-  single existing property value. Confirm the property and pset first.
-- `update_element_attribute(element_id, attribute, new_value)` - set or clear a
-  safe text attribute (Description, ObjectType, Tag, LongName).
+- `edit_semantic(ops, summary?)` - stage metadata edits as one atomic batch.
+  Ops: {op:'set_name', element_id, new_name}, {op:'set_property', element_id,
+  property_name, new_value, pset_name?}, {op:'set_attribute', element_id,
+  attribute: Description|ObjectType|Tag|LongName, new_value}.
+- `edit_structural(ops, summary?)` - stage geometry changes (structural scope only).
+  Ops: {op:'create_wall', start, end, ...}, {op:'delete_element', element_id, reason?}.
 - `execute_ifc_query_code(code)` - run read-only Python analysis using `model` when
   structured read tools are not expressive enough.
 - `execute_ifc_code(code)` - run an edit-capable sandboxed Python script using `model`
@@ -120,18 +120,20 @@ edits whenever they satisfy the request.
 - `get_edit_history()` - list applied edits so far this session.
 
 ## Read tools (use freely before editing)
-search_elements, get_element_details, get_elements_by_type, get_elements_by_storey,
-get_storeys, get_all_property_names, get_quantities_summary - use these to discover
-what to edit and confirm scope before calling any write tool.
+query_elements (mode: text|semantic|type|storey|type_name|property|near),
+get_element (include: details|material|openings|connections|relationships),
+describe_model (part: project|stats|storeys|property_names), quantity_summary -
+use these to discover what to edit and confirm scope before calling any write tool.
 
-## Knowledge tools (your reference desk - consult BEFORE writing code)
+## Knowledge tool (your reference desk - consult BEFORE writing code)
 - `get_docs(source='ifcopenshell', query|symbol)` - the installed IfcOpenShell API
   reference. **Before any `execute_ifc_code`, look up the exact API you plan to call**
   (e.g. `get_docs(source='ifcopenshell', symbol='ifcopenshell.api.pset.edit_pset')`);
   the API drifts between releases and guessed signatures are the #1 cause of failed edits.
-- `bsdd_search(query)` / `bsdd_get_class(uri)` / `bsdd_get_properties(class_uri)` -
-  the buildingSMART Data Dictionary. **Before assigning classifications or standard
-  property sets**, look the class/property up here instead of inventing codes.
+- `get_docs(source='bsdd', query)` then `get_docs(source='bsdd', uri, detail='class'|
+  'properties')` - the buildingSMART Data Dictionary. **Before assigning
+  classifications or standard property sets**, look the class/property up here
+  instead of inventing codes.
 
 ## ifcopenshell.api quick reference (verify with get_docs before use)
 - `ifcopenshell.api.root.create_entity(f, ifc_class=..., name=...)` - new entity
@@ -152,15 +154,15 @@ diagnose using the verdict's note, consult get_docs, and propose a corrected edi
 1. **Always query before editing.** Call a read tool first to confirm the element ID
    and current value before calling a write tool. Never guess an Express ID.
 2. **Confirm scope for bulk edits.** If the user says "rename all walls", call
-   get_elements_by_type first to count them, then confirm count with the user.
-3. **Use the simplest tool that works.** Prefer rename_element / update_property_value
-   for targeted edits; use execute_ifc_query_code for analysis and execute_ifc_code
+   query_elements (mode='type') first to count them, then confirm count with the user.
+3. **Use the simplest tool that works.** Prefer edit_semantic ops for targeted
+   edits; use execute_ifc_query_code for analysis and execute_ifc_code
    only for bulk or structural changes.
 4. **Consult the docs before codegen.** Any `execute_ifc_code` that calls
    `ifcopenshell.api` must be preceded by a `get_docs` lookup of the symbols used,
    unless they appear in the quick reference above.
 5. **Never invent data.** Only set values the user explicitly requested; look up
-   classification codes and standard psets via the bSDD tools.
+   classification codes and standard psets via get_docs (source='bsdd').
 6. **Be concise after writes.** State what was staged; the user approves it inline
    below your tool call (or it auto-applies in Auto-approve mode).
 """
@@ -171,18 +173,19 @@ about the loaded model, highlight or isolate elements, and explain BIM data. You
 read-only by design - the user uses the **Edit** harness when they want changes.
 
 ## Mode policy (must follow even if write tools are present in your toolset)
-This is the Ask mode. Your toolset MAY include write tools such as `rename_element`,
-`update_property_value`, `execute_ifc_code`, `undo_last_edit`, `create_wall_from_ends`,
-or `delete_element`. **You must NOT call any of those tools.** If a user requests an edit:
+This is the Ask mode. Your toolset MAY include write tools such as `edit_semantic`,
+`edit_structural`, `execute_ifc_code`, or `undo_last_edit`. **You must NOT call any
+of those tools.** If a user requests an edit:
 1. Acknowledge the requested change.
 2. Describe what would happen (which elements, which property, what value).
 3. Tell the user: "Switch to **Edit** mode to apply this change." - do not call a write tool.
 
 ## Guidelines
 - Always retrieve real data with read tools before answering. Never guess.
-- Prefer `get_quantities_summary` over manual sums; `search_by_property` over scanning.
-- Use `highlight_elements`, `select_element`, `isolate_elements`, or `show_all_elements`
-  freely - these are read-side viewer controls and are always allowed.
+- Prefer `quantity_summary` (kind='qto') over manual sums; `query_elements`
+  (mode='property') over scanning.
+- Use `viewer_control` (highlight / select / isolate / show_all) freely - it is a
+  read-side viewer control and always allowed.
 - Reference Express IDs, IFC types, storeys and Psets where it adds clarity.
 - Be concise; use markdown lists and tables for grouped data.
 """
@@ -218,35 +221,22 @@ _BUILTIN_PRESETS: list[AgentPreset] = [
         temperature=0.1,
         icon="edit",
         allowed_tools=frozenset({
-            "get_project_info",
-            "get_model_stats",
-            "search_elements",
-            "get_element_details",
-            "get_elements_by_type",
-            "get_elements_by_storey",
-            "get_storeys",
-            "search_by_property",
-            "get_all_property_names",
+            "describe_model",
+            "query_elements",
+            "get_element",
             "execute_ifc_query_code",
-            "highlight_elements",
-            "select_element",
-            # Semantic write tools (no viewer reload).
-            "rename_element",
-            "update_property_value",
-            "update_element_attribute",
+            "viewer_control",
+            # Semantic write tool (no viewer reload).
+            "edit_semantic",
             # Structural write tools (reload the viewer) - available only in
             # "structural" edit scope; stripped in "semantic" scope.
-            "create_wall_from_ends",
-            "delete_element",
+            "edit_structural",
             "execute_ifc_code",
             "undo_last_edit",
             "get_edit_history",
-            # Knowledge tools: consult the IfcOpenShell API + bSDD before writing
+            # Knowledge tool: consult the IfcOpenShell API + bSDD before writing
             # code or picking classifications/properties.
             "get_docs",
-            "bsdd_search",
-            "bsdd_get_class",
-            "bsdd_get_properties",
         }),
         quick_prompts=(
             "Rename all walls on Ground Floor to 'Exterior Wall'.",
@@ -396,7 +386,17 @@ def _preset_to_dict(p: AgentPreset) -> dict:
 
 def _dict_to_preset(d: dict) -> AgentPreset:
     tools_raw = d.get("allowed_tools")
-    allowed = frozenset(tools_raw) if tools_raw is not None else None
+    if tools_raw is not None:
+        # Persisted agents may predate the merged tool catalog: translate
+        # legacy names (old -> merged successor), dropping unknowns without
+        # error. A non-empty allowlist never migrates to empty (that would
+        # invert its meaning downstream) - inert originals are kept instead.
+        from app.services.tool_support import migrate_tool_names
+
+        migrated = migrate_tool_names(tools_raw)
+        allowed = frozenset(migrated if migrated or not tools_raw else tools_raw)
+    else:
+        allowed = None
     raw_budget = d.get("monthly_budget_usd")
     return AgentPreset(
         id=d["id"],

@@ -123,7 +123,9 @@ def test_get_elements_by_type_envelope_signals_cap(monkeypatch):
     )
     monkeypatch.setattr(tools_mod, "ifc_service", fake_svc)
 
-    out = tools_mod._execute_tool_raw("get_elements_by_type", {"ifc_type": "IfcWall"})
+    out = tools_mod._execute_tool_raw(
+        "query_elements", {"mode": "type", "ifc_type": "IfcWall"}
+    )
 
     assert out["total_count"] == 150
     assert out["count"] == 150

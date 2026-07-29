@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 class TestModelContextInjector:
     def _make_injector(self):
-        from app.services.model_context_injector import ModelContextInjector
+        from app.services.chat_context import ModelContextInjector
         return ModelContextInjector()
 
     def _make_mock_service(self, *, has_model=True, fingerprint="fp123"):
@@ -145,7 +145,7 @@ class TestBuiltinAgentPresets:
         from app.services.agent_registry import agent_registry
         agent = agent_registry.get("edit-assistant")
         assert agent.allowed_tools is not None
-        assert "rename_element" in agent.allowed_tools
+        assert "edit_semantic" in agent.allowed_tools
         assert "execute_ifc_code" in agent.allowed_tools
         assert agent.category == "edit"
 

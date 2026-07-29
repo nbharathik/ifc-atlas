@@ -372,7 +372,7 @@ def _run_batch_rename(arguments: dict) -> dict:
     with patch("app.services.tools.ifc_service") as mock_svc:
         mock_svc.is_loaded = True
         mock_svc.rename_elements_batch.return_value = mock_result
-        return execute_tool("rename_elements_batch", arguments, actor=Actor.MCP)
+        return execute_tool("edit_semantic", arguments, actor=Actor.MCP)
 
 
 def _run_batch_update(arguments: dict) -> dict:
@@ -392,46 +392,89 @@ def _run_batch_update(arguments: dict) -> dict:
     with patch("app.services.tools.ifc_service") as mock_svc:
         mock_svc.is_loaded = True
         mock_svc.update_properties_batch.return_value = mock_result
-        return execute_tool("update_properties_batch", arguments, actor=Actor.MCP)
+        return execute_tool("edit_semantic", arguments, actor=Actor.MCP)
 
 
 class TestExecuteToolDispatch:
     def test_rename_batch_dispatched(self):
-        result = _run_batch_rename({"renames": [{"element_id": 1, "new_name": "NewName"}]})
-        assert result["changed_count"] == 1
+        # Two set_name ops → the homogeneous batch dispatches to
+        # rename_elements_batch (one atomic undo entry).
+        result = _run_batch_rename({"ops": [
+            {"op": "set_name", "element_id": 1, "new_name": "NewName"},
+            {"op": "set_name", "element_id": 2, "new_name": "Other"},
+        ]})
+        assert result["changed_count"] == 1  # preset mock result
 
     def test_rename_batch_bad_type_returns_error(self):
-        result = _run_batch_rename({"renames": "not-a-list"})
+        result = _run_batch_rename({"ops": "not-a-list"})
         assert "error" in result
 
-    def test_rename_batch_missing_key_uses_empty(self):
-        _run_batch_rename({})
-        # Empty renames → 0 changed; the mock returns the preset result but
-        # execute_tool should pass an empty list to the service.
-        # Since we mocked rename_elements_batch, just verify it was called:
+    def test_missing_ops_returns_error(self):
+        result = _run_batch_rename({})
+        assert "error" in result
+
+    def test_rename_batch_forwards_renames_list(self):
         from app.services.tools import execute_tool
         from app.services.operation_service import Actor
         with patch("app.services.tools.ifc_service") as mock_svc:
             mock_svc.is_loaded = True
             mock_svc.rename_elements_batch.return_value = {"changed_count": 0, "results": []}
-            execute_tool("rename_elements_batch", {}, actor=Actor.MCP)
-            mock_svc.rename_elements_batch.assert_called_once_with([])
+            execute_tool("edit_semantic", {"ops": [
+                {"op": "set_name", "element_id": 1, "new_name": "A"},
+                {"op": "set_name", "element_id": 2, "new_name": "B"},
+            ]}, actor=Actor.MCP)
+            mock_svc.rename_elements_batch.assert_called_once_with([
+                {"element_id": 1, "new_name": "A"},
+                {"element_id": 2, "new_name": "B"},
+            ])
 
     def test_update_batch_dispatched(self):
-        result = _run_batch_update({
-            "updates": [{"element_id": 1, "property_name": "P", "new_value": "v"}]
-        })
-        assert result["changed_count"] == 1
+        result = _run_batch_update({"ops": [
+            {"op": "set_property", "element_id": 1, "property_name": "P", "new_value": "v"},
+            {"op": "set_property", "element_id": 2, "property_name": "P", "new_value": "w"},
+        ]})
+        assert result["changed_count"] == 1  # preset mock result
 
     def test_update_batch_bad_type_returns_error(self):
-        result = _run_batch_update({"updates": "not-a-list"})
+        result = _run_batch_update({"ops": "not-a-list"})
         assert "error" in result
 
-    def test_update_batch_missing_key_uses_empty(self):
+    def test_update_batch_forwards_updates_list(self):
         from app.services.tools import execute_tool
         from app.services.operation_service import Actor
         with patch("app.services.tools.ifc_service") as mock_svc:
             mock_svc.is_loaded = True
             mock_svc.update_properties_batch.return_value = {"changed_count": 0, "results": []}
-            execute_tool("update_properties_batch", {}, actor=Actor.MCP)
-            mock_svc.update_properties_batch.assert_called_once_with([])
+            execute_tool("edit_semantic", {"ops": [
+                {"op": "set_property", "element_id": 1, "property_name": "P", "new_value": "v"},
+                {"op": "set_property", "element_id": 2, "property_name": "Q", "new_value": "w"},
+            ]}, actor=Actor.MCP)
+            mock_svc.update_properties_batch.assert_called_once_with([
+                {"element_id": 1, "property_name": "P", "new_value": "v"},
+                {"element_id": 2, "property_name": "Q", "new_value": "w"},
+            ])
+
+    def test_mixed_batch_stages_sandbox_proposal_even_for_mcp(self):
+        """A mixed edit_semantic ops batch has no direct operation-layer
+        equivalent, so it falls back to the staged sandbox ceremony."""
+        from types import SimpleNamespace
+        from app.services.tools import execute_tool
+        from app.services.operation_service import Actor
+        env = SimpleNamespace(
+            edit_id="mix-1", summary="mixed", counts={},
+            changes=[], verifier_verdict=None,
+        )
+        with (
+            patch("app.services.tools.ifc_service") as mock_svc,
+            patch(
+                "app.services.tools.sandbox_service.propose_edit",
+                return_value=env,
+            ) as propose,
+        ):
+            mock_svc.is_loaded = True
+            result = execute_tool("edit_semantic", {"ops": [
+                {"op": "set_name", "element_id": 1, "new_name": "A"},
+                {"op": "set_property", "element_id": 2, "property_name": "P", "new_value": "v"},
+            ]}, actor=Actor.MCP)
+        assert result["action"] == "pending_edit"
+        assert propose.call_args.kwargs["operations"][0]["op"] == "set_name"

@@ -7,7 +7,8 @@ import pytest
 ifcopenshell = pytest.importorskip("ifcopenshell")
 pytest.importorskip("ifcdiff")
 
-from app.services import element_factory, history_diff_service
+from app.services import element_factory
+from app.services import diff_service as history_diff_service
 from app.services.project_template_service import create_blank_project
 
 

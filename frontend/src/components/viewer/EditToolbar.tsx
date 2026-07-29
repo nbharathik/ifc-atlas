@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useStore } from '../../store/useStore';
 import { BROWSER_ONLY } from '../../config/featureFlags';
-import { fetchStoreyManifest } from '../../services/viewer/streamingLoader';
-import type {
-  WallDrawCommitEvent,
-  WallDrawController,
-} from '../../services/editor/wallDrawController';
+import { fetchStoreyManifest } from '../../services/viewer/streaming';
 import {
   DEFAULT_WALL_HEIGHT_M,
   DEFAULT_WALL_THICKNESS_M,
@@ -13,7 +9,9 @@ import {
   lowestStorey,
   parseDimension,
   type StoreyOption,
-} from '../../services/editor/wallDrawHelpers';
+  type WallDrawCommitEvent,
+  type WallDrawController,
+} from '../../services/editor/wallDraw';
 import Icon from '../ui/Icon';
 
 interface Props {

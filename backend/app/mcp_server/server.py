@@ -21,7 +21,7 @@ Viewer bridge tools (always exposed):
 Write tools (gated) come in two kinds with DIFFERENT semantics:
 
 * Staged (two-call diff-preview; requires MCP_ALLOW_WRITES=1):
-  create_wall_from_ends, delete_element, execute_ifc_code.
+  edit_structural, execute_ifc_code.
   1. The tool call returns a pending_edit envelope (edit_id + diff preview).
   2. Call apply_pending_edit(edit_id) to commit, or discard_pending_edit
      to abandon. The envelope is published on the model-sync WebSocket so any
@@ -30,11 +30,12 @@ Write tools (gated) come in two kinds with DIFFERENT semantics:
 
 * Direct operations (apply IMMEDIATELY; require MCP_ALLOW_WRITES=1 AND the
   backend's EDIT_MODE_ENABLED=1, mirroring the human editor gate):
-  rename_element, update_property_value, undo_last_edit.
+  edit_semantic, undo_last_edit.
   These route through the operation layer with actor=mcp (audited op log,
   undo/redo), mutate the live model in one call - do NOT call
   apply_pending_edit afterwards - and broadcast the same sync events the
-  editor UI emits, so connected viewers update live.
+  editor UI emits, so connected viewers update live. (A mixed edit_semantic
+  ops batch falls back to the staged ceremony.)
 
 All writes are serialized on the shared edit lock (app.services.edit_lock):
 an MCP write can never interleave with a UI operation or a chat-agent edit.
@@ -98,29 +99,22 @@ _all_tool_names: frozenset[str] = frozenset(t["name"] for t in TOOL_DEFINITIONS)
 
 _WRITE_ALLOWLIST: frozenset[str] = frozenset({
     # Staged (pending-edit ceremony)
-    "create_wall_from_ends",
-    "delete_element",
+    "edit_structural",
     "execute_ifc_code",
-    "propose_edit",
     # Direct operations (see _DIRECT_OP_TOOLS)
-    "rename_element",
-    "update_property_value",
-    "update_element_attribute",
-    "rename_elements_batch",
-    "update_properties_batch",
+    "edit_semantic",
     "undo_last_edit",
 })
 
 # Direct-operation tools mutate the live model immediately (no pending-edit
-# ceremony). They additionally require the backend's EDIT_MODE_ENABLED - the
-# same gate the human editor honours (Invariant 4 dual-mode gating) - so
-# MCP_ALLOW_WRITES alone only unlocks the previewed/staged write path.
+# ceremony) when called with actor=MCP. They additionally require the
+# backend's EDIT_MODE_ENABLED - the same gate the human editor honours
+# (Invariant 4 dual-mode gating) - so MCP_ALLOW_WRITES alone only unlocks the
+# previewed/staged write path. (edit_semantic single ops and homogeneous
+# batches apply directly through the operation layer for actor=MCP; mixed
+# batches fall back to the staged ceremony.)
 _DIRECT_OP_TOOLS: frozenset[str] = frozenset({
-    "rename_element",
-    "update_property_value",
-    "update_element_attribute",
-    "rename_elements_batch",
-    "update_properties_batch",
+    "edit_semantic",
     "undo_last_edit",
 })
 
@@ -238,7 +232,7 @@ _ELEMENT_IDS_SCHEMA: dict[str, Any] = {
     "type": "array",
     "items": {"type": "integer"},
     "description": (
-        "Numeric element ids (express ids, as returned by search_elements "
+        "Numeric element ids (express ids, as returned by query_elements "
         "and the other model query tools)."
     ),
 }
@@ -564,8 +558,8 @@ async def _handle_write_tool(
                 "error": (
                     f"Tool '{name}' applies immediately to the live model and "
                     "requires the backend's EDIT_MODE_ENABLED=1 in addition to "
-                    "MCP_ALLOW_WRITES=1. Staged tools (create_wall_from_ends, "
-                    "delete_element, execute_ifc_code) remain available."
+                    "MCP_ALLOW_WRITES=1. Staged tools (edit_structural, "
+                    "execute_ifc_code) remain available."
                 ),
             }))]
 

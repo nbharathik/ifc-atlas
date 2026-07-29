@@ -13,8 +13,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.carbon_routes import router
-from app.services import carbon_service
+from app.api.takeoff_routes import carbon_router as router
+from app.services import qto_service as carbon_service
 
 _CONCRETE = {"Concrete": {"basis": "volume", "factor": 120.0}}
 

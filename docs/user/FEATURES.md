@@ -13,9 +13,8 @@ For the dated history of changes, see the [GitHub Releases page](https://github.
 | Feature | Description |
 |---|---|
 | **Drag-and-drop upload** | Drop an `.ifc` file on the viewer to load it. The file is uploaded to the backend, converted to optimised fragment binaries, and streamed back to the browser. Browser-side `web-ifc` parsing remains as a fallback. |
-| **Multi-threaded WASM parsing** | COOP and COEP headers establish a cross-origin-isolated context so the fallback parser can spawn worker threads. |
+| **Worker-based fallback parsing** | The browser fallback parse runs in a dedicated application worker (single-threaded web-ifc WASM), so the UI stays responsive during conversion. |
 | **Native metadata index** | A TypeScript sidecar parses IFC metadata on the backend. Repeat uploads of the same file (matched by SHA-256) are served from cache. Many Ask-mode queries are answered directly from this index, tagged `_source: "native_index"` in the tool-call log. |
-| **Per-storey progressive reveal** | Multi-storey models reveal one storey at a time, ground floor first. Can be disabled from Settings → Performance. |
 | **Sample model** | `data/fixtures/BasicHouse.ifc` (IFC2X3, ≈ 50 MB, two storeys, 149 elements) for first-run testing. If it is missing from your clone, download it with `scripts/fetch-sample.ps1` or `scripts/fetch-sample.sh`. |
 
 ### Selection and visibility
@@ -198,7 +197,7 @@ The chat thread survives a page refresh. The viewer assigns a stable thread id p
 
 ### Document Index
 
-Open Chat Manager → **Documents** (or press `Ctrl+Shift+I`). Drag a PDF, Markdown, or text file (up to 20 MB) and it is chunked and indexed locally. Any agent can search it through the `search_document_index` tool. When `fastembed` and `hnswlib` are installed, the index uses hybrid BM25 + semantic search; otherwise it falls back to plain BM25.
+Open Chat Manager → **Documents** (or press `Ctrl+Shift+I`). Drag a PDF, Markdown, or text file (up to 20 MB) and it is chunked and indexed locally. Any agent can search it through the `get_docs` tool with source `user`. When `fastembed` and `hnswlib` are installed, the index uses hybrid BM25 + semantic search; otherwise it falls back to plain BM25.
 
 ---
 
@@ -219,7 +218,7 @@ ops - disappears together; the frontend probes the flag at runtime).
 | **Undo / redo** | `Ctrl+Z` / `Ctrl+Y` (also status-bar buttons and the Edit menu), backed by the operation log. Creation undo removes the created elements; deletion undo restores an exact pre-delete snapshot (express IDs preserved). |
 | **Save** | File → Save writes edits back to the loaded file with stable IDs; unsaved-changes badge, close guards, and a browser warning protect against data loss. Save-As still downloads a copy. |
 | **AI edits stay previewed** | Every AI write is staged in a sandbox and presented as a before/after diff with **Apply** / **Discard** - plus an automatic **verifier verdict** (model health delta + geometry sanity) so broken proposals are flagged before you apply them. |
-| **Bulk operations** | `rename_elements_batch` and `update_properties_batch` change N elements in one atomic, one-undo step. |
+| **Bulk operations** | Multi-op `edit_semantic` batches (backed by the `set_names_batch` / `set_properties_batch` operations) change N elements in one atomic, one-undo step. |
 | **Script sandbox** | `execute_ifc_query_code` runs read-only IfcOpenShell analyses. The edit-capable `execute_ifc_code` is withheld from the AI in v1.1.0 along with the rest of the geometry tier; write-capable Python still reaches the model through Plugins, which stage their diffs the same way. |
 | **Timeline** | `Shift+H` opens the Timeline: every operation with its actor (you / AI / MCP) merged with automatic git checkpoints; two-point semantic compare (ifcdiff, including property changes); restore any checkpoint. |
 | **Live sync** | Applied changes broadcast to every open viewer: metadata patches update in place; structural changes trigger a debounced, camera-preserving model refresh. |
@@ -244,7 +243,7 @@ ops - disappears together; the frontend probes the flag at runtime).
 
 ### IDS 1.0 validation
 
-Full buildingSMART IDS 1.0 support through the `ifctester` reference engine. All five facet types (Property, Attribute, Classification, Material, PartOf) are evaluated. The `ids_validate` tool returns failing elements grouped by specification, with `facet_type`, applicability, and requirement summaries. After validation, failing elements auto-highlight in the 3D view. A download button exports all failures as CSV. The `POST /api/ifc/ids-validate` route accepts an IDS document (base64) and returns JSON or CSV for automation. The same engine also powers the in-app IDS validation panel (Panels → IDS validation, with a saved spec library) and the `validate` CLI subcommand, which exits non-zero on failures for use in scripts and CI.
+Full buildingSMART IDS 1.0 support through the `ifctester` reference engine. All five facet types (Property, Attribute, Classification, Material, PartOf) are evaluated. The `validate_model` tool (`check='ids'`) returns failing elements grouped by specification, with `facet_type`, applicability, and requirement summaries. After validation, failing elements auto-highlight in the 3D view. A download button exports all failures as CSV. The `POST /api/ifc/ids-validate` route accepts an IDS document (base64) and returns JSON or CSV for automation. The same engine also powers the in-app IDS validation panel (Panels → IDS validation, with a saved spec library) and the `validate` CLI subcommand, which exits non-zero on failures for use in scripts and CI.
 
 ### MCP client
 
@@ -257,7 +256,7 @@ The viewer exposes its own toolset over MCP at `/mcp` (SSE). External clients (C
 | Variable | Effect |
 |---|---|
 | `MCP_SERVER_TOKEN` | Bearer-token auth (set to require it). |
-| `MCP_ALLOW_WRITES=1` | Exposes the write tier: `rename_element`, `update_property_value`, `create_wall_from_ends`, `delete_element`, `execute_ifc_code` plus pending-edit management. |
+| `MCP_ALLOW_WRITES=1` | Exposes the write tier: `edit_semantic`, `edit_structural`, `execute_ifc_code`, `undo_last_edit` plus pending-edit management. |
 
 Eleven viewer-control tools are always exposed: `get_viewer_state`, `viewer_select_elements`, `viewer_isolate_elements`, `viewer_highlight_elements`, `viewer_show_all`, `viewer_set_camera`, `get_viewer_snapshot` (returns an image of the live viewport), `viewer_clip_to_element` and `viewer_set_section_box` (cut the view open around an element), and `viewer_colour_elements` / `viewer_clear_colours` (paint element groups in distinct colours with legend labels, e.g. AI-driven heatmaps). An MCP client can read what you are looking at, drive selection, isolation, highlights, colours, sections, and the camera, and verify the result visually. These tools change presentation only; the model is never modified.
 
@@ -303,7 +302,7 @@ The backend doubles as a headless CLI: `python -m app.cli` (or the `ifc-atlas` c
 | **Activity Log** | Right-sidebar panel listing every selection, edit, and tool call. A 12-chip filter bar mutes kinds (`SEL`, `HL`, `ISO`, `HIDE`, `SHOW`, `TOOL`, `CHAT`, `SHOT`, `VIEW`, `EDIT`, `INFO`, `ERR`). Mute state persists across reloads. |
 | **Touch-friendly zoom** | A vertical +/fit/− stack at the bottom-right of the viewport. `+`, `−`, and `0` are equivalent. |
 | **Element Relations** | The bottom of the Properties sidebar shows material layers with per-layer thicknesses, connected walls, and hosted doors or windows for the current selection. Click any related element to navigate to it. |
-| **Model Health** (`Shift+Q`) | Panel summarising data-quality issues found by `run_model_health_check`. |
+| **Model Health** (`Shift+Q`) | Panel summarising data-quality issues found by the health check behind `validate_model` (`check='health'`). |
 | **Settings modal** | One modal for appearance, viewer behaviour, performance, storage, integrations, and AI defaults. Open from the gear icon or `Ctrl+,`. |
 
 ---

@@ -13,7 +13,7 @@ import {
   seedEditFromPrompt,
   shortText,
   snippetToSkill,
-} from '../skillsSectionHelpers';
+} from '../ChatManagerPanel';
 
 const PROMPT_A: SystemPromptEntry = {
   id: 'analyst',

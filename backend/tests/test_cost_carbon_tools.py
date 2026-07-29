@@ -1,4 +1,4 @@
-"""Tests for the get_cost_summary / get_carbon_summary chat tools.
+"""Tests for quantity_summary kind=cost / kind=carbon chat tool paths.
 
 Pure unit tests: the BoQ / carbon computation is patched at the tools-module
 import site, so no real IfcOpenShell model or file IO is needed. The tests
@@ -97,7 +97,7 @@ def _run_cost(arguments: dict, boq: dict = FAKE_BOQ):
             "model_version": 1,
             "edit_id": None,
         }
-        result = execute_tool("get_cost_summary", arguments)
+        result = execute_tool("quantity_summary", {"kind": "cost", **arguments})
     return result, fake
 
 
@@ -113,7 +113,7 @@ def _run_carbon(arguments: dict, carbon: dict = FAKE_CARBON):
             "model_version": 1,
             "edit_id": None,
         }
-        result = execute_tool("get_carbon_summary", arguments)
+        result = execute_tool("quantity_summary", {"kind": "carbon", **arguments})
     return result, fake
 
 
@@ -168,7 +168,7 @@ def test_cost_summary_no_model_error():
 
     with patch("app.services.tools.ifc_service") as svc:
         svc.is_loaded = False
-        result = execute_tool("get_cost_summary", {})
+        result = execute_tool("quantity_summary", {"kind": "cost"})
     assert result == {"error": "No IFC model is currently loaded."}
 
 
@@ -206,7 +206,7 @@ def test_carbon_summary_no_model_error():
 
     with patch("app.services.tools.ifc_service") as svc:
         svc.is_loaded = False
-        result = execute_tool("get_carbon_summary", {})
+        result = execute_tool("quantity_summary", {"kind": "carbon"})
     assert result == {"error": "No IFC model is currently loaded."}
 
 
@@ -215,14 +215,13 @@ def test_carbon_summary_no_model_error():
 # ---------------------------------------------------------------------------
 
 
-def test_new_tools_registered_in_definitions_and_tier():
+def test_merged_tools_registered_in_definitions_and_tier():
     from app.services.tools import TOOL_BY_NAME, tool_tier
 
     expected_tiers = {
-        "get_cost_summary": "read_model",
-        "get_carbon_summary": "read_model",
-        "get_element_relationships": "read_model",
-        "run_model_audit": "validate",
+        "quantity_summary": "read_model",
+        "get_element": "read_model",
+        "validate_model": "validate",
     }
     for name, expected_tier in expected_tiers.items():
         assert name in TOOL_BY_NAME, name
@@ -230,20 +229,14 @@ def test_new_tools_registered_in_definitions_and_tier():
         assert TOOL_BY_NAME[name].get("where") == "server", name
 
 
-def test_new_tools_in_builtin_read_tool_sets():
-    from app.services.tool_sets import tool_set_registry
+def test_merged_tools_in_builtin_read_tool_sets():
+    from app.services.tool_support import tool_set_registry
 
     read_only = tool_set_registry.get("read-only")
     ask_default = tool_set_registry.get("ask-default")
     quantity = tool_set_registry.get("quantity")
     assert read_only is not None and ask_default is not None and quantity is not None
-    for name in (
-        "get_cost_summary",
-        "get_carbon_summary",
-        "get_element_relationships",
-        "run_model_audit",
-    ):
+    for name in ("quantity_summary", "get_element", "validate_model"):
         assert name in read_only.tools, name
         assert name in ask_default.tools, name
-    assert "get_cost_summary" in quantity.tools
-    assert "get_carbon_summary" in quantity.tools
+    assert "quantity_summary" in quantity.tools

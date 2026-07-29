@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMessageParts } from '../chatMessageParts';
+import { buildMessageParts } from '../ChatPanel';
 import type { ToolCall } from '../../../types/ifc';
 
 const tc = (name: string, contentOffset?: number): ToolCall => ({
@@ -21,7 +21,7 @@ describe('buildMessageParts', () => {
   it('interleaves text and tools in transcript order (the core fix)', () => {
     // "Let me check. " (14 chars) → tool → "There are 12 walls." (offset 14)
     const content = 'Let me check. There are 12 walls.';
-    const parts = buildMessageParts(content, [tc('search_elements', 14)]);
+    const parts = buildMessageParts(content, [tc('query_elements', 14)]);
     expect(parts.map((p) => p.type)).toEqual(['text', 'tool', 'text']);
     expect((parts[0] as { text: string }).text).toBe('Let me check. ');
     expect((parts[2] as { text: string }).text).toBe('There are 12 walls.');

@@ -1,4 +1,4 @@
-"""Tests for clip_section_box_to_element tool and its WS event routing.
+"""Tests for viewer_control action='clip_section_box' and its WS event routing.
 
 Pure unit tests - no IfcOpenShell / file-system dependency.
 """
@@ -8,13 +8,12 @@ from __future__ import annotations
 from unittest.mock import patch
 
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _run(arguments: dict, element_exists: bool = True) -> dict:
-    """Execute clip_section_box_to_element with a mocked ifc_service."""
+    """Execute viewer_control clip_section_box with a mocked ifc_service."""
     from app.services.tools import execute_tool
 
     with patch("app.services.tools.ifc_service") as mock_svc:
@@ -23,11 +22,13 @@ def _run(arguments: dict, element_exists: bool = True) -> dict:
             mock_svc.get_element.return_value = {"element_id": arguments.get("element_id"), "name": "Wall"}
         else:
             mock_svc.get_element.side_effect = ValueError("element not found")
-        return execute_tool("clip_section_box_to_element", arguments)
+        return execute_tool(
+            "viewer_control", {"action": "clip_section_box", **arguments}
+        )
 
 
 # ---------------------------------------------------------------------------
-# clip_section_box_to_element - execute_tool
+# viewer_control action=clip_section_box - execute_tool
 # ---------------------------------------------------------------------------
 
 class TestClipSectionBoxTool:
@@ -49,14 +50,16 @@ class TestClipSectionBoxTool:
         from app.services.tools import execute_tool
         with patch("app.services.tools.ifc_service") as mock_svc:
             mock_svc.is_loaded = False
-            result = execute_tool("clip_section_box_to_element", {"element_id": 1})
+            result = execute_tool(
+                "viewer_control", {"action": "clip_section_box", "element_id": 1}
+            )
         assert "error" in result
 
     def test_missing_element_id_returns_error(self):
         from app.services.tools import execute_tool
         with patch("app.services.tools.ifc_service") as mock_svc:
             mock_svc.is_loaded = True
-            result = execute_tool("clip_section_box_to_element", {})
+            result = execute_tool("viewer_control", {"action": "clip_section_box"})
         assert "error" in result
 
 
@@ -85,28 +88,29 @@ class TestMapClipSectionBoxEvent:
 # ---------------------------------------------------------------------------
 
 class TestToolCatalog:
-    def test_clip_section_box_in_definitions(self):
+    def test_viewer_control_in_definitions(self):
         from app.services.tools import TOOL_DEFINITIONS
         names = [t["name"] for t in TOOL_DEFINITIONS]
-        assert "clip_section_box_to_element" in names
+        assert "viewer_control" in names
 
-    def test_clip_section_box_in_tool_by_name(self):
+    def test_viewer_control_in_tool_by_name(self):
         from app.services.tools import TOOL_BY_NAME
-        assert "clip_section_box_to_element" in TOOL_BY_NAME
+        assert "viewer_control" in TOOL_BY_NAME
 
-    def test_clip_section_box_tier_is_read_viewer(self):
+    def test_viewer_control_tier_is_read_viewer(self):
         from app.services.tools import tool_tier
-        tier_id, tier_label = tool_tier("clip_section_box_to_element")
+        tier_id, tier_label = tool_tier("viewer_control")
         assert tier_id == "read_viewer"
         assert "Viewer" in tier_label
 
-    def test_clip_section_box_where_is_client(self):
-        from app.services.tools import TOOL_BY_NAME
-        assert TOOL_BY_NAME["clip_section_box_to_element"]["where"] == "client"
+    def test_viewer_control_where_is_client(self):
+        from app.services.tools import TOOL_BY_NAME, tool_where
+        assert TOOL_BY_NAME["viewer_control"]["where"] == "client"
+        assert tool_where("viewer_control", {"action": "clip_section_box"}) == "client"
 
-    def test_clip_section_box_has_element_id_parameter(self):
+    def test_viewer_control_has_clip_action_in_enum(self):
         from app.services.tools import TOOL_BY_NAME
-        params = TOOL_BY_NAME["clip_section_box_to_element"]["parameters"]
-        assert "element_id" in params["properties"]
+        params = TOOL_BY_NAME["viewer_control"]["parameters"]
+        assert "clip_section_box" in params["properties"]["action"]["enum"]
         assert params["properties"]["element_id"]["type"] == "integer"
-        assert "element_id" in params["required"]
+        assert "action" in params["required"]

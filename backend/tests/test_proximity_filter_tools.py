@@ -350,20 +350,22 @@ def test_filter_no_matches_empty_result():
 # execute_tool routing
 # ---------------------------------------------------------------------------
 
-def _run_tool(name: str, arguments: dict, service_return: dict) -> dict:
+def _run_tool(method_name: str, arguments: dict, service_return: dict) -> dict:
+    """Run query_elements with a patched ifc_service; ``method_name`` is the
+    IfcService method the mode dispatches to (find_nearby_elements /
+    filter_by_property_value / search_by_property)."""
     from app.services.tools import execute_tool
 
     with patch("app.services.tools.ifc_service") as mock_svc:
         mock_svc.is_loaded = True
-        method_name = name  # find_nearby_elements / filter_by_property_value
         getattr(mock_svc, method_name).return_value = service_return
-        return execute_tool(name, arguments)
+        return execute_tool("query_elements", arguments)
 
 
 def test_execute_tool_find_nearby():
     result = _run_tool(
         "find_nearby_elements",
-        {"element_id": 1, "radius_m": 3.0},
+        {"mode": "near", "element_id": 1, "radius_m": 3.0},
         {"element_id": 1, "radius_m": 3.0, "count": 1, "elements": [{"id": 2}]},
     )
     assert result["count"] == 1
@@ -374,7 +376,7 @@ def test_execute_tool_find_nearby_missing_element_id():
 
     with patch("app.services.tools.ifc_service") as mock_svc:
         mock_svc.is_loaded = True
-        result = execute_tool("find_nearby_elements", {})
+        result = execute_tool("query_elements", {"mode": "near"})
     assert "error" in result
     assert "element_id" in result["error"]
 
@@ -382,7 +384,7 @@ def test_execute_tool_find_nearby_missing_element_id():
 def test_execute_tool_filter_by_property():
     result = _run_tool(
         "filter_by_property_value",
-        {"property_name": "FireRating", "operator": "eq", "value": "2h"},
+        {"mode": "property", "property_name": "FireRating", "operator": "eq", "value": "2h"},
         {"count": 2, "element_ids": [10, 12], "elements": [], "property_name": "FireRating", "operator": "eq", "value": "2h", "truncated": False},
     )
     assert result["count"] == 2
@@ -395,23 +397,34 @@ def test_execute_tool_filter_missing_property_name():
 
     with patch("app.services.tools.ifc_service") as mock_svc:
         mock_svc.is_loaded = True
-        result = execute_tool("filter_by_property_value", {"operator": "eq", "value": "2h"})
+        result = execute_tool(
+            "query_elements", {"mode": "property", "operator": "eq", "value": "2h"}
+        )
     assert "error" in result
 
 
-def test_execute_tool_filter_missing_operator():
+def test_execute_tool_property_without_operator_falls_back_to_search():
+    """mode='property' with a value but no operator is an equality search
+    (dispatches to search_by_property, not the operator filter)."""
     from app.services.tools import execute_tool
 
     with patch("app.services.tools.ifc_service") as mock_svc:
         mock_svc.is_loaded = True
-        result = execute_tool("filter_by_property_value", {"property_name": "FireRating", "value": "2h"})
-    assert "error" in result
+        mock_svc.search_by_property.return_value = []
+        result = execute_tool(
+            "query_elements",
+            {"mode": "property", "property_name": "FireRating", "value": "2h"},
+        )
+    assert "error" not in result
+    mock_svc.search_by_property.assert_called_once_with(
+        property_name="FireRating", property_value="2h", pset_name=None, limit=50
+    )
 
 
 def test_execute_tool_filter_no_matches_no_action():
     result = _run_tool(
         "filter_by_property_value",
-        {"property_name": "FireRating", "operator": "eq", "value": "999h"},
+        {"mode": "property", "property_name": "FireRating", "operator": "eq", "value": "999h"},
         {"count": 0, "element_ids": [], "elements": [], "property_name": "FireRating", "operator": "eq", "value": "999h", "truncated": False},
     )
     # No element_ids → no highlight action

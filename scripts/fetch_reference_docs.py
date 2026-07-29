@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--clear", action="store_true", help="Remove all reference docs and exit.")
     args = parser.parse_args(argv)
 
-    from app.services.reference_docs_service import reference_docs_service
+    from app.services.document_index_service import reference_docs_service
 
     if args.status:
         status = reference_docs_service.status()

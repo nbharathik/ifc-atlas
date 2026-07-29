@@ -39,7 +39,7 @@ Server -> client. The agent is invoking a tool.
 `tier` is the permission boundary; `activity_kind` describes the visible effect so the UI can distinguish read-only work, validation, viewer actions, semantic edits, geometry edits and code execution before the result arrives.
 
 ```json
-{"type": "tool_call", "name": "search_elements", "arguments": {"query": "wall"}, "tier": "read_model", "tier_label": "Read - Model", "activity_kind": "read_only"}
+{"type": "tool_call", "name": "query_elements", "arguments": {"mode": "text", "query": "wall"}, "tier": "read_model", "tier_label": "Read - Model", "activity_kind": "read_only"}
 ```
 
 ---
@@ -51,7 +51,7 @@ Server -> client. The result of a tool call. "executed_on" is "server" or "clien
 When a write tool stages a sandboxed edit, "result" carries {"action": "pending_edit", "edit_id": "...", ...}; the pending_edit / pending_applied / pending_discarded broadcasts themselves go out on the separate model-sync WebSocket at /api/ifc/sync/ws, not on this socket.
 
 ```json
-{"type": "tool_result", "name": "search_elements", "result": {"elements": [], "total": 42}, "executed_on": "server"}
+{"type": "tool_result", "name": "query_elements", "result": {"elements": [], "total": 42}, "executed_on": "server"}
 ```
 
 ---
@@ -196,4 +196,4 @@ Server -> client. An error occurred (invalid chat payload, in-band stream error,
 
 ---
 
-_Last regenerated: 2026-07-26. Run `python scripts/generate_api_doc.py` to refresh._
+_Last regenerated: 2026-07-29. Run `python scripts/generate_api_doc.py` to refresh._

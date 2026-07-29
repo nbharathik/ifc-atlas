@@ -9,7 +9,7 @@ import {
   isOverflowNavKey,
   nextIndexForKey,
   type ChatTopBarAction,
-} from '../chatTopBarOverflowHelpers';
+} from '../ChatPanel';
 
 describe('getTopBarOverflowActions', () => {
   it('returns five rows in the documented order regardless of state', () => {

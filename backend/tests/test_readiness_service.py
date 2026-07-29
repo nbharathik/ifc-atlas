@@ -227,11 +227,11 @@ def test_warming_envelope_blocks_read_model_tools_while_warming(monkeypatch):
     rs_module_local.readiness_service.mark_ifcopenshell_warming()
     monkeypatch.setattr(rs_module_local, "_safe_ifc_service_is_loaded", lambda: False)
 
-    env = warming_envelope("search_elements")
+    env = warming_envelope("query_elements")
     assert env is not None
     assert env["warming"] is True
     assert env["ifcopenshell"] == "warming"
-    assert env["tool"] == "search_elements"
+    assert env["tool"] == "query_elements"
     assert env["retry_after_ms"] == 2000
 
 
@@ -244,7 +244,7 @@ def test_warming_envelope_exempts_read_viewer_tools(monkeypatch):
     rs_module_local.readiness_service.mark_ifcopenshell_warming()
     monkeypatch.setattr(rs_module_local, "_safe_ifc_service_is_loaded", lambda: False)
 
-    for name in ("highlight_elements", "isolate_elements", "select_element"):
+    for name in ("viewer_control",):
         assert warming_envelope(name) is None, name
 
 
@@ -257,7 +257,7 @@ def test_warming_envelope_clears_once_ready(monkeypatch):
     rs_module_local.readiness_service.mark_ifcopenshell_ready()
     monkeypatch.setattr(rs_module_local, "_safe_ifc_service_is_loaded", lambda: True)
 
-    assert warming_envelope("search_elements") is None
+    assert warming_envelope("query_elements") is None
 
 
 def test_warming_envelope_passthrough_on_error(monkeypatch):
@@ -271,7 +271,7 @@ def test_warming_envelope_passthrough_on_error(monkeypatch):
     rs_module_local.readiness_service.mark_ifcopenshell_error("boom")
     monkeypatch.setattr(rs_module_local, "_safe_ifc_service_is_loaded", lambda: False)
 
-    assert warming_envelope("search_elements") is None
+    assert warming_envelope("query_elements") is None
 
 
 def test_execute_tool_returns_warming_envelope_without_running(monkeypatch):
@@ -294,13 +294,13 @@ def test_execute_tool_returns_warming_envelope_without_running(monkeypatch):
     # Fresh memo to avoid leakage from earlier tests.
     tools_module.tool_memo_cache.invalidate()
 
-    out = tools_module.execute_tool("search_elements", {"query": "x"})
+    out = tools_module.execute_tool("query_elements", {"mode": "text", "query": "x"})
     assert out["warming"] is True
     assert raw_called == []  # The raw tool was NOT executed.
 
     # After warm-up, the same call runs through to the raw tool.
     rs_module_local.readiness_service.mark_ifcopenshell_ready()
     monkeypatch.setattr(rs_module_local, "_safe_ifc_service_is_loaded", lambda: True)
-    out2 = tools_module.execute_tool("search_elements", {"query": "x"})
+    out2 = tools_module.execute_tool("query_elements", {"mode": "text", "query": "x"})
     assert out2 == {"ok": True}
-    assert raw_called == ["search_elements"]
+    assert raw_called == ["query_elements"]

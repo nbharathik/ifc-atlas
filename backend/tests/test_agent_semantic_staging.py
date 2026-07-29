@@ -27,8 +27,8 @@ def test_chat_agent_semantic_write_is_staged_for_approval():
     ):
         service.is_loaded = True
         result = _execute_tool_raw(
-            "rename_element",
-            {"element_id": 42, "new_name": "External wall"},
+            "edit_semantic",
+            {"ops": [{"op": "set_name", "element_id": 42, "new_name": "External wall"}]},
             actor=Actor.AGENT,
         )
 
@@ -49,8 +49,13 @@ def test_chat_agent_attribute_write_uses_controlled_sandbox_op():
     ):
         service.is_loaded = True
         result = _execute_tool_raw(
-            "update_element_attribute",
-            {"element_id": 42, "attribute": "Description", "new_value": "Fire wall"},
+            "edit_semantic",
+            {"ops": [{
+                "op": "set_attribute",
+                "element_id": 42,
+                "attribute": "Description",
+                "new_value": "Fire wall",
+            }]},
             actor=Actor.AGENT,
         )
 

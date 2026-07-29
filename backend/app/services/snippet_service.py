@@ -49,7 +49,7 @@ _BUILTIN_SNIPPETS: list[SnippetEntry] = [
     SnippetEntry(
         id="snip-quantity-totals",
         title="Quantity Totals",
-        body="Use get_quantities_summary to give me total area, volume, and length grouped by IFC type.",
+        body="Use quantity_summary (kind='qto') to give me total area, volume, and length grouped by IFC type.",
         tags=["quantities", "analysis"],
         is_builtin=True,
     ),

@@ -84,8 +84,7 @@ nav:
     - Overview: agent/index.md
     - Using the agent: user/AI_AGENT_GUIDE.md
     - Agent interface: agent/AGENT_INTERFACE.md
-    - Agent presets: agent/AGENT_PRESETS.md
-    - Custom agents: agent/CUSTOM_AGENTS.md
+    - Agents: agent/AGENTS.md
     - Tools reference: agent/TOOLS_REFERENCE.md
     - MCP clients: agent/MCP_CLIENTS.md
   - API Reference:

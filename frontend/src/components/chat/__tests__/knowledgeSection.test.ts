@@ -3,7 +3,7 @@ import {
   summarizeFetchResult,
   domainLabel,
   searchModeLabel,
-} from '../KnowledgeSection';
+} from '../ChatManagerPanel';
 import type { ReferenceDocsSemanticStatus } from '../../../services/api';
 
 describe('summarizeFetchResult', () => {

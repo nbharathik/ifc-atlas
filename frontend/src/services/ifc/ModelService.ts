@@ -16,12 +16,14 @@ import {
   BackendMetadataIndex,
   fetchBackendMetadataIndex,
 } from './backendMetadataIndex';
-import { composeIdBridge } from './composeIdBridge';
-import { registerElementDetailInvalidator } from './elementDetailInvalidation';
+import {
+  composeIdBridge,
+  registerElementDetailInvalidator,
+  resolveHitProductId,
+} from './modelHelpers';
 import { getClientIfcFlag } from './featureFlags';
 import { MetadataWorkerClient } from './metadataWorker';
-import { resolveHitProductId } from './resolveHitProductId';
-import { SearchIndex } from './searchIndex';
+import { SearchIndex } from './search';
 
 // Singleton facade over the loaded FragmentsModel. Panels and LLM tools
 // read from here instead of hitting the Python backend.

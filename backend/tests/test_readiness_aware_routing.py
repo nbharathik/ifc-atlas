@@ -51,8 +51,10 @@ def warming_state(monkeypatch):
 
 class TestNativeIndexEligibleTools:
     def test_contains_the_eligible_tool_set(self):
-        """Pin the explicit eligible-tool list. Each entry needs a matching
-        `if _mi:` branch in ``_execute_tool_raw``."""
+        """Pin the explicit eligible-subtool list. Each entry needs a matching
+        `if _mi:` branch in ``_run_subtool``. These are INTERNAL subtool
+        names; the public gate maps merged (tool, arguments) calls onto them
+        via ``_native_index_eligible``."""
         assert _NATIVE_INDEX_ELIGIBLE_TOOLS == frozenset({
             "get_project_info",
             "get_model_stats",
@@ -63,7 +65,7 @@ class TestNativeIndexEligibleTools:
         })
 
     def test_write_tools_excluded(self):
-        for tool in ("rename_element", "update_property_value", "execute_ifc_code"):
+        for tool in ("edit_semantic", "edit_structural", "execute_ifc_code"):
             assert tool not in _NATIVE_INDEX_ELIGIBLE_TOOLS
 
     def test_get_element_details_excluded(self):
@@ -85,7 +87,7 @@ class TestWarmingEnvelopeNativeBypass:
         monkeypatch.setattr(
             "app.services.tools._native_index_ready", lambda: False
         )
-        envelope = warming_envelope("get_project_info")
+        envelope = warming_envelope("describe_model", {"part": "project"})
         assert envelope is not None
         assert envelope["warming"] is True
 
@@ -95,20 +97,28 @@ class TestWarmingEnvelopeNativeBypass:
         monkeypatch.setattr(
             "app.services.tools._native_index_ready", lambda: True
         )
-        for tool in _NATIVE_INDEX_ELIGIBLE_TOOLS:
-            envelope = warming_envelope(tool)
-            assert envelope is None, f"{tool!r} should bypass gate when native_index ready"
+        for tool, args in (
+            ("describe_model", {"part": "project"}),
+            ("describe_model", {"part": "stats"}),
+            ("describe_model", {"part": "storeys"}),
+            ("query_elements", {"mode": "text", "query": "x"}),
+            ("query_elements", {"mode": "type", "ifc_type": "IfcWall"}),
+            ("query_elements", {"mode": "storey", "storey_id": 1}),
+        ):
+            envelope = warming_envelope(tool, args)
+            assert envelope is None, f"{tool!r} {args} should bypass gate when native_index ready"
 
     def test_non_eligible_read_tool_still_gated_with_native_index_ready(
         self, monkeypatch
     ):
-        """A non-eligible read_model tool (e.g. ``get_element_details``)
-        still gets the envelope even with native_index ready - the bypass
-        is opt-in per-tool."""
+        """A non-eligible read_model call (e.g. ``get_element``, whose
+        ifcopenshell path returns the full property detail) still gets the
+        envelope even with native_index ready - the bypass is opt-in
+        per-mode."""
         monkeypatch.setattr(
             "app.services.tools._native_index_ready", lambda: True
         )
-        envelope = warming_envelope("get_element_details")
+        envelope = warming_envelope("get_element", {"element_id": 1})
         assert envelope is not None
         assert envelope["warming"] is True
 
@@ -118,7 +128,10 @@ class TestWarmingEnvelopeNativeBypass:
         monkeypatch.setattr(
             "app.services.tools._native_index_ready", lambda: True
         )
-        envelope = warming_envelope("rename_element")
+        envelope = warming_envelope(
+            "edit_semantic",
+            {"ops": [{"op": "set_name", "element_id": 1, "new_name": "x"}]},
+        )
         assert envelope is not None
         assert envelope["warming"] is True
 
@@ -128,7 +141,9 @@ class TestWarmingEnvelopeNativeBypass:
         monkeypatch.setattr(
             "app.services.tools._native_index_ready", lambda: False
         )
-        envelope = warming_envelope("highlight_elements")
+        envelope = warming_envelope(
+            "viewer_control", {"action": "highlight", "element_ids": [1]}
+        )
         assert envelope is None
 
 

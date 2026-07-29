@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useStore, MAX_CLIP_PLANES } from '../../store/useStore';
 import type { ClipAxis, ClipPlaneState, ColourByProperty } from '../../store/useStore';
-import { buildColourGroups, shortIfcType } from '../../services/viewer/colourByHelper';
+import { buildColourGroups, shortIfcType } from '../../services/viewer/colourTools';
 import { collectLeavesUnder } from '../../services/viewer/spatialTreeHelpers';
 import type { SpatialNode } from '../../types/ifc';
 import Icon from '../ui/Icon';

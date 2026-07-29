@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatCountBadge,
   getExecuteIfcCodeMeta,
-} from '../diffPreviewMeta';
+} from '../DiffPreviewPanel';
 import type { PendingEditEnvelope } from '../../../types/ifc';
 
 function makeEnvelope(
@@ -42,7 +42,7 @@ describe('getExecuteIfcCodeMeta', () => {
     expect(getExecuteIfcCodeMeta(makeEnvelope([]))).toBeNull();
   });
 
-  it('returns null for a classic propose_edit envelope (set_name)', () => {
+  it('returns null for a structured edit_semantic envelope (set_name)', () => {
     const env = makeEnvelope([
       { op: 'set_name', element_id: 361, new_name: 'New Name' },
     ]);

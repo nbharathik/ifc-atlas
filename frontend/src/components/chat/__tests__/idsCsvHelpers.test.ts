@@ -3,7 +3,7 @@ import {
   getIdsCsvButtonLabel,
   getIdsCsvButtonTitle,
   extractIdsFailedCount,
-} from '../idsCsvHelpers';
+} from '../ChatPanel';
 
 // ── getIdsCsvButtonLabel ────────────────────────────────────────────────────
 

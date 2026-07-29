@@ -15,7 +15,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.qto_routes import router
+from app.api.takeoff_routes import qto_router as router
 from app.services import qto_service
 from app.services.ifc_service import ifc_service
 

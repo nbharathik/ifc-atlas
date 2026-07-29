@@ -9,12 +9,10 @@ import {
   presentLoadProgress,
   type LoadPathKind,
   type PaceState,
-} from '../services/viewer/loadProgressPresenter';
-import {
   VIEWER_PERF_LOG_STORAGE_KEY,
   type ViewerLoadProgress,
   type ViewerPerfLogEntry,
-} from '../services/viewer/loadPipelineHelpers';
+} from '../services/viewer/loadPipeline';
 import { useStore } from '../store/useStore';
 
 export interface LoadProgressPacer {

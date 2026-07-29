@@ -40,9 +40,13 @@ def _make_client(token: str | None = None, timeout: float = 5.0) -> AsyncClient:
 # ---------------------------------------------------------------------------
 
 class TestToolCatalog:
-    def test_read_tools_count_at_least_ten(self):
+    def test_read_tools_count_exact(self):
+        """The merged catalog exposes exactly 8 read-tier tools via MCP:
+        read_model (describe_model, query_elements, get_element,
+        quantity_summary, get_edit_history, execute_ifc_query_code) +
+        validate (validate_model) + read_knowledge (get_docs)."""
         tools = list_exposed_tools()
-        assert len(tools) >= 10, f"Expected ≥10 read tools, got {len(tools)}"
+        assert len(tools) == 8, f"Expected 8 read tools, got {len(tools)}"
 
     def test_all_exposed_tools_are_read_tier(self):
         for t in list_exposed_tools():
@@ -53,29 +57,25 @@ class TestToolCatalog:
 
     def test_write_tools_not_exposed(self):
         write_names = {
-            "rename_element", "update_property_value", "rename_elements_batch",
-            "update_properties_batch", "execute_ifc_code", "create_wall_from_ends",
-            "delete_element", "undo_last_edit",
+            "edit_semantic", "edit_structural", "execute_ifc_code", "undo_last_edit",
         }
         exposed = {t["name"] for t in list_exposed_tools()}
         leaked = write_names & exposed
         assert not leaked, f"Write tools must not be exposed in the read-only catalog: {leaked}"
 
     def test_viewer_tools_not_exposed(self):
-        viewer_names = {
-            "highlight_elements", "select_element", "isolate_elements", "show_all_elements"
-        }
+        viewer_names = {"viewer_control"}
         exposed = {t["name"] for t in list_exposed_tools()}
         assert not (viewer_names & exposed), "Viewer-tier tools must not be in MCP"
 
-    def test_get_project_info_exposed(self):
-        assert "get_project_info" in _tool_names
+    def test_describe_model_exposed(self):
+        assert "describe_model" in _tool_names
 
-    def test_search_elements_exposed(self):
-        assert "search_elements" in _tool_names
+    def test_query_elements_exposed(self):
+        assert "query_elements" in _tool_names
 
-    def test_get_storeys_exposed(self):
-        assert "get_storeys" in _tool_names
+    def test_get_element_exposed(self):
+        assert "get_element" in _tool_names
 
     def test_tool_names_match_definitions(self):
         """_tool_names must exactly match the read/validate tools in TOOL_DEFINITIONS."""
@@ -211,7 +211,7 @@ class TestCallTool:
         from app.mcp_server.server import _call_tool
         from app.services.ifc_service import ifc_service as svc
         monkeypatch.setattr(svc, "_model", None)
-        result = await _call_tool("get_project_info", {})
+        result = await _call_tool("describe_model", {"part": "project"})
         assert len(result) == 1
         data = json.loads(result[0].text)
         assert "error" in data
@@ -223,7 +223,7 @@ class TestCallTool:
         from app.mcp_server.server import _call_tool
         from app.services.ifc_service import ifc_service as svc
         monkeypatch.setattr(svc, "_model", None)
-        result = await _call_tool("get_model_stats", {})
+        result = await _call_tool("describe_model", {"part": "stats"})
         assert isinstance(result, list)
         assert all(isinstance(r, TextContent) for r in result)
 
@@ -256,7 +256,10 @@ class TestToolPermissionErrors:
         from app.mcp_server.server import _call_tool
         from app.services.ifc_service import ifc_service as svc
         monkeypatch.setattr(svc, "_model", None)
-        result = await _call_tool("rename_element", {"express_id": 1, "new_name": "X"})
+        result = await _call_tool(
+            "edit_semantic",
+            {"ops": [{"op": "set_name", "element_id": 1, "new_name": "X"}]},
+        )
         assert len(result) == 1
         data = json.loads(result[0].text)
         err = data.get("error", "")
@@ -270,7 +273,9 @@ class TestToolPermissionErrors:
         from app.mcp_server.server import _call_tool
         from app.services.ifc_service import ifc_service as svc
         monkeypatch.setattr(svc, "_model", None)
-        result = await _call_tool("highlight_elements", {"express_ids": [1]})
+        result = await _call_tool(
+            "viewer_control", {"action": "highlight", "element_ids": [1]}
+        )
         data = json.loads(result[0].text)
         err = data.get("error", "")
         assert "not permitted" in err
@@ -295,7 +300,7 @@ class TestCallToolRobustness:
         from app.services.ifc_service import ifc_service as svc
         monkeypatch.setattr(svc, "_model", None)
         # Should not raise; returns error about no model
-        result = await _call_tool("get_project_info", None)  # type: ignore[arg-type]
+        result = await _call_tool("describe_model", None)  # type: ignore[arg-type]
         assert isinstance(result, list) and len(result) == 1
 
     @pytest.mark.asyncio
@@ -304,7 +309,7 @@ class TestCallToolRobustness:
         from app.mcp_server.server import _call_tool
         from app.services.ifc_service import ifc_service as svc
         monkeypatch.setattr(svc, "_model", None)
-        result = await _call_tool("get_model_stats", {})
+        result = await _call_tool("describe_model", {"part": "stats"})
         parsed = json.loads(result[0].text)
         assert isinstance(parsed, dict)
 
@@ -313,13 +318,12 @@ class TestToolCatalogCompleteness:
     """Verify the all-tool-names helper and catalog completeness."""
 
     def test_all_tool_names_includes_write_tools(self):
-        assert "rename_element" in _all_tool_names
-        assert "update_property_value" in _all_tool_names
+        assert "edit_semantic" in _all_tool_names
+        assert "edit_structural" in _all_tool_names
         assert "execute_ifc_code" in _all_tool_names
 
     def test_all_tool_names_includes_viewer_tools(self):
-        assert "highlight_elements" in _all_tool_names
-        assert "isolate_elements" in _all_tool_names
+        assert "viewer_control" in _all_tool_names
 
     def test_list_all_tool_names_matches_definitions(self):
         from_defs = frozenset(t["name"] for t in TOOL_DEFINITIONS)
@@ -411,11 +415,10 @@ class TestWritesEnabled:
 class TestWriteToolCatalog:
     def test_write_allowlist_contains_expected_tools(self):
         from app.mcp_server.server import _WRITE_ALLOWLIST
-        assert "rename_element" in _WRITE_ALLOWLIST
-        assert "update_property_value" in _WRITE_ALLOWLIST
-        assert "create_wall_from_ends" in _WRITE_ALLOWLIST
-        assert "delete_element" in _WRITE_ALLOWLIST
+        assert "edit_semantic" in _WRITE_ALLOWLIST
+        assert "edit_structural" in _WRITE_ALLOWLIST
         assert "execute_ifc_code" in _WRITE_ALLOWLIST
+        assert "undo_last_edit" in _WRITE_ALLOWLIST
 
     def test_list_exposed_write_tools_returns_correct_count(self):
         from app.mcp_server import list_exposed_write_tools
@@ -423,7 +426,7 @@ class TestWriteToolCatalog:
         tools = list_exposed_write_tools()
         # Full write parity with the chat surface (R4): staged tools plus
         # direct operations. Read-only history remains in the read catalog.
-        assert len(tools) == len(_WRITE_ALLOWLIST) == 10
+        assert len(tools) == len(_WRITE_ALLOWLIST) == 4
 
     def test_list_exposed_write_tools_has_descriptions(self):
         from app.mcp_server import list_exposed_write_tools
@@ -450,7 +453,7 @@ class TestWriteToolCatalog:
         from app.mcp_server.server import _list_tools
         tools = await _list_tools()
         names = {t.name for t in tools}
-        assert "rename_element" in names
+        assert "edit_semantic" in names
         assert "execute_ifc_code" in names
         assert "apply_pending_edit" in names
         assert "discard_pending_edit" in names
@@ -462,7 +465,7 @@ class TestWriteToolCatalog:
         from app.mcp_server.server import _list_tools
         tools = await _list_tools()
         names = {t.name for t in tools}
-        assert "rename_element" not in names
+        assert "edit_semantic" not in names
         assert "apply_pending_edit" not in names
 
 
@@ -477,7 +480,10 @@ class TestWriteToolGating:
     async def test_write_tool_gated_off_when_disabled(self, monkeypatch):
         monkeypatch.delenv("MCP_ALLOW_WRITES", raising=False)
         from app.mcp_server.server import _call_tool
-        result = await _call_tool("rename_element", {"express_id": 1, "new_name": "X"})
+        result = await _call_tool(
+            "edit_semantic",
+            {"ops": [{"op": "set_name", "element_id": 1, "new_name": "X"}]},
+        )
         data = json.loads(result[0].text)
         err = data.get("error", "")
         assert "not permitted" in err
@@ -661,14 +667,17 @@ class TestWriteToolHappyPath:
     async def test_write_tool_reaches_execute_tool_when_enabled(self, monkeypatch):
         """When writes are on, a write-tool call returns JSON (not a gating error).
 
-        rename_element is a DIRECT op, so the backend edit-mode flag must be on
+        edit_semantic is a DIRECT op, so the backend edit-mode flag must be on
         too (R4 dual-gate); with both flags the call reaches execute_tool."""
         monkeypatch.setenv("MCP_ALLOW_WRITES", "1")
         monkeypatch.setattr("app.core.config.EDIT_MODE_ENABLED", True)
         from app.services.ifc_service import ifc_service as svc
         monkeypatch.setattr(svc, "_model", None)
         from app.mcp_server.server import _call_tool
-        result = await _call_tool("rename_element", {"express_id": 1, "new_name": "X"})
+        result = await _call_tool(
+            "edit_semantic",
+            {"ops": [{"op": "set_name", "element_id": 1, "new_name": "X"}]},
+        )
         assert len(result) == 1
         data = json.loads(result[0].text)
         # Should be an execute_tool error (no model), NOT a gating "not permitted" error.
@@ -684,18 +693,20 @@ class TestWriteToolHappyPath:
         from app.services.ifc_service import ifc_service as svc
         monkeypatch.setattr(svc, "_model", None)
         from app.mcp_server.server import _call_tool
-        result = await _call_tool("update_property_value", {})
+        result = await _call_tool("edit_semantic", {})
         parsed = json.loads(result[0].text)
         assert isinstance(parsed, dict)
 
     @pytest.mark.asyncio
-    async def test_delete_element_reaches_execute_tool_when_enabled(self, monkeypatch):
-        """delete_element is also a write-tool; verify it routes correctly."""
+    async def test_edit_structural_reaches_execute_tool_when_enabled(self, monkeypatch):
+        """edit_structural is also a write-tool; verify it routes correctly."""
         monkeypatch.setenv("MCP_ALLOW_WRITES", "1")
         from app.services.ifc_service import ifc_service as svc
         monkeypatch.setattr(svc, "_model", None)
         from app.mcp_server.server import _call_tool
-        result = await _call_tool("delete_element", {"express_id": 1})
+        result = await _call_tool(
+            "edit_structural", {"ops": [{"op": "delete_element", "element_id": 1}]}
+        )
         data = json.loads(result[0].text)
         assert "not permitted" not in data.get("error", "")
 
@@ -1261,7 +1272,10 @@ class TestMcpWriteSafety:
 
         monkeypatch.setenv("MCP_ALLOW_WRITES", "1")
         monkeypatch.setattr("app.core.config.EDIT_MODE_ENABLED", False)
-        result = await srv._call_tool("rename_element", {"element_id": 1, "new_name": "X"})
+        result = await srv._call_tool(
+            "edit_semantic",
+            {"ops": [{"op": "set_name", "element_id": 1, "new_name": "X"}]},
+        )
         data = json.loads(result[0].text)
         assert "error" in data
         assert "EDIT_MODE_ENABLED" in data["error"]
@@ -1296,7 +1310,10 @@ class TestMcpWriteSafety:
 
         monkeypatch.setattr(srv, "execute_tool", _fake_execute)
         monkeypatch.setattr(lock_mod, "publish_operation_events", _fake_publish)
-        result = await srv._call_tool("rename_element", {"element_id": 1, "new_name": "X"})
+        result = await srv._call_tool(
+            "edit_semantic",
+            {"ops": [{"op": "set_name", "element_id": 1, "new_name": "X"}]},
+        )
         data = json.loads(result[0].text)
         assert data["ok"] is True
         assert seen["actor"] == Actor.MCP
@@ -1305,7 +1322,7 @@ class TestMcpWriteSafety:
 
     @pytest.mark.asyncio
     async def test_staged_tool_does_not_require_edit_mode(self, monkeypatch):
-        """create_wall_from_ends keeps the pending-edit ceremony and only
+        """edit_structural keeps the pending-edit ceremony and only
         needs MCP_ALLOW_WRITES (the user still applies via diff preview)."""
         import importlib
         srv = importlib.import_module('app.mcp_server.server')
@@ -1319,7 +1336,8 @@ class TestMcpWriteSafety:
 
         monkeypatch.setattr(srv, "execute_tool", _fake_execute)
         result = await srv._call_tool(
-            "create_wall_from_ends", {"start": [0, 0], "end": [1, 0]}
+            "edit_structural",
+            {"ops": [{"op": "create_wall", "start": [0, 0], "end": [1, 0]}]},
         )
         data = json.loads(result[0].text)
         # It reached the tool body (model error), not the EDIT_MODE gate.
@@ -1343,8 +1361,10 @@ class TestActorThreading:
             return {"ok": True}
 
         monkeypatch.setattr(tools_mod, "_execute_tool_raw", _fake_raw)
-        monkeypatch.setattr(tools_mod, "warming_envelope", lambda name: None)
-        tools_mod.execute_tool("get_project_info", {"fresh": "args-1"})
+        monkeypatch.setattr(
+            tools_mod, "warming_envelope", lambda name, arguments=None: None
+        )
+        tools_mod.execute_tool("describe_model", {"fresh": "args-1"})
         assert seen["actor"] == Actor.AGENT
 
     def test_execute_tool_forwards_mcp_actor(self, monkeypatch):
@@ -1358,6 +1378,8 @@ class TestActorThreading:
             return {"ok": True}
 
         monkeypatch.setattr(tools_mod, "_execute_tool_raw", _fake_raw)
-        monkeypatch.setattr(tools_mod, "warming_envelope", lambda name: None)
-        tools_mod.execute_tool("get_project_info", {"fresh": "args-2"}, actor=Actor.MCP)
+        monkeypatch.setattr(
+            tools_mod, "warming_envelope", lambda name, arguments=None: None
+        )
+        tools_mod.execute_tool("describe_model", {"fresh": "args-2"}, actor=Actor.MCP)
         assert seen["actor"] == Actor.MCP

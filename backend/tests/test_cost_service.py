@@ -1,6 +1,6 @@
 """Unit tests for the 5D cost service (pure pricing over a QTO summary)."""
 
-from app.services.cost_service import (
+from app.services.qto_service import (
     apply_rates,
     boq_to_csv,
     sanitize_rates,

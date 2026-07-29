@@ -10,27 +10,27 @@ import {
   tierColour,
   toggleToolDisabled,
   DEFAULT_AGENT_IDS,
-} from '../toolsRegistryHelpers';
+} from '../ChatManagerPanel';
 
 const TOOL_A: ToolCatalogEntry = {
-  name: 'get_project_info',
-  description: 'Return project metadata',
+  name: 'describe_model',
+  description: 'Return project metadata and model overviews',
   parameters: {},
   where: 'server',
   tier: 'read_model',
   tier_label: 'Read model',
 };
 const TOOL_B: ToolCatalogEntry = {
-  name: 'rename_element',
-  description: 'Rename a single element',
+  name: 'edit_semantic',
+  description: 'Stage name and property edits for review',
   parameters: {},
   where: 'server',
   tier: 'write_edit',
   tier_label: 'Write / Edit',
 };
 const TOOL_C: ToolCatalogEntry = {
-  name: 'highlight_elements',
-  description: 'Highlight a list of elements in the viewer',
+  name: 'viewer_control',
+  description: 'Highlight, isolate and select elements in the viewer',
   parameters: {},
   where: 'client',
   tier: 'read_viewer',
@@ -59,7 +59,7 @@ const EDIT_AGENT: AgentPreset = {
   temperature: 0.1,
   icon: 'edit',
   // explicit allowlist
-  allowed_tools: ['get_project_info', 'rename_element'],
+  allowed_tools: ['describe_model', 'edit_semantic'],
   quick_prompts: [],
   category: 'edit',
 };
@@ -77,17 +77,17 @@ describe('agentAllowsTool', () => {
 
   it('returns true when allowed_tools is null (no allowlist)', () => {
     expect(agentAllowsTool(ASK_AGENT, 'anything')).toBe(true);
-    expect(agentAllowsTool(ASK_AGENT, 'rename_element')).toBe(true);
+    expect(agentAllowsTool(ASK_AGENT, 'edit_semantic')).toBe(true);
   });
 
   it('returns true when the tool is in the explicit allowlist', () => {
-    expect(agentAllowsTool(EDIT_AGENT, 'rename_element')).toBe(true);
-    expect(agentAllowsTool(EDIT_AGENT, 'get_project_info')).toBe(true);
+    expect(agentAllowsTool(EDIT_AGENT, 'edit_semantic')).toBe(true);
+    expect(agentAllowsTool(EDIT_AGENT, 'describe_model')).toBe(true);
   });
 
   it('returns false when the tool is missing from an explicit allowlist', () => {
     expect(agentAllowsTool(EDIT_AGENT, 'execute_ifc_code')).toBe(false);
-    expect(agentAllowsTool(EDIT_AGENT, 'highlight_elements')).toBe(false);
+    expect(agentAllowsTool(EDIT_AGENT, 'viewer_control')).toBe(false);
   });
 });
 
@@ -99,15 +99,15 @@ describe('buildToolUsageRows', () => {
   });
 
   it('marks tools allowed by both Ask + Edit with both ids', () => {
-    const renameRow = rows.find((r) => r.tool.name === 'rename_element')!;
-    expect(renameRow.agents).toEqual(['default', 'edit-assistant']);
-    expect(renameRow.usageLabel).toBe('Ask · Edit');
+    const editRow = rows.find((r) => r.tool.name === 'edit_semantic')!;
+    expect(editRow.agents).toEqual(['default', 'edit-assistant']);
+    expect(editRow.usageLabel).toBe('Ask · Edit');
   });
 
   it('marks Ask-only tools correctly (Edit allowlist omits them)', () => {
-    const highlightRow = rows.find((r) => r.tool.name === 'highlight_elements')!;
-    expect(highlightRow.agents).toEqual(['default']);
-    expect(highlightRow.usageLabel).toBe('Ask');
+    const viewerRow = rows.find((r) => r.tool.name === 'viewer_control')!;
+    expect(viewerRow.agents).toEqual(['default']);
+    expect(viewerRow.usageLabel).toBe('Ask');
   });
 
   it('renders "None" usage when neither agent allows a tool', () => {
@@ -173,7 +173,7 @@ describe('filterToolUsageRows', () => {
   });
 
   it('matches the query against name (case-insensitive)', () => {
-    expect(filterToolUsageRows(rows, 'all', 'RENAME')).toHaveLength(1);
+    expect(filterToolUsageRows(rows, 'all', 'EDIT_SEMANTIC')).toHaveLength(1);
   });
 
   it('matches the query against description', () => {
@@ -231,14 +231,14 @@ describe('tierColour', () => {
 
 describe('toggleToolDisabled', () => {
   it('adds a tool to the disabled set', () => {
-    const next = toggleToolDisabled(new Set(), 'rename_element');
-    expect(next.has('rename_element')).toBe(true);
+    const next = toggleToolDisabled(new Set(), 'edit_semantic');
+    expect(next.has('edit_semantic')).toBe(true);
     expect(next.size).toBe(1);
   });
 
   it('removes an already-disabled tool', () => {
-    const next = toggleToolDisabled(new Set(['rename_element']), 'rename_element');
-    expect(next.has('rename_element')).toBe(false);
+    const next = toggleToolDisabled(new Set(['edit_semantic']), 'edit_semantic');
+    expect(next.has('edit_semantic')).toBe(false);
     expect(next.size).toBe(0);
   });
 

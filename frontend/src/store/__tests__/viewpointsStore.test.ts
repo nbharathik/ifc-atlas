@@ -10,7 +10,7 @@ import { useStore, type SavedViewpoint } from '../useStore';
 import {
   createStoreyCutPlanePreset,
   parseSectionWorkspace,
-} from '../../services/viewer/sectionWorkspace';
+} from '../../services/viewer/sectionTools';
 
 const VIEWPOINTS_STORAGE_KEY = 'pref.viewpoints.v1';
 const PROJECT_KEY = 'Demo project|IFC4';

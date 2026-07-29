@@ -10,7 +10,7 @@ import {
   statusColor,
   usedPercent,
   verifyBudgetRowConsistency,
-} from '../budgetDashboardHelpers';
+} from '../BudgetDashboardPanel';
 import type { BudgetAgentRow } from '../../../services/api';
 
 function row(

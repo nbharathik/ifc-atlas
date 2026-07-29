@@ -9,31 +9,44 @@ style utility classes (tokens live in `frontend/src/index.css`).
 ```
 frontend/src/
 ├── components/
-│   ├── chat/        ChatPanel, ChatManagerPanel, AiKeysModal, AIReadinessChip,
-│   │                PromptSnippetPanel, SkillsSection, ToolsRegistrySection,
-│   │                DocumentsSection, ModelsSection
+│   ├── chat/        ChatPanel, ChatManagerPanel (Skills / Tools / Documents /
+│   │                Models / Knowledge tabs), AiKeysModal, AIReadinessChip,
+│   │                PromptSnippetPanel
+│   ├── common/      CodeEditor (Python highlighting for plugins)
 │   ├── edit/        DiffPreviewPanel
 │   ├── layout/      Topbar, Menubar, Sidebar, RightSidebar, Outliner, StatusBar,
-│   │                CommandPalette, KeyboardShortcuts, SettingsModal, UploadOverlay
+│   │                CommandPalette, KeyboardShortcuts, SettingsModal,
+│   │                UploadOverlay, DemoModeBanner, EditScopeBanner, UpdateBanner
 │   ├── panels/      PropertiesPanel, SearchPanel, ClassificationPanel,
-│   │                ActivityPanel, ViewpointsPanel, CheckpointPanel,
+│   │                ActivityPanel, ViewpointsPanel, TimelinePanel,
 │   │                BudgetDashboardPanel, ElementFilterPanel, ModelStatsPanel,
-│   │                ModelHealthPanel, SummaryPanel
-│   ├── viewer/      ViewerPanel, ViewerToolsPanel, ViewerContextMenu,
-│   │                ClipPlaneControls, MeasurementControls, MeasurementPanel,
-│   │                MeasurementLabels, SelectionHistoryNav, SelectionSummaryChip,
-│   │                StoreyNavigatorBar, ColourByControl, FloatingChatDock,
-│   │                ViewportNavControls, PerformanceHud, PerformanceDashboard
-│   └── ui/          ErrorBoundary, Icon, ToastStack
+│   │                ModelHealthPanel, SummaryPanel, QtoPanel, IdsPanel, BcfPanel,
+│   │                CarbonPanel, CobiePanel, CostPanel, DiffPanel, PluginsPanel,
+│   │                FeatureLauncherPanel
+│   ├── viewer/      ViewerPanel, ViewerToolsPanel, ViewerContextMenu, EditToolbar,
+│   │                MeasurementControls, MeasurementPanel, MeasurementLabels,
+│   │                MeasurementCursorTip, SelectionSummaryChip, ColourLayerLegend,
+│   │                HighlightBadge, ViewerHoverTooltip, ViewerResetControl,
+│   │                FloatingChatDock, ViewportNavControls, PerformanceHud,
+│   │                PerformanceDashboard
+│   ├── ui/          ErrorBoundary, Icon, ToastStack
+│   ├── BackendGate.tsx           desktop splash awaiting sidecar readiness
+│   └── DesktopOpenFileBridge.tsx file-association open events (Tauri)
 ├── services/
 │   ├── api.ts       REST client
 │   ├── chat/        WebSocket transport for /api/chat/ws
+│   ├── editor/      wall-draw controller (structural edit, frontend-gated off)
+│   ├── features/    QTO / IDS / BCF / carbon / cobie / cost / diff / plugins clients
 │   ├── ifc/         IFC upload + server-convert client (serverConvert.ts)
-│   └── viewer/      Pure math + frustum cullers + share-link encoder
+│   └── viewer/      Pure math + cullers + coordinator helpers + share-link encoder
+├── hooks/           useIfcUpload, useLoadProgressPacer, useNewProject
+├── lib/             platform.ts (apiUrl / wsUrl, desktop-aware addressing)
+├── config/          featureFlags.ts (BROWSER_ONLY, STRUCTURAL_EDIT_ENABLED, …)
+├── generated/       api-schema.ts + openapi.json (generated API types)
 ├── store/
 │   └── useStore.ts  Zustand single-store
 ├── types/           Shared TS interfaces
-├── workers/         Web-worker entry points
+├── workers/         Web-worker entry points (convert, metadata, classification)
 └── App.tsx          App shell
 ```
 
@@ -337,7 +350,7 @@ The helper is framework-free. `SettingsModal` owns the current UI flow:
 
 ## Viewer benchmark and target architecture
 
-[`BIM_VIEWER_DALUX_REVIEW.md`](BIM_VIEWER_DALUX_REVIEW.md) contains the July
+[`history/BIM_VIEWER_DALUX_REVIEW.md`](history/BIM_VIEWER_DALUX_REVIEW.md) contains the July
 2026 end-to-end viewer audit, the confirmed-versus-inferred Dalux comparison,
 the stable-geometry target architecture, and the phased implementation and
 performance-test plan.

@@ -8,18 +8,39 @@ size cap so users can keep the cache bounded.
 
 See `app.core.config` for resolution logic and `docs/user/DATA_STORAGE.md`
 for the user-facing description.
+
+This module also hosts three sibling system-level route groups, each on its
+own ``APIRouter`` (identical prefixes/tags/paths as the former per-domain
+modules; ``app.main`` includes all four):
+
+* Settings routes - provider status, configuration, and per-user secrets.
+  Keys are resolved fresh on every request via
+  :func:`app.services.secrets_service.get_api_key` so an edit through the UI
+  takes effect on the very next LLM call (no restart needed).
+* MCP registry routes - read-only REST for the MCP server registry. The
+  settings UI renders the catalogue so operators can see which external tool
+  servers are configured, whether they are enabled, and what transport they
+  use. Writes/reloads arrive in a later phase once the live client is in
+  place.
+* Diff routes - the working-vs-original model diff. Opening the pristine
+  upload and diffing it is CPU-bound, so both routes run through
+  ``asyncio.to_thread`` and share the diff service's result cache via the
+  model-contract fingerprint (same pattern as the cost/carbon routes) - the
+  panel fetches on every mount and the CSV export repeats the same diff.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
 from app.core.config import (
     BASE_DIR,
@@ -30,10 +51,17 @@ from app.core.config import (
     FRAGMENT_CACHE_DIR,
     CACHE_MAX_BYTES,
 )
+from app.services import secrets_service
+from app.services.diff_service import diff_to_csv, working_vs_original
+from app.services.ifc_service import ifc_service
+from app.services.mcp_registry import mcp_registry
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/system", tags=["system"])
+settings_router = APIRouter(prefix="/api/settings", tags=["settings"])
+mcp_router = APIRouter(prefix="/api/mcp", tags=["mcp"])
+diff_router = APIRouter(prefix="/api/diff", tags=["diff"])
 
 
 # ---------------------------------------------------------------------------
@@ -289,3 +317,189 @@ async def update_cache_config(update: CacheConfigUpdate) -> dict[str, Any]:
         "files_removed": files_removed,
         "note": "Runtime-only. Set IFC_VIEWER_CACHE_MAX_BYTES in .env to persist.",
     }
+
+
+# ---------------------------------------------------------------------------
+# Settings - provider status, configuration, and per-user secrets
+# ---------------------------------------------------------------------------
+
+
+def provider_status_payload() -> dict:
+    """Per-provider configuration status, embedded in /chat/manager/bootstrap.
+
+    The frontend never sees the actual key value, only whether one resolves,
+    where it comes from (``env`` vs ``file``), and a short mask for display.
+    """
+    secrets_status = secrets_service.status_payload()
+
+    def _entry(provider: str, name: str, base_url: Optional[str], default_model: str) -> dict:
+        s = secrets_status.get(provider, {})
+        return {
+            "name": name,
+            "configured": bool(s.get("configured")),
+            "source": s.get("source"),
+            "masked": s.get("masked", ""),
+            "env_var": s.get("env_var", ""),
+            "base_url": base_url,
+            "default_model": default_model,
+        }
+
+    return {
+        "openai": _entry("openai", "OpenAI", None, "gpt-4o"),
+        "anthropic": _entry("anthropic", "Anthropic", None, "claude-sonnet-4-6"),
+        "openrouter": _entry(
+            "openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "openrouter/auto"
+        ),
+    }
+
+
+class SecretsUpdateRequest(BaseModel):
+    """All fields optional - only the keys present in the payload are written."""
+
+    openai: Optional[str] = Field(default=None)
+    anthropic: Optional[str] = Field(default=None)
+    openrouter: Optional[str] = Field(default=None)
+
+
+@settings_router.get("/secrets")
+async def get_secrets_status() -> dict:
+    """Status-only view of the per-user secrets file. No raw keys."""
+    return {"providers": secrets_service.status_payload()}
+
+
+@settings_router.put("/secrets")
+async def update_secrets(payload: SecretsUpdateRequest) -> dict:
+    """Merge non-empty values from ``payload`` into ``secrets.json``.
+
+    Empty / missing fields are ignored - to remove a key use DELETE.
+    Returns the refreshed status so the UI can re-render in one round trip.
+    """
+    updates = {k: v for k, v in payload.model_dump().items() if v}
+    if updates:
+        secrets_service.set_api_keys(updates)
+    return {"providers": secrets_service.status_payload()}
+
+
+@settings_router.delete("/secrets/{provider}")
+async def delete_secret(provider: str) -> dict:
+    """Remove a stored key for ``provider``, or ``provider="all"``.
+
+    Env-var keys are never touched - they live outside this store. If the
+    user wants to remove an env-var key they must edit ``.env`` / their
+    shell themselves.
+    """
+    if provider == "all":
+        removed = secrets_service.delete_all()
+        return {"removed": removed, "providers": secrets_service.status_payload()}
+    if provider not in secrets_service.SUPPORTED_PROVIDERS:
+        raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
+    removed_ok = secrets_service.delete_api_key(provider)
+    return {
+        "removed": [provider] if removed_ok else [],
+        "providers": secrets_service.status_payload(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# MCP server registry (read-only)
+# ---------------------------------------------------------------------------
+
+
+@mcp_router.get("/servers")
+async def list_servers() -> dict:
+    return {
+        "source": mcp_registry.source,
+        "enabled": mcp_registry.enabled_server_names(),
+        "servers": mcp_registry.list_servers(),
+    }
+
+
+@mcp_router.post("/reload")
+async def reload() -> dict:
+    """Re-read the config file without restarting the backend.
+
+    Useful after the operator hand-edits mcp_servers.json - saves the
+    Uvicorn reload cycle. Idempotent and safe to spam.
+    """
+    mcp_registry.reload()
+    return {
+        "source": mcp_registry.source,
+        "count": len(mcp_registry.list_servers()),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Working-vs-original model diff
+# ---------------------------------------------------------------------------
+
+
+class DiffAddedRow(BaseModel):
+    express_id: int
+    ifc_type: str
+    name: Optional[str] = None
+
+
+class DiffChangedRow(BaseModel):
+    express_id: int
+    ifc_type: str
+    change: str
+    name_before: Optional[str] = None
+    name_after: Optional[str] = None
+    property_changes: list[dict[str, Any]] = []
+
+
+class DiffResponse(BaseModel):
+    added: list[DiffAddedRow]
+    removed: list[DiffAddedRow]
+    changed: list[DiffChangedRow]
+    counts: dict[str, int]
+    truncated: bool
+    has_working_copy: bool
+
+
+def _check_loaded() -> None:
+    if not ifc_service.is_loaded:
+        raise HTTPException(400, "No IFC model loaded")
+    if ifc_service.original_path is None:
+        raise HTTPException(400, "No original upload on record for this model")
+
+
+def _has_working_copy() -> bool:
+    # noqa: SLF001 - internal path access mirrors sandbox_service usage
+    return ifc_service.original_path != ifc_service._file_path
+
+
+def _model_cache_fingerprint() -> str:
+    contract = ifc_service.get_model_contract()
+    return f"{contract['model_fingerprint']}:{contract['model_version']}:{contract['edit_id']}"
+
+
+@diff_router.get("/working-vs-original", response_model=DiffResponse)
+async def diff_working_vs_original() -> dict[str, Any]:
+    """Structural diff (added / removed / changed) of the working model vs the upload."""
+    _check_loaded()
+    summary = await asyncio.to_thread(
+        working_vs_original,
+        ifc_service.model,
+        str(ifc_service.original_path),
+        fingerprint=_model_cache_fingerprint(),
+    )
+    summary["has_working_copy"] = _has_working_copy()
+    return summary
+
+
+@diff_router.get("/working-vs-original.csv")
+async def diff_working_vs_original_csv():
+    """Download the change report as CSV."""
+    _check_loaded()
+    summary = await asyncio.to_thread(
+        working_vs_original,
+        ifc_service.model,
+        str(ifc_service.original_path),
+        fingerprint=_model_cache_fingerprint(),
+    )
+    return Response(
+        content=diff_to_csv(summary),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="changes.csv"'},
+    )

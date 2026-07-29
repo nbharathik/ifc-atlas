@@ -111,22 +111,30 @@ function idsButtonClass(error: boolean): string {
 }
 
 describe('IDS CSV button detection', () => {
-  it('shows button when tool name is ids_validate and result is present', () => {
-    const isIdsValidate = (name: string, result: string | undefined) =>
-      name === 'ids_validate' && !!result;
-    expect(isIdsValidate('ids_validate', '{"total":5}')).toBe(true);
+  /** Mirror of the detection logic in ToolCallDisplay: validate_model with
+   *  check='ids' is the current catalog shape; the bare ids_validate name
+   *  keeps restored legacy transcripts working. */
+  const isIdsValidate = (
+    name: string,
+    args: Record<string, unknown>,
+    result: string | undefined,
+  ) => !!result && ((name === 'validate_model' && args.check === 'ids') || name === 'ids_validate');
+
+  it('shows button for validate_model with check=ids and a result', () => {
+    expect(isIdsValidate('validate_model', { check: 'ids' }, '{"total":5}')).toBe(true);
   });
 
-  it('does not show button for other tool names', () => {
-    const isIdsValidate = (name: string, result: string | undefined) =>
-      name === 'ids_validate' && !!result;
-    expect(isIdsValidate('get_model_stats', '{"total":5}')).toBe(false);
+  it('shows button for the legacy ids_validate name (restored transcripts)', () => {
+    expect(isIdsValidate('ids_validate', {}, '{"total":5}')).toBe(true);
+  });
+
+  it('does not show button for other tool names or checks', () => {
+    expect(isIdsValidate('describe_model', {}, '{"total":5}')).toBe(false);
+    expect(isIdsValidate('validate_model', { check: 'health' }, '{"total":5}')).toBe(false);
   });
 
   it('does not show button when result is missing', () => {
-    const isIdsValidate = (name: string, result: string | undefined) =>
-      name === 'ids_validate' && !!result;
-    expect(isIdsValidate('ids_validate', undefined)).toBe(false);
+    expect(isIdsValidate('validate_model', { check: 'ids' }, undefined)).toBe(false);
   });
 
   it('extracts ids_base64 from arguments', () => {

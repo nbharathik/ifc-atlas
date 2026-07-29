@@ -21,7 +21,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.api.chat_routes import check_global_disable_block
 from app.main import app
-from app.services.tool_settings_service import (
+from app.services.tool_support import (
     ToolSettingsService,
     tool_settings_service,
 )

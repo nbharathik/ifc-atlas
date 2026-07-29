@@ -140,7 +140,7 @@ async def test_stream_chat_model_fallback_when_over_cap():
          patch("app.services.llm_service.stream_via_langgraph", side_effect=_fake_stream), \
          patch("app.services.llm_service.budget_tracker", mock_bt), \
          patch("app.services.llm_service.get_api_key", return_value="key"), \
-         patch("app.services.model_context_injector.model_context_injector.inject", side_effect=lambda p, c: p):
+         patch("app.services.chat_context.model_context_injector.inject", side_effect=lambda p, c: p):
 
         from app.services.llm_service import stream_chat
         events = [ev async for ev in stream_chat("hi", [], provider="openai")]
@@ -169,7 +169,7 @@ async def test_stream_chat_hard_stop_when_over_cap_no_fallback():
     with patch("app.services.llm_service.get_agent", return_value=agent), \
          patch("app.services.llm_service.budget_tracker", mock_bt), \
          patch("app.services.llm_service.get_api_key", return_value="key"), \
-         patch("app.services.model_context_injector.model_context_injector.inject", side_effect=lambda p, c: p):
+         patch("app.services.chat_context.model_context_injector.inject", side_effect=lambda p, c: p):
 
         from app.services.llm_service import stream_chat
         events = [ev async for ev in stream_chat("hi", [], provider="openai")]
@@ -205,7 +205,7 @@ async def test_stream_chat_budget_warning_after_near_cap_turn():
          patch("app.services.llm_service.stream_via_langgraph", side_effect=_fake_stream), \
          patch("app.services.llm_service.budget_tracker", mock_bt), \
          patch("app.services.llm_service.get_api_key", return_value="key"), \
-         patch("app.services.model_context_injector.model_context_injector.inject", side_effect=lambda p, c: p):
+         patch("app.services.chat_context.model_context_injector.inject", side_effect=lambda p, c: p):
 
         from app.services.llm_service import stream_chat
         events = [ev async for ev in stream_chat("hi", [], provider="openai")]

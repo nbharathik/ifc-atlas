@@ -9,7 +9,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useStore } from '../useStore';
-import { buildMessageParts } from '../../components/chat/chatMessageParts';
+import { buildMessageParts } from '../../components/chat/ChatPanel';
 
 function last() {
   const msgs = useStore.getState().chatMessages;
@@ -24,21 +24,21 @@ describe('tool-call chronological ordering (store + parts)', () => {
 
   it('stamps contentOffset from the current assistant text length', () => {
     useStore.getState().updateLastAssistantMessage('Let me check. ');
-    useStore.getState().addToolCallToLastMessage({ name: 'search_elements', arguments: {} });
+    useStore.getState().addToolCallToLastMessage({ name: 'query_elements', arguments: {} });
     const tc = last().toolCalls?.[0];
     expect(tc?.contentOffset).toBe('Let me check. '.length);
   });
 
   it('produces text → tool → text order end-to-end', () => {
     useStore.getState().updateLastAssistantMessage('Let me check. ');
-    useStore.getState().addToolCallToLastMessage({ name: 'search_elements', arguments: {} });
+    useStore.getState().addToolCallToLastMessage({ name: 'query_elements', arguments: {} });
     useStore.getState().updateLastAssistantMessage('Let me check. There are 12 walls.');
 
     const msg = last();
     const parts = buildMessageParts(msg.content, msg.toolCalls);
     expect(parts.map((p) => p.type)).toEqual(['text', 'tool', 'text']);
     expect((parts[0] as { text: string }).text).toBe('Let me check. ');
-    expect((parts[1] as { toolCall: { name: string } }).toolCall.name).toBe('search_elements');
+    expect((parts[1] as { toolCall: { name: string } }).toolCall.name).toBe('query_elements');
     expect((parts[2] as { text: string }).text).toBe('There are 12 walls.');
   });
 

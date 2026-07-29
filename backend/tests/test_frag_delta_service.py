@@ -14,7 +14,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
-from app.services.frag_delta_service import FragDeltaService, frag_delta_service
+from app.services.fragment_prebuild_service import FragDeltaService, frag_delta_service
 
 
 # ---------------------------------------------------------------------------

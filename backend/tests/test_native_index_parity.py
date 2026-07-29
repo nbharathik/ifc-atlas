@@ -34,6 +34,19 @@ import pytest
 
 from app.services.tools import _NATIVE_INDEX_ELIGIBLE_TOOLS, _execute_tool_raw
 
+# Public merged-catalog calls that resolve to the native-index-eligible
+# subtools (one per _NATIVE_INDEX_ELIGIBLE_TOOLS entry).
+NATIVE_ELIGIBLE_CALLS: list[tuple[str, dict]] = [
+    ("describe_model", {"part": "project"}),
+    ("describe_model", {"part": "stats"}),
+    ("describe_model", {"part": "storeys"}),
+    ("query_elements", {"mode": "text", "query": "x"}),
+    ("query_elements", {"mode": "type", "ifc_type": "IfcWall"}),
+    ("query_elements", {"mode": "storey", "storey_id": 100}),
+]
+
+assert len(NATIVE_ELIGIBLE_CALLS) == len(_NATIVE_INDEX_ELIGIBLE_TOOLS)
+
 
 # ---------------------------------------------------------------------------
 # Comparable shapes
@@ -196,8 +209,8 @@ class TestParityShape:
     """Structural parity - both paths return same key set + types."""
 
     def test_get_project_info_parity(self, both_backends_loaded, monkeypatch):
-        native = _call_via_native(monkeypatch, "get_project_info", {})
-        full = _call_via_ifcopenshell(monkeypatch, "get_project_info", {})
+        native = _call_via_native(monkeypatch, "describe_model", {"part": "project"})
+        full = _call_via_ifcopenshell(monkeypatch, "describe_model", {"part": "project"})
         assert _shape_signature(_stripped(native)) == _shape_signature(_stripped(full))
         # Both must carry _source + _complete (readiness-routing annotations).
         for r in (native, full):
@@ -205,36 +218,40 @@ class TestParityShape:
             assert "_complete" in r
 
     def test_get_model_stats_parity(self, both_backends_loaded, monkeypatch):
-        native = _call_via_native(monkeypatch, "get_model_stats", {})
-        full = _call_via_ifcopenshell(monkeypatch, "get_model_stats", {})
+        native = _call_via_native(monkeypatch, "describe_model", {"part": "stats"})
+        full = _call_via_ifcopenshell(monkeypatch, "describe_model", {"part": "stats"})
         assert _shape_signature(_stripped(native)) == _shape_signature(_stripped(full))
 
     def test_search_elements_parity(self, both_backends_loaded, monkeypatch):
-        native = _call_via_native(monkeypatch, "search_elements", {"query": "wall"})
-        full = _call_via_ifcopenshell(monkeypatch, "search_elements", {"query": "wall"})
+        native = _call_via_native(
+            monkeypatch, "query_elements", {"mode": "text", "query": "wall"}
+        )
+        full = _call_via_ifcopenshell(
+            monkeypatch, "query_elements", {"mode": "text", "query": "wall"}
+        )
         assert _shape_signature(_stripped(native)) == _shape_signature(_stripped(full))
         assert _stripped(native).get("total") == _stripped(full).get("total")
         assert _stripped(native).get("query") == _stripped(full).get("query")
 
     def test_get_elements_by_type_parity(self, both_backends_loaded, monkeypatch):
-        args = {"ifc_type": "IfcWall"}
-        native = _call_via_native(monkeypatch, "get_elements_by_type", args)
-        full = _call_via_ifcopenshell(monkeypatch, "get_elements_by_type", args)
+        args = {"mode": "type", "ifc_type": "IfcWall"}
+        native = _call_via_native(monkeypatch, "query_elements", args)
+        full = _call_via_ifcopenshell(monkeypatch, "query_elements", args)
         assert _shape_signature(_stripped(native)) == _shape_signature(_stripped(full))
         assert _stripped(native).get("ifc_type") == _stripped(full).get("ifc_type")
         assert _stripped(native).get("count") == _stripped(full).get("count")
 
     def test_get_elements_by_storey_parity(self, both_backends_loaded, monkeypatch):
-        args = {"storey_id": 100}
-        native = _call_via_native(monkeypatch, "get_elements_by_storey", args)
-        full = _call_via_ifcopenshell(monkeypatch, "get_elements_by_storey", args)
+        args = {"mode": "storey", "storey_id": 100}
+        native = _call_via_native(monkeypatch, "query_elements", args)
+        full = _call_via_ifcopenshell(monkeypatch, "query_elements", args)
         assert _shape_signature(_stripped(native)) == _shape_signature(_stripped(full))
         assert _stripped(native).get("storey_id") == _stripped(full).get("storey_id")
         assert _stripped(native).get("count") == _stripped(full).get("count")
 
     def test_get_storeys_parity(self, both_backends_loaded, monkeypatch):
-        native = _call_via_native(monkeypatch, "get_storeys", {})
-        full = _call_via_ifcopenshell(monkeypatch, "get_storeys", {})
+        native = _call_via_native(monkeypatch, "describe_model", {"part": "storeys"})
+        full = _call_via_ifcopenshell(monkeypatch, "describe_model", {"part": "storeys"})
         assert _shape_signature(_stripped(native)) == _shape_signature(_stripped(full))
         # Both should return a `storeys` list of the same length.
         assert len(_stripped(native)["storeys"]) == len(_stripped(full)["storeys"])
@@ -244,45 +261,24 @@ class TestParityAnnotations:
     """Readiness-routing annotations - _source + _complete semantics."""
 
     def test_native_path_marks_source_native(self, both_backends_loaded, monkeypatch):
-        for tool in _NATIVE_INDEX_ELIGIBLE_TOOLS:
-            args: dict = {}
-            if tool == "search_elements":
-                args = {"query": "x"}
-            elif tool == "get_elements_by_type":
-                args = {"ifc_type": "IfcWall"}
-            elif tool == "get_elements_by_storey":
-                args = {"storey_id": 100}
+        for tool, args in NATIVE_ELIGIBLE_CALLS:
             result = _call_via_native(monkeypatch, tool, args)
             assert result["_source"] == "native_index", \
-                f"{tool}: native path should mark _source='native_index'"
+                f"{tool}{args}: native path should mark _source='native_index'"
 
     def test_ifcopenshell_path_marks_source_ifcopenshell(
         self, both_backends_loaded, monkeypatch,
     ):
-        for tool in _NATIVE_INDEX_ELIGIBLE_TOOLS:
-            args: dict = {}
-            if tool == "search_elements":
-                args = {"query": "x"}
-            elif tool == "get_elements_by_type":
-                args = {"ifc_type": "IfcWall"}
-            elif tool == "get_elements_by_storey":
-                args = {"storey_id": 100}
+        for tool, args in NATIVE_ELIGIBLE_CALLS:
             result = _call_via_ifcopenshell(monkeypatch, tool, args)
             assert result["_source"] == "ifcopenshell", \
-                f"{tool}: ifcopenshell path should mark _source='ifcopenshell'"
+                f"{tool}{args}: ifcopenshell path should mark _source='ifcopenshell'"
 
     def test_ifcopenshell_path_always_complete(
         self, both_backends_loaded, monkeypatch,
     ):
         """ifcopenshell is the full path - _complete is always True."""
-        for tool in _NATIVE_INDEX_ELIGIBLE_TOOLS:
-            args: dict = {}
-            if tool == "search_elements":
-                args = {"query": "x"}
-            elif tool == "get_elements_by_type":
-                args = {"ifc_type": "IfcWall"}
-            elif tool == "get_elements_by_storey":
-                args = {"storey_id": 100}
+        for tool, args in NATIVE_ELIGIBLE_CALLS:
             result = _call_via_ifcopenshell(monkeypatch, tool, args)
             assert result["_complete"] is True
 
@@ -291,13 +287,6 @@ class TestParityAnnotations:
     ):
         """When ifc_service is ALSO loaded, native data matches the full
         data, so _complete should be True."""
-        for tool in _NATIVE_INDEX_ELIGIBLE_TOOLS:
-            args: dict = {}
-            if tool == "search_elements":
-                args = {"query": "x"}
-            elif tool == "get_elements_by_type":
-                args = {"ifc_type": "IfcWall"}
-            elif tool == "get_elements_by_storey":
-                args = {"storey_id": 100}
+        for tool, args in NATIVE_ELIGIBLE_CALLS:
             result = _call_via_native(monkeypatch, tool, args)
             assert result["_complete"] is True

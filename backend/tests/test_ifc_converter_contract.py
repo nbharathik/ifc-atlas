@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from app.services.ifc_converter import (
+from app.services.ifc_ingestion_service import (
     ConversionResult,
     IfcConverter,
     WebIfcSidecarConverter,

@@ -11,16 +11,22 @@ backend/
 ├── app/
 │   ├── api/
 │   │   ├── ifc_routes.py        REST: upload, native parse, geometry, fragments,
-│   │   │                        edits, undo, IDS, checkpoints, AABB + sync WS
+│   │   │                        edits, undo, IDS validate, checkpoints, AABB + sync WS
 │   │   ├── chat_routes.py       WS: /api/chat/ws + agent / prompt / snippet /
 │   │   │                        tool-set / model CRUD + doc index
 │   │   ├── settings_routes.py   /api/settings/secrets, per-user API-key store
 │   │   ├── system_routes.py     /api/system/*, data-dir info + cache flush/cap
-│   │   └── mcp_routes.py        /api/mcp/*, external MCP server registry
+│   │   ├── mcp_routes.py        /api/mcp/*, external MCP server registry
+│   │   └── …                    one module per feature router: qto, cost, carbon,
+│   │                            cobie, diff, ids, bcf, plugin, viewer_state
+│   │                            (see the endpoint-groups table below)
 │   ├── core/
-│   │   └── config.py            env vars + ~/.ifc-atlas folder resolution
-│   ├── models/                  Pydantic request / response schemas
-│   ├── services/                singletons (see below)
+│   │   ├── config.py            env vars + ~/.ifc-atlas folder resolution
+│   │   └── security.py          security modes (local / server) + bearer token
+│   ├── models/                  Pydantic request / response schemas;
+│   │                            contracts.py = engine-neutral model-identity
+│   │                            and render-artifact contracts
+│   ├── services/                ~60 singletons (see below)
 │   ├── mcp_server/              MCP server exposing the viewer toolset
 │   └── main.py                  FastAPI entry, lifespan hooks, /mcp mount
 ├── sidecar/                     Node/TS native IFC parser (spawned on demand)
@@ -35,8 +41,8 @@ backend/
 
 ### `ifc_service.py`
 
-- **Reads** through every query helper (`get_project_info`, `get_model_stats`, `get_storeys`, `get_element_details`, `get_elements_by_type`, `get_elements_by_storey`, `search_by_property`, `get_all_property_names`, `get_quantities_summary`, `search_elements`, `find_nearby_elements`, …).
-- **Writes** through the sandbox flow: `rename_element`, `update_property_value`, batch variants, `create_wall_from_ends`, `delete_element`, `execute_ifc_code`.
+- **Reads** through every query helper backing `describe_model`, `query_elements`, `get_element`, and `quantity_summary` (project info, stats, storeys, element details, per-type and per-storey listings, property search, proximity search, quantity totals, …).
+- **Writes** through the sandbox flow behind `edit_semantic` (name / property / attribute ops), `edit_structural` (`create_wall` / `delete_element` ops), and `execute_ifc_code`.
 - **Undo stack** records `{express_id, attr, before, after}` for every committed write; `undo_last_edit` pops and applies the inverse.
 - `load()` copies the upload to a hidden `.working/<name>.ifc` so the original stays pristine; `_file_path` is the working file.
 - The `model` accessor is a property without a setter; tests must monkeypatch `_model` directly.
@@ -80,6 +86,10 @@ makes the complete profile-configure/process/restore transaction exclusive.
 Callers may submit concurrently, but the shared importer never processes two
 profiles at once; a rejected job does not poison the queue. A future bounded
 worker pool must use one importer per worker rather than sharing this instance.
+
+### `ifc_ingestion_service.py`, `ifc_conversion_service.py`, `ifc_converter.py`
+
+Upload and conversion orchestration extracted from the routes: `ifc_ingestion_service` owns model-state transition ordering, readiness broadcasts, checkpoint rebinding, background prebuild, metadata indexing, and AABB warm-up for one source revision. `ifc_conversion_service` owns hashing, cache lookup, in-flight prebuild coordination, converter invocation, artifact validation, and atomic publication. `ifc_converter` is the engine-neutral conversion boundary (the active adapter delegates to the web-ifc Node sidecar). The stable identity and render-artifact types live in `app/models/contracts.py`.
 
 ### `fragment_prebuild_service.py`
 
@@ -149,6 +159,15 @@ and exact fragment subsets), `element_index_service` / `document_index_service`
 | `/api/settings/*` | `settings_routes.py` | `secrets.json` status / PUT / DELETE. |
 | `/api/system/*` | `system_routes.py` | User-data folder paths + cache flush / cap. |
 | `/api/mcp/*` | `mcp_routes.py` | External MCP server registry. |
+| `/api/qto/*` | `qto_routes.py` | Quantity-takeoff summaries + CSV export. |
+| `/api/cost/*` | `cost_routes.py` | 5D cost / bill of quantities built on the takeoff. |
+| `/api/carbon/*` | `carbon_routes.py` | Embodied-carbon estimates built on the takeoff. |
+| `/api/cobie/*` | `cobie_routes.py` | COBie-style handover summary + CSV export. |
+| `/api/diff/*` | `diff_routes.py` | Working-vs-original model diff. |
+| `/api/ids/*` | `ids_routes.py` | Persistent IDS document library + validation runs. |
+| `/api/bcf/*` | `bcf_routes.py` | BCF 2.1 topics + `.bcfzip` import / export. |
+| `/api/plugins/*` | `plugin_routes.py` | Plugin script CRUD + sandboxed runs. |
+| `/api/viewer/*` | `viewer_state_routes.py` | Viewer state / command bridge for headless clients (CLI, MCP). |
 | `/mcp/*` | `mcp_server/` | SSE server exposing the viewer toolset to external clients. |
 
 Full endpoint catalogue: [REST API](../api/REST.md) (regenerate with `python scripts/generate_api_doc.py`).
@@ -173,7 +192,11 @@ Env vars are read from the shell and from `~/.ifc-atlas/.env` (the backend does 
 | `UPLOAD_DIR` / `SNAPSHOT_DIR` / `DATA_DIR` / `CHECKPOINT_DIR` / `FRAGMENT_CACHE_DIR` | under `IFC_ATLAS_HOME` | Re-point individual dirs. |
 | `IFC_VIEWER_CACHE_MAX_BYTES` | `2147483648` | Uploads-dir LRU cap; `0` disables. |
 | `IFC_VIEWER_MAX_UPLOAD_BYTES` | `536870912` | Per-request IFC body cap; `0` disables. |
-| `HOST` / `PORT` | `0.0.0.0` / `8000` | Bind address (run.py falls back to a free port if taken). |
+| `IFC_ATLAS_SECURITY_MODE` | `local` | `local` allows only loopback binds with no auth; `server` is for shared deployments and requires the API token. |
+| `IFC_ATLAS_API_TOKEN` | (unset) | Shared bearer token; required (32+ characters) in server mode. |
+| `IFC_ATLAS_ENABLE_CODE_EXECUTION` | `1` local / `0` server | Free-form Python (`execute_ifc_code`, plugins). Trusted-local; defaults off in server mode. |
+| `SIDECAR_CONVERT_TIMEOUT_S` | `900` | Finite deadline for server-side fragment conversion. |
+| `HOST` / `PORT` | `127.0.0.1` / `8000` | Bind address (run.py falls back to a free port if taken). |
 | `FRONTEND_URL` | `http://localhost:5173` | CORS allow-list entry. |
 | `LOG_LEVEL` | `info` | uvicorn + app log level. |
 | `BACKEND_VERBOSE` | `0` | `1` = DEBUG logs + per-request timing. |

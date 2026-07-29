@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { useIfcUpload } from '../../hooks/useIfcUpload';
-import { useNewProject, type NewProjectTemplate } from '../../hooks/useNewProject';
+import { useNewProject, type NewProjectTemplate } from '../../hooks/useIfcUpload';
 import { BROWSER_ONLY } from '../../config/featureFlags';
 import { useStore } from '../../store/useStore';
 import Icon from '../ui/Icon';

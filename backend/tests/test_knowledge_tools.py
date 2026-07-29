@@ -1,5 +1,5 @@
-"""Tests for the knowledge tools (bSDD + get_docs), the async->sync bridge, and
-the reference-docs service.
+"""Tests for the unified knowledge tool (get_docs, incl. its bSDD search /
+class-detail routing), the async->sync bridge, and the reference-docs service.
 
 Fast lane: no network (bSDD is mocked), no IFC model load. The one test that
 indexes the real ifcopenshell.api package is marked requires_ifc_load (slow +
@@ -23,9 +23,8 @@ def test_async_bridge_runs_coroutine():
     assert _run_coro_sync(_demo()) == {"v": 7}
 
 
-def test_knowledge_tools_are_read_knowledge_tier():
-    for n in ("bsdd_search", "bsdd_get_class", "bsdd_get_properties", "get_docs"):
-        assert tool_tier(n)[0] == "read_knowledge"
+def test_knowledge_tool_is_read_knowledge_tier():
+    assert tool_tier("get_docs")[0] == "read_knowledge"
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -42,36 +41,43 @@ class TestBsddToolDispatch:
                     "results": [{"uri": "u", "name": "Wall", "type": "class", "dictionary": "IFC"}]}
 
         monkeypatch.setattr(bsdd, "search", fake_search)
-        res = _execute_tool_raw("bsdd_search", {"query": "wall"})
+        res = _execute_tool_raw("get_docs", {"source": "bsdd", "query": "wall"})
         assert res["count"] == 1
         assert res["results"][0]["name"] == "Wall"
 
     def test_bsdd_search_empty_query_error(self):
-        res = _execute_tool_raw("bsdd_search", {"query": "   "})
+        res = _execute_tool_raw("get_docs", {"source": "bsdd", "query": "   "})
         assert "error" in res
 
-    def test_bsdd_get_class_dispatches(self, monkeypatch):
+    def test_bsdd_uri_fetches_class_detail(self, monkeypatch):
         import app.services.bsdd_service as bsdd
 
         async def fake_get_class(uri):
             return {"uri": uri, "name": "IfcWall"}
 
         monkeypatch.setattr(bsdd, "get_class", fake_get_class)
-        res = _execute_tool_raw("bsdd_get_class", {"uri": "https://identifier.buildingsmart.org/uri/x"})
-        assert res["name"] == "IfcWall"
+        res = _execute_tool_raw(
+            "get_docs",
+            {"source": "bsdd", "uri": "https://identifier.buildingsmart.org/uri/x"},
+        )
+        assert res["detail"] == "class"
+        assert res["result"]["name"] == "IfcWall"
 
-    def test_bsdd_get_class_requires_uri(self):
-        assert "error" in _execute_tool_raw("bsdd_get_class", {})
+    def test_bsdd_without_query_or_uri_errors(self):
+        assert "error" in _execute_tool_raw("get_docs", {"source": "bsdd"})
 
-    def test_bsdd_get_properties_dispatches(self, monkeypatch):
+    def test_bsdd_uri_detail_properties_dispatches(self, monkeypatch):
         import app.services.bsdd_service as bsdd
 
         async def fake(uri):
             return {"class_uri": uri, "count": 2, "properties": [{}, {}]}
 
         monkeypatch.setattr(bsdd, "get_class_properties", fake)
-        res = _execute_tool_raw("bsdd_get_properties", {"uri": "u"})
-        assert res["count"] == 2
+        res = _execute_tool_raw(
+            "get_docs", {"source": "bsdd", "uri": "u", "detail": "properties"}
+        )
+        assert res["detail"] == "properties"
+        assert res["result"]["count"] == 2
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -114,7 +120,7 @@ class TestGetDocsRouting:
         assert res["source"] == "user" and res["result_count"] == 1
 
     def test_ifcopenshell_not_indexed(self, monkeypatch):
-        import app.services.reference_docs_service as rds
+        import app.services.document_index_service as rds
 
         monkeypatch.setattr(rds.reference_docs_service, "status", lambda: {"indexed": False})
         res = _execute_tool_raw("get_docs", {"source": "ifcopenshell", "query": "wall"})
@@ -122,7 +128,7 @@ class TestGetDocsRouting:
         assert "fetch_reference_docs" in res.get("hint", "")
 
     def test_ifcopenshell_indexed(self, monkeypatch):
-        import app.services.reference_docs_service as rds
+        import app.services.document_index_service as rds
 
         monkeypatch.setattr(rds.reference_docs_service, "status", lambda: {"indexed": True})
         monkeypatch.setattr(
@@ -149,7 +155,7 @@ class TestGetDocsRouting:
 
 class TestReferenceDocsService:
     def test_index_search_status_clear(self, tmp_path):
-        from app.services.reference_docs_service import ReferenceDocsService
+        from app.services.document_index_service import ReferenceDocsService
 
         svc = ReferenceDocsService(index_dir=tmp_path / "ref")
         assert svc.status()["indexed"] is False
@@ -162,7 +168,7 @@ class TestReferenceDocsService:
         assert svc.status()["indexed"] is False
 
     def test_search_empty_query_returns_empty(self, tmp_path):
-        from app.services.reference_docs_service import ReferenceDocsService
+        from app.services.document_index_service import ReferenceDocsService
 
         svc = ReferenceDocsService(index_dir=tmp_path / "ref2")
         assert svc.search("   ") == []
@@ -170,7 +176,7 @@ class TestReferenceDocsService:
     @pytest.mark.requires_ifc_load
     def test_index_ifcopenshell_api_populates(self, tmp_path):
         """Slow: imports + walks the real ifcopenshell.api package."""
-        from app.services.reference_docs_service import ReferenceDocsService
+        from app.services.document_index_service import ReferenceDocsService
 
         svc = ReferenceDocsService(index_dir=tmp_path / "ref_api")
         res = svc.index_ifcopenshell_api()

@@ -68,7 +68,7 @@ from app.models.ifc_models import (
     TileManifest,
 )
 from app.services.aabb_service import aabb_service
-from app.services.frag_delta_service import frag_delta_service
+from app.services.fragment_prebuild_service import frag_delta_service
 from app.services.fragment_cache import (
     FRAGMENT_ARTIFACT_SCHEMA_VERSION,
     FragmentCacheEntry,
@@ -90,13 +90,15 @@ from app.services.ids_service import (
     validate_ids_base64,
     validate_ids_base64_to_csv,
 )
-from app.services.ifc_converter import IfcConverter, WebIfcSidecarConverter
-from app.services.ifc_conversion_service import (
+from app.services.ifc_ingestion_service import (
     ConverterUnavailableError,
     IfcConversionService,
+    IfcConverter,
+    IfcIngestionError,
+    IfcIngestionService,
     InvalidRenderArtifactError,
+    WebIfcSidecarConverter,
 )
-from app.services.ifc_ingestion_service import IfcIngestionError, IfcIngestionService
 from app.services.ifc_checkpoint_service import ifc_checkpoint_service
 from app.services.ifc_service import ifc_service
 from app.services.lod_service import (
@@ -2687,7 +2689,7 @@ async def history_diff(
     Feeds the Timeline panel's two-point compare. CPU-bound work runs off the
     event loop; results are LRU-cached by content identity.
     """
-    from app.services import history_diff_service
+    from app.services import diff_service as history_diff_service
 
     _check_loaded()
     if not history_diff_service.is_available():

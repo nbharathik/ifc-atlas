@@ -4,7 +4,7 @@ import { useIfcUpload } from '../../hooks/useIfcUpload';
 import { saveIfcAs } from '../../services/ifc/saveAs';
 import { getEditState } from '../../services/api';
 import { BROWSER_ONLY } from '../../config/featureFlags';
-import { useNewProject, type NewProjectTemplate } from '../../hooks/useNewProject';
+import { useNewProject, type NewProjectTemplate } from '../../hooks/useIfcUpload';
 import { apiUrl, invokeCommand, isDesktop } from '../../lib/platform';
 import Icon from '../ui/Icon';
 

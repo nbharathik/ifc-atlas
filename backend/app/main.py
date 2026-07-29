@@ -20,20 +20,24 @@ from app.models.contracts import (
 )
 from app.api.ifc_routes import router as ifc_router
 from app.api.chat_routes import router as chat_router
-from app.api.settings_routes import router as settings_router
-from app.api.mcp_routes import router as mcp_router
-from app.api.system_routes import router as system_router
-from app.api.qto_routes import router as qto_router
-from app.api.cost_routes import router as cost_router
-from app.api.carbon_routes import router as carbon_router
-from app.api.cobie_routes import router as cobie_router
-from app.api.diff_routes import router as diff_router
+from app.api.system_routes import (
+    diff_router,
+    mcp_router,
+    router as system_router,
+    settings_router,
+)
+from app.api.takeoff_routes import (
+    carbon_router,
+    cobie_router,
+    cost_router,
+    qto_router,
+)
 from app.api.ids_routes import router as ids_router
 from app.api.bcf_routes import router as bcf_router
 from app.api.plugin_routes import router as plugin_router
 from app.api.viewer_state_routes import router as viewer_state_router
 from app.mcp_server import build_sse_app
-from app.services.fragment_prebuild_gc import gc_loop as _fragment_prebuild_gc_loop
+from app.services.fragment_prebuild_service import gc_loop as _fragment_prebuild_gc_loop
 from app.services.sidecar_manager import sidecar_manager
 
 logger = logging.getLogger(__name__)

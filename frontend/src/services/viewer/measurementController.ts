@@ -9,11 +9,9 @@ import {
   verticalHeightBetween,
   type CoordinateMeasurement,
   type VerticalHeightMeasurement,
+  type ConstructionSnapCandidate,
+  type ConstructionSnapKind,
 } from './constructionMeasurement';
-import type {
-  ConstructionSnapCandidate,
-  ConstructionSnapKind,
-} from './constructionSnapCandidates';
 
 /** Measurement interaction mode.
  *

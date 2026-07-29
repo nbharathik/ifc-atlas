@@ -20,7 +20,7 @@ from app.core.config import (
 from app.services.secrets_service import get_api_key
 from app.services.agent_registry import AgentPreset, get_agent
 from app.services.budget_tracker import budget_tracker
-from app.services.tool_memo import tool_memo_cache
+from app.services.tool_support import tool_memo_cache
 from app.services.tools import (
     get_openai_tools,
     get_anthropic_tools,
@@ -144,23 +144,15 @@ def _anthropic_tools_with_cache(tools: list[dict]) -> list[dict]:
     return result
 
 
-# Read-only model tools whose results are safe to memoize within a single turn.
+# Read-only model tools whose results are safe to memoize within a single
+# turn. Memo keys include the serialized arguments, so each mode/part/include
+# of a merged tool memoizes independently.
 _MEMOIZABLE_TOOLS = frozenset({
-    "get_project_info",
-    "get_model_stats",
-    "get_storeys",
-    "get_all_property_names",
-    "get_quantities_summary",
-    "get_element_details",
-    "get_elements_by_type",
-    "get_elements_by_storey",
-    "search_elements",
-    "search_by_property",
+    "describe_model",
+    "query_elements",
+    "get_element",
+    "quantity_summary",
     "execute_ifc_query_code",
-    "get_connected_elements",
-    "get_element_material",
-    "get_openings_for_element",
-    "find_elements_by_type_name",
 })
 
 
@@ -172,14 +164,13 @@ You have tools to query and drive the currently loaded IFC model. Use them to an
 Guidelines:
 - Use tools to retrieve real data before answering questions about the model.
 - Reference specific element Express IDs, types, storeys, and properties when relevant.
-- When asked to find or filter elements, call the appropriate tool and summarize the results.
-- Use highlight_elements when the user wants to see or locate elements.
-- Use select_element to focus a single element and open its properties panel.
-- Use isolate_elements when the user wants to focus on a subset (others get hidden).
-  Pass an empty array to clear isolation.
-- Use show_all_elements to restore full visibility.
-- Use get_quantities_summary for aggregate measurements (total area, total volume,
-  totals per storey, etc.) instead of summing element-by-element.
+- When asked to find or filter elements, call query_elements with the right mode and
+  summarize the results.
+- Use viewer_control when the user wants to see elements: action='highlight' to mark
+  them, 'select' to focus one element and open its properties, 'isolate' to hide
+  everything else (empty array clears), 'show_all' to restore full visibility.
+- Use quantity_summary (kind='qto') for aggregate measurements (total area, total
+  volume, totals per storey, etc.) instead of summing element-by-element.
 - Be concise but thorough. Use structured formatting when listing data.
 - If no model is loaded, tell the user to upload one first.
 """
@@ -307,7 +298,7 @@ def _ui_action_events(result: dict) -> list[dict]:
         # entity_delta so fragment loaders can update only affected geometry.
         if changed_ids:
             try:
-                from app.services.entity_dependency_graph import get_graph
+                from app.services.element_relationships import get_graph
                 graph = get_graph()
                 if graph.node_count > 0:
                     dirty = graph.compute_dirty_set(changed_ids, max_depth=1)
@@ -1090,8 +1081,7 @@ async def stream_via_langgraph(
     Falls back to the provider-specific streaming functions when the graph
     cannot be built (missing API key, unsupported provider, etc.).
     """
-    from app.services.agent_graph_nodes import make_langchain_tools
-    from app.services.agent_graph import build_streaming_agent
+    from app.services.agent_graph import build_streaming_agent, make_langchain_tools
     from langchain_core.messages import HumanMessage, AIMessage
     from langgraph.errors import GraphRecursionError
 
@@ -1460,7 +1450,7 @@ async def stream_chat(
 
     Yields structured events that the WebSocket handler forwards to the frontend.
     """
-    from app.services.model_context_injector import model_context_injector
+    from app.services.chat_context import model_context_injector
 
     # Flush the per-turn memo cache so stale read results don't leak between turns.
     tool_memo_cache.new_turn()
@@ -1522,7 +1512,7 @@ async def stream_chat(
     # Optional system-prompt override from prompt library.
     base_prompt = agent.system_prompt
     if prompt_id:
-        from app.services.prompt_library import prompt_library
+        from app.services.chat_context import prompt_library
         entry = prompt_library.get(prompt_id)
         if entry is not None and entry.content:
             base_prompt = entry.content
@@ -1532,7 +1522,7 @@ async def stream_chat(
     # Empty `tools` tuple in a set means "all tools" (no filter).
     allowed_tools = agent.allowed_tools
     if tool_set_id:
-        from app.services.tool_sets import tool_set_registry
+        from app.services.tool_support import tool_set_registry
         ts = tool_set_registry.get(tool_set_id)
         if ts is not None and not ts.is_all_tools:
             set_tools = frozenset(ts.tools)
@@ -1553,7 +1543,7 @@ async def stream_chat(
         allowed_tools = base - write_edit_tool_names()
 
     # Edit scope (dev/docs/EDIT_SCOPES.md): in "semantic" scope the structural
-    # write tools (create/delete geometry, execute_ifc_code, propose_edit) are
+    # write tools (edit_structural, execute_ifc_code) are
     # stripped so the agent can only make metadata edits that update the viewer
     # in place - never a 3D reload. "structural" scope keeps them (the UI shows
     # a beta reload warning). Only tightens the allowlist; never widens it.

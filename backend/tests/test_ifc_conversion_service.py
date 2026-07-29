@@ -6,12 +6,12 @@ import pytest
 
 from app.services.fragment_cache import read_fragment_cache
 from app.services.fragment_prebuild_service import FragmentPrebuildService
-from app.services.ifc_conversion_service import (
+from app.services.ifc_ingestion_service import (
+    ConversionResult,
     ConverterUnavailableError,
     IfcConversionService,
     InvalidRenderArtifactError,
 )
-from app.services.ifc_converter import ConversionResult
 
 
 class FakeConverter:

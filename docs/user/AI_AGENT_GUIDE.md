@@ -20,15 +20,15 @@ The chat panel runs in **Ask** mode: read-only questions and viewer commands. Th
 | **Default** | Ask | General-purpose, all read tools enabled. Answers model questions, runs quantity summaries, drives the viewer (highlight, isolate, select). |
 | **Edit Assistant** | Edit | Semantic and beta geometry edits, with every agent write staged through an inline approval preview. |
 
-Each agent has its own system prompt, model, temperature, and tool allowlist. To specialise the assistant for a task (quantity take-off, model audit, IDS review), activate a system prompt from Chat Manager (`Ctrl+Shift+M`) → **Skills**: built-in prompts are read-only, and editing one forks it into your own editable copy that persists server-side. Custom agents can also be managed through the [REST API](../agent/CUSTOM_AGENTS.md).
+Each agent has its own system prompt, model, temperature, and tool allowlist. To specialise the assistant for a task (quantity take-off, model audit, IDS review), activate a system prompt from Chat Manager (`Ctrl+Shift+M`) → **Skills**: built-in prompts are read-only, and editing one forks it into your own editable copy that persists server-side. Custom agents can also be managed through the [REST API](../agent/AGENTS.md#custom-agents).
 
 ---
 
 ## How a request flows
 
 1. **You type a message.** The agent sees it together with the chat history, its system prompt, and a compact summary of the loaded model (project name, schema, element counts, storeys, materials).
-2. **The agent decides which tools to call.** Most questions run one to three search tools (`get_model_stats`, `search_elements`, `search_by_property`, and so on).
-3. **Each tool call reaches the backend.** It is routed to the appropriate service (the IFC service, the IDS validator, the native metadata index, the script sandbox) or back to the frontend for viewer operations such as `highlight_elements` or `isolate_elements`.
+2. **The agent decides which tools to call.** Most questions run one to three read tools (`describe_model`, `query_elements`, and so on).
+3. **Each tool call reaches the backend.** It is routed to the appropriate service (the IFC service, the IDS validator, the native metadata index, the script sandbox) or back to the frontend for viewer operations (`viewer_control` actions such as `highlight` or `isolate`).
 4. **The result streams back.** Every tool call and its result appear in the per-message tool-call log for inspection.
 5. **The agent writes the answer.** Text streams token by token.
 

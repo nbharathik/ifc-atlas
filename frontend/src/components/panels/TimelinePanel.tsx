@@ -7,7 +7,6 @@ import {
   type HistoryDiffEntry,
   type HistoryDiffResult,
 } from '../../services/api';
-import { formatCheckpointTs, restoreButtonTitle } from '../../services/viewer/checkpointHelpers';
 import { useShallow } from 'zustand/react/shallow';
 
 import { useStore } from '../../store/useStore';
@@ -22,6 +21,8 @@ import {
   type ActorFilter,
   type OperationLogEntry,
   type TimelineItem,
+  formatCheckpointTs,
+  restoreButtonTitle,
 } from './timelineHelpers';
 import './timelinePanel.css';
 

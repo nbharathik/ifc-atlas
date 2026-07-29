@@ -4,7 +4,7 @@ import {
   applyNameUpdatesToTree,
   type PatchApplierDeps,
 } from '../patchApplier';
-import type { IfcPatch } from '../../../types/ifcPatch';
+import type { IfcPatch } from '../../../types/ifc';
 import type { SpatialNode } from '../../../types/ifc';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

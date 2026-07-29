@@ -16,8 +16,7 @@ The **Edit Assistant** stages model edits (names, safe text attributes, existing
 | Page | Coverage |
 |---|---|
 | [Agent Interface](AGENT_INTERFACE.md) | Chat panel layout, readiness chip, tool-call blocks, slash commands. |
-| [Agent Presets](AGENT_PRESETS.md) | The built-in agents with their allowed tools and example prompts. |
-| [Custom Agents](CUSTOM_AGENTS.md) | Customising prompts from the Chat Manager and managing agents via the REST API. |
+| [Agents](AGENTS.md) | The built-in agents with their allowed tools, plus customising prompts and managing custom agents via the REST API. |
 | [Tools Reference](TOOLS_REFERENCE.md) | Every tool the agent can call (auto-generated from the tool registry). |
 | [MCP Clients](MCP_CLIENTS.md) | Connecting Claude Desktop, Cursor, or custom scripts to the viewer's MCP server. |
 

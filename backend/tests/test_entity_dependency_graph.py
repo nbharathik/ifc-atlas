@@ -1,5 +1,5 @@
 """Tests for the IFC entity dependency graph."""
-from app.services.entity_dependency_graph import (
+from app.services.element_relationships import (
     EntityDependencyGraph,
     build_from_ifc,
     get_graph,
@@ -229,12 +229,12 @@ class TestModuleSingleton:
 
 class TestEntityDeltaInUiActionEvents:
     def test_entity_delta_emitted_when_graph_populated(self, monkeypatch):
-        from app.services.entity_dependency_graph import EntityDependencyGraph
+        from app.services.element_relationships import EntityDependencyGraph
         mock_graph = EntityDependencyGraph()
         mock_graph.add_edge(10, 11, "spatial")
 
         monkeypatch.setattr(
-            "app.services.entity_dependency_graph._graph", mock_graph
+            "app.services.element_relationships._graph", mock_graph
         )
 
         from app.services.llm_service import _ui_action_events

@@ -77,8 +77,8 @@ The agent invoked a tool.
 ```json
 {
   "type": "tool_call",
-  "name": "search_elements",
-  "arguments": { "query": "wall" }
+  "name": "query_elements",
+  "arguments": { "mode": "text", "query": "wall" }
 }
 ```
 
@@ -89,7 +89,7 @@ Result of the most recent tool call.
 ```json
 {
   "type": "tool_result",
-  "name": "search_elements",
+  "name": "query_elements",
   "result": { "total": 42, "elements": ["..."] },
   "executed_on": "server"
 }
@@ -104,14 +104,14 @@ Discard then happen over REST
 
 ### `tool_call_request` (client-executed tools)
 
-Tools declared to run in the browser (the basic read tools and the viewer commands, when `tool_mode` is `hybrid` or `client`) are forwarded to the frontend instead of executing on the backend:
+Calls the browser can serve (when `tool_mode` is `hybrid` or `client`) are forwarded to the frontend instead of executing on the backend: every `viewer_control` action, `describe_model` with `part` of `project`/`stats`/`storeys`, `query_elements` with `mode` of `text`/`type`/`storey`, and `get_element` with `include` omitted or `["details"]`.
 
 ```json
 {
   "type": "tool_call_request",
   "tool_call_id": "a1b2c3...",
-  "name": "get_model_stats",
-  "arguments": {}
+  "name": "describe_model",
+  "arguments": { "part": "stats" }
 }
 ```
 
@@ -183,10 +183,13 @@ Every tool carries a tier, and the WS handler's tool executor enforces three gat
 
 The tiers:
 
-- **`read_model`**, read-only queries answered from the model: `get_project_info`, `get_model_stats`, `search_elements`, `get_element_details`, `get_elements_by_type`, `get_elements_by_storey`, `get_storeys`, `search_by_property`, `get_all_property_names`, `get_quantities_summary`, `run_model_health_check`, `execute_ifc_query_code`, plus relationship, material, geometry-proximity, and document-search helpers.
-- **`read_viewer`**, viewer commands: `highlight_elements`, `select_element`, `isolate_elements`, `show_all_elements`, `clip_section_box_to_element`.
-- **`validate`**, IDS validation: `ids_validate`, `highlight_ids_failures`.
-- **`write_edit`**, mutating tools: `rename_element`, `rename_elements_batch`, `update_property_value`, `update_properties_batch`, `propose_edit`, `create_wall_from_ends`, `delete_element`, `execute_ifc_code`, `undo_last_edit`, `get_edit_history`.
+- **`read_model`**, read-only queries answered from the model: `describe_model`, `query_elements`, `get_element`, `quantity_summary`, `get_edit_history`, `execute_ifc_query_code`.
+- **`read_viewer`**, viewer commands: `viewer_control`.
+- **`validate`**, model quality checks: `validate_model` (health, audit, IDS).
+- **`read_knowledge`**, reference lookups: `get_docs`.
+- **`write_edit`**, mutating tools: `edit_semantic`, `edit_structural`, `execute_ifc_code`, `undo_last_edit`.
+
+See the [Tools Reference](../agent/TOOLS_REFERENCE.md) for each tool's parameters and return shapes.
 
 ## Agent allowlist
 

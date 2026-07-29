@@ -1,8 +1,11 @@
-// Registry of the 11 LLM tools that run in the browser. The
-// backend's router_tool_executor sends tool_call_request messages over
-// the chat WS; ChatPanel dispatches them here and ships the result back
-// as tool_result. Return shapes mirror the backend's execute_tool() so
-// the LLM sees identical payloads regardless of where the tool ran.
+// Registry of the client-side handlers for the 4 merged LLM tools the
+// backend routes to the browser: describe_model (part project|stats|storeys),
+// query_elements (mode text|type|storey), get_element (details only) and
+// viewer_control (all actions). The backend's router_tool_executor sends
+// tool_call_request messages over the chat WS; ChatPanel dispatches them here
+// and ships the result back as tool_result. Return shapes mirror the
+// backend's execute_tool() so the LLM sees identical payloads regardless of
+// where the tool ran.
 
 import { modelService } from './ModelService';
 import { useStore } from '../../store/useStore';
@@ -155,20 +158,82 @@ function showAllElements(): ToolResult {
   return { action: 'show_all' };
 }
 
+function clipSectionBoxToElement(args: ToolArgs): ToolResult {
+  const id = toInt(args.element_id);
+  if (id == null) return { error: 'element_id must be an integer' };
+  const store = useStore.getState();
+  // Fits the section box to the element's AABB via the ViewerPanel-registered
+  // bridge - the same path the legacy `clip_section_box` WS event used.
+  store.clipToElement(id);
+  store.logActivity({ kind: 'view', summary: `Clipped section box to element #${id} (via AI)` });
+  return { action: 'clip_section_box', element_id: id };
+}
+
+// ---------- merged-tool dispatchers ----------
+// The backend routes a merged tool to the browser only for the mode/part
+// combinations the metadata worker can serve (see _CLIENT_ROUTING in
+// backend/app/services/tools.py). The `unsupported` branches are defensive:
+// they surface a clear error if a non-client-capable call ever lands here.
+
+function unsupported(tool: string, detail: string): ToolResult {
+  return { error: `Client tool '${tool}' cannot run in the browser: ${detail}` };
+}
+
+async function describeModel(args: ToolArgs): Promise<ToolResult> {
+  const part = String(args.part ?? '').trim();
+  switch (part) {
+    case 'project': return getProjectInfo();
+    case 'stats': return getModelStats();
+    case 'storeys': return getStoreys();
+    default:
+      return unsupported('describe_model', `part '${part}' is server-only (use project, stats, or storeys client-side)`);
+  }
+}
+
+async function queryElements(args: ToolArgs): Promise<ToolResult> {
+  const mode = String(args.mode ?? '').trim();
+  switch (mode) {
+    case 'text': return searchElements(args);       // query / ifc_type / storey / limit
+    case 'type': return getElementsByType(args);    // ifc_type
+    case 'storey': return getElementsByStorey(args); // storey_id
+    default:
+      return unsupported('query_elements', `mode '${mode}' is server-only (use text, type, or storey client-side)`);
+  }
+}
+
+async function getElement(args: ToolArgs): Promise<ToolResult> {
+  const include = args.include;
+  const aspects = Array.isArray(include)
+    ? include.map((a) => String(a))
+    : include == null
+      ? []
+      : [String(include)];
+  if (aspects.length === 0 || (aspects.length === 1 && aspects[0] === 'details')) {
+    return getElementDetails(args);
+  }
+  return unsupported('get_element', `include [${aspects.join(', ')}] is server-only (only ['details'] runs client-side)`);
+}
+
+function viewerControl(args: ToolArgs): ToolResult {
+  const action = String(args.action ?? '').trim();
+  switch (action) {
+    case 'highlight': return highlightElements(args);
+    case 'select': return selectElementTool(args);
+    case 'isolate': return isolateElements(args);
+    case 'show_all': return showAllElements();
+    case 'clip_section_box': return clipSectionBoxToElement(args);
+    default:
+      return { error: `viewer_control: unknown action '${action}'. Use one of: highlight, select, isolate, show_all, clip_section_box.` };
+  }
+}
+
 // ---------- registry + dispatcher ----------
 
 const HANDLERS: Record<string, ClientToolHandler> = {
-  get_project_info: getProjectInfo,
-  get_model_stats: getModelStats,
-  search_elements: searchElements,
-  get_element_details: getElementDetails,
-  get_elements_by_type: getElementsByType,
-  get_elements_by_storey: getElementsByStorey,
-  get_storeys: getStoreys,
-  highlight_elements: highlightElements,
-  select_element: selectElementTool,
-  isolate_elements: isolateElements,
-  show_all_elements: showAllElements,
+  describe_model: describeModel,
+  query_elements: queryElements,
+  get_element: getElement,
+  viewer_control: viewerControl,
 };
 
 export const CLIENT_TOOL_NAMES: readonly string[] = Object.freeze(Object.keys(HANDLERS));

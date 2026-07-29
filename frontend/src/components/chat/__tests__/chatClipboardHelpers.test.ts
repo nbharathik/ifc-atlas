@@ -4,7 +4,7 @@ import {
   formatToolCallClipboard,
   tryParseToolResult,
   writeToClipboard,
-} from '../chatClipboardHelpers';
+} from '../ChatPanel';
 
 // ── tryParseToolResult ───────────────────────────────────────────────────────
 
@@ -44,8 +44,8 @@ describe('tryParseToolResult', () => {
 
 describe('formatToolCallClipboard', () => {
   const baseCall: ToolCall = {
-    name: 'highlight_elements',
-    arguments: { ids: [12, 34] },
+    name: 'viewer_control',
+    arguments: { action: 'highlight', element_ids: [12, 34] },
     result: '{"highlighted":2}',
   };
 
@@ -53,8 +53,8 @@ describe('formatToolCallClipboard', () => {
     const out = formatToolCallClipboard(baseCall);
     const parsed = JSON.parse(out);
     expect(parsed).toEqual({
-      tool: 'highlight_elements',
-      arguments: { ids: [12, 34] },
+      tool: 'viewer_control',
+      arguments: { action: 'highlight', element_ids: [12, 34] },
       result: { highlighted: 2 },
     });
     expect(out).toContain('\n');
@@ -70,7 +70,7 @@ describe('formatToolCallClipboard', () => {
   });
 
   it('handles a tool call without a result (in-flight)', () => {
-    const inflight: ToolCall = { name: 'get_storeys', arguments: {} };
+    const inflight: ToolCall = { name: 'describe_model', arguments: { part: 'storeys' } };
     const parsed = JSON.parse(formatToolCallClipboard(inflight));
     expect(parsed.result).toBeNull();
   });
@@ -86,15 +86,15 @@ describe('formatToolCallClipboard', () => {
   });
 
   it('preserves empty arguments dict', () => {
-    const tc: ToolCall = { name: 'get_project_info', arguments: {} };
+    const tc: ToolCall = { name: 'get_edit_history', arguments: {} };
     const parsed = JSON.parse(formatToolCallClipboard(tc));
     expect(parsed.arguments).toEqual({});
   });
 
   it('handles nested argument objects', () => {
     const tc: ToolCall = {
-      name: 'search_by_property',
-      arguments: { filter: { pset: 'Pset_WallCommon', name: 'IsExternal', value: true } },
+      name: 'query_elements',
+      arguments: { mode: 'property', filter: { pset: 'Pset_WallCommon', name: 'IsExternal', value: true } },
     };
     const parsed = JSON.parse(formatToolCallClipboard(tc));
     expect(parsed.arguments.filter.pset).toBe('Pset_WallCommon');

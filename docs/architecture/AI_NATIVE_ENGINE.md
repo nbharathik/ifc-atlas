@@ -137,5 +137,5 @@ A streaming tile path exists in [`frontend/src/services/viewer/streamingGeometry
 - [`FRONTEND.md`](FRONTEND.md): viewer pipeline, store shape, visibility ownership.
 - [`BACKEND.md`](BACKEND.md): FastAPI structure, service responsibilities.
 - [`EDIT_PROTOCOL.md`](EDIT_PROTOCOL.md): sandbox / diff / Apply / Discard contract.
-- [`DISTRIBUTION.md`](DISTRIBUTION.md): three editions (Cloud / Desktop / Demo) from one repo.
+- [`DEPLOY.md`](DEPLOY.md): deployment and distribution, three editions from one repo.
 - [`TAURI.md`](TAURI.md): desktop shell contract.

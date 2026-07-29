@@ -2480,4 +2480,4 @@ Upload Snapshot
 
 ---
 
-_Last regenerated: 2026-07-26. Run `python scripts/generate_api_doc.py` to refresh._
+_Last regenerated: 2026-07-29. Run `python scripts/generate_api_doc.py` to refresh._

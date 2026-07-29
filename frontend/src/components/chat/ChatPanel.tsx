@@ -12,29 +12,391 @@ import {
   getCachedChatManagerBootstrap,
 } from '../../services/api';
 import type { ModelEntry } from '../../types/ifc';
-import { exportChatHistory } from '../../services/chat/chatExport';
 import { exportFilename } from '../../services/exportFilename';
 import { apiUrl, authenticatedWsUrl } from '../../lib/platform';
 import type { ThreadState } from '../../services/api';
 import Icon, { type IconName } from '../ui/Icon';
 import AiKeysModal from './AiKeysModal';
 import AIReadinessChip from './AIReadinessChip';
-import { formatToolCallClipboard, writeToClipboard } from './chatClipboardHelpers';
-import { buildMessageParts } from './chatMessageParts';
-import { toolActivityPresentation } from './toolActivityPresentation';
-import {
-  getTopBarOverflowActions,
-  nextIndexForKey,
-  firstEnabledIndex,
-  isOverflowNavKey,
-  type ChatTopBarAction,
-} from './chatTopBarOverflowHelpers';
-import {
-  getIdsCsvButtonLabel,
-  getIdsCsvButtonTitle,
-  extractIdsFailedCount,
-} from './idsCsvHelpers';
 import { applyEntityDelta, type EntityDeltaEvent } from '../../services/viewer/entityDeltaHandler';
+
+/**
+ * Chat top-bar overflow menu.
+ *
+ * The chat toolbar used to expose 6 icon-only buttons on the right edge:
+ * Export Markdown, Export JSON, Clear, New Chat, Chat Manager.
+ * Plus the conditional Stop button, the memory badge, and the Detach
+ * button - eight to ten controls jammed into a 28-px-tall row.
+ * Those six get folded into a
+ * single `⋯` overflow menu.  Stop / memory badge / detach stay visible
+ * since they are status-driven or layout-critical.
+ *
+ * This helper is the source of truth for the menu's *shape* - id, label,
+ * icon, separator, and the conditional `disabled` flag.  ChatPanel
+ * imports the list and renders it; the conditional disable comes from
+ * whether the conversation has any messages.  Keeping the structure here
+ * (pure, no React, no Zustand) lets the unit tests pin the menu order
+ * + disabled-state semantics without spinning up a DOM.
+ */
+
+/**
+ * One row in the `⋯` overflow menu.
+ *
+ * `id` is the contract the renderer uses to wire the click handler.
+ * `disabled` is computed by `getTopBarOverflowActions(hasMessages)` so
+ * the component never has to repeat the "no messages → disable export
+ * and clear" rule.
+ */
+export interface ChatTopBarAction {
+  id: 'export-md' | 'export-json' | 'clear' | 'new-chat' | 'chat-manager';
+  label: string;
+  /** Lucide icon name rendered to the left of the label. */
+  icon: IconName;
+  /** Tooltip / aria-label so the action is announceable. */
+  hint: string;
+  /** True → render as disabled, with a muted appearance and no click handler. */
+  disabled: boolean;
+  /** Show a thin divider after this row (groups history / utility / management). */
+  separatorAfter?: boolean;
+}
+
+/**
+ * Build the ordered list of overflow-menu rows.
+ *
+ * Order = history actions (Export MD / JSON / Clear) → fresh-chat (New
+ * chat) → management surface (Chat Manager).  Separators
+ * group those three bands.  Disabled state for the history group is
+ * driven by the presence of any chat messages - there is nothing to
+ * export or clear in an empty thread.
+ */
+export function getTopBarOverflowActions(hasMessages: boolean): ChatTopBarAction[] {
+  return [
+    {
+      id: 'export-md',
+      label: 'Export as Markdown',
+      icon: 'file-text',
+      hint: 'Download transcript as Markdown (.md)',
+      disabled: !hasMessages,
+    },
+    {
+      id: 'export-json',
+      label: 'Export as JSON',
+      icon: 'file',
+      hint: 'Download transcript as JSON (.json)',
+      disabled: !hasMessages,
+    },
+    {
+      id: 'clear',
+      label: 'Clear conversation',
+      icon: 'trash',
+      hint: 'Clear all messages but keep this thread',
+      disabled: !hasMessages,
+      separatorAfter: true,
+    },
+    {
+      id: 'new-chat',
+      label: 'New chat',
+      icon: 'plus',
+      hint: 'Start a fresh conversation thread',
+      disabled: false,
+      separatorAfter: true,
+    },
+    {
+      id: 'chat-manager',
+      label: 'Chat Manager',
+      icon: 'cpu',
+      hint: 'Agents · skills · tools · MCP · settings (Ctrl+Shift+M)',
+      disabled: false,
+    },
+  ];
+}
+
+/** Return only the action ids - handy for tests that just want to pin the order. */
+export function getTopBarOverflowActionIds(hasMessages: boolean): ChatTopBarAction['id'][] {
+  return getTopBarOverflowActions(hasMessages).map((a) => a.id);
+}
+
+/** Return only the disabled-action ids - handy for tests pinning the
+ *  empty-thread rule. */
+export function getDisabledOverflowActionIds(hasMessages: boolean): ChatTopBarAction['id'][] {
+  return getTopBarOverflowActions(hasMessages)
+    .filter((a) => a.disabled)
+    .map((a) => a.id);
+}
+
+/**
+ * Keyboard-nav math - kept pure so it tests without a DOM.
+ *
+ * Given the current `activeIndex` (or `null` when nothing is focused yet) and
+ * a direction, return the next index that points at an *enabled* row.
+ * Wraps end-to-end so ArrowDown on the last enabled row jumps to the first.
+ * Returns `null` only when every row is disabled (e.g. empty thread → all
+ * three history rows disabled but Settings / Chat Manager / New chat stay
+ * enabled, so `null` would only fire if the menu were *fully* empty).
+ */
+export function nextEnabledIndex(
+  actions: ChatTopBarAction[],
+  currentIndex: number | null,
+  direction: 1 | -1,
+): number | null {
+  const n = actions.length;
+  if (n === 0) return null;
+  // Bail early if every row is disabled - no enabled target exists.
+  if (actions.every((a) => a.disabled)) return null;
+  // Seed from `currentIndex` (or -1 / n depending on direction so the first
+  // step lands on index 0 / n-1 respectively).
+  let i = currentIndex ?? (direction === 1 ? -1 : n);
+  // Walk forward / back, wrapping, until we hit an enabled row.  Bounded by
+  // n iterations because the above all-disabled guard ensures termination.
+  for (let step = 0; step < n; step++) {
+    i = (i + direction + n) % n;
+    if (!actions[i].disabled) return i;
+  }
+  return null;
+}
+
+/**
+ * Return the first enabled index (Home key + menu open).  `null` if every
+ * row is disabled.
+ */
+export function firstEnabledIndex(actions: ChatTopBarAction[]): number | null {
+  for (let i = 0; i < actions.length; i++) {
+    if (!actions[i].disabled) return i;
+  }
+  return null;
+}
+
+/**
+ * Return the last enabled index (End key).  `null` if every row is disabled.
+ */
+export function lastEnabledIndex(actions: ChatTopBarAction[]): number | null {
+  for (let i = actions.length - 1; i >= 0; i--) {
+    if (!actions[i].disabled) return i;
+  }
+  return null;
+}
+
+/** Keys this menu treats as navigation.  Anything else is passed through. */
+export type OverflowNavKey = 'ArrowDown' | 'ArrowUp' | 'Home' | 'End';
+
+/** Type-guard so the ChatPanel onKeyDown handler stays tidy. */
+export function isOverflowNavKey(key: string): key is OverflowNavKey {
+  return key === 'ArrowDown' || key === 'ArrowUp' || key === 'Home' || key === 'End';
+}
+
+/**
+ * Single entry point for keyboard navigation - maps a key + current index
+ * to the next enabled index.  Returns `null` when the key isn't a nav key
+ * (caller should pass through) or every row is disabled.
+ */
+export function nextIndexForKey(
+  actions: ChatTopBarAction[],
+  currentIndex: number | null,
+  key: string,
+): number | null {
+  switch (key) {
+    case 'ArrowDown':
+      return nextEnabledIndex(actions, currentIndex, 1);
+    case 'ArrowUp':
+      return nextEnabledIndex(actions, currentIndex, -1);
+    case 'Home':
+      return firstEnabledIndex(actions);
+    case 'End':
+      return lastEnabledIndex(actions);
+    default:
+      return null;
+  }
+}
+
+/**
+ * Pure helpers that turn a ToolCall into clipboard text. Used by the
+ * "📋 Copy" affordance on every ToolCallDisplay row in ChatPanel.
+ *
+ * Why a dedicated helper: tool-call results are JSON-strings inside the
+ * `ToolCall.result` field, but they can also be plain text (e.g. LLM-emitted
+ * "no model loaded" errors before JSON-encoding wraps the path). The
+ * formatter parses-when-it-can and falls back to a raw paste so users never
+ * get a "[object Object]" or a double-escaped JSON blob in their clipboard.
+ *
+ * Kept pure (no DOM, no navigator.clipboard, no Zustand) so the format is
+ * unit-testable and the component code stays a thin wrapper around
+ * `navigator.clipboard.writeText(formatToolCallClipboard(tc))`.
+ */
+
+/** Try JSON.parse on a tool result; return the parsed value on success or
+ *  the original raw string on failure. Used to fold a JSON-encoded result
+ *  into the outer payload without double-escaping. */
+export function tryParseToolResult(raw: string | undefined): unknown {
+  if (raw == null || raw === '') return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/** Format a single ToolCall as a pretty-printed JSON paste containing the
+ *  tool name, the arguments dict, and the (parsed-when-possible) result.
+ *  Includes `executedOn` only if it was set - keeps the paste tidy for the
+ *  common server-only case. */
+export function formatToolCallClipboard(tc: ToolCall): string {
+  const payload: Record<string, unknown> = {
+    tool: tc.name,
+    arguments: tc.arguments ?? {},
+    result: tryParseToolResult(tc.result),
+  };
+  if (tc.executedOn) {
+    payload.executed_on = tc.executedOn;
+  }
+  return JSON.stringify(payload, null, 2);
+}
+
+/** Lightweight wrapper around navigator.clipboard.writeText that resolves
+ *  to `true` on success, `false` on failure. Tests can mock `navigator`. */
+export async function writeToClipboard(text: string): Promise<boolean> {
+  if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+    return false;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * One renderable piece of an assistant message, in transcript order.
+ *
+ * An assistant turn interleaves text and tool calls (text → tool → text → …).
+ * The store keeps the full text in `content` and the tool calls in `toolCalls`,
+ * each tagged with a `contentOffset` = the number of assistant-text characters
+ * emitted BEFORE that tool call. This helper reconstructs the true chronological
+ * order from those two fields so the UI renders text and tools where they
+ * actually happened, instead of dumping every tool call at the top.
+ */
+export type MessagePart =
+  | { type: 'text'; text: string; key: string }
+  | { type: 'tool'; toolCall: ToolCall; key: string };
+
+/**
+ * Build the ordered parts for an assistant message.
+ *
+ * Legacy safety: messages restored from history (or produced before offsets
+ * existed) have tool calls with no `contentOffset`. The clamp below then
+ * naturally reproduces the old "all tools, then the text" layout, so nothing
+ * regresses for those.
+ */
+export function buildMessageParts(content: string, toolCalls?: ToolCall[]): MessagePart[] {
+  const calls = toolCalls ?? [];
+  if (calls.length === 0) {
+    return content ? [{ type: 'text', text: content, key: 't0' }] : [];
+  }
+
+  const parts: MessagePart[] = [];
+  let cursor = 0;
+  calls.forEach((call, i) => {
+    // Offset is monotonic (content is append-only) and never before the cursor;
+    // an absent offset pins the tool at the cursor (→ legacy top-stacking).
+    const raw = typeof call.contentOffset === 'number' ? call.contentOffset : cursor;
+    const offset = Math.max(cursor, Math.min(content.length, raw));
+    const textSlice = content.slice(cursor, offset);
+    if (textSlice) parts.push({ type: 'text', text: textSlice, key: `t${i}` });
+    parts.push({ type: 'tool', toolCall: call, key: `c${i}` });
+    cursor = offset;
+  });
+
+  const tail = content.slice(cursor);
+  if (tail) parts.push({ type: 'text', text: tail, key: 'tail' });
+  return parts;
+}
+
+export interface ToolActivityPresentation {
+  label: string;
+  tone: 'read' | 'viewer' | 'validate' | 'semantic' | 'geometry' | 'code';
+  description: string;
+}
+
+const PRESENTATION: Record<NonNullable<ToolCall['activityKind']>, ToolActivityPresentation> = {
+  read_only: { label: 'Read only', tone: 'read', description: 'Reads model data without modifying the IFC file.' },
+  viewer_action: { label: 'Viewer action', tone: 'viewer', description: 'Changes selection or presentation only; the IFC file is not modified.' },
+  validation: { label: 'Validation', tone: 'validate', description: 'Checks model data and reports issues without applying edits.' },
+  semantic_edit: { label: 'Semantic edit', tone: 'semantic', description: 'Stages metadata or property changes for review.' },
+  geometry_edit: { label: 'Geometry edit', tone: 'geometry', description: 'May change rendered geometry and reload the model after approval.' },
+  model_edit: { label: 'Model change', tone: 'geometry', description: 'May modify semantic data or geometry depending on edit history.' },
+  code_read: { label: 'Code · read', tone: 'code', description: 'Runs read-only Python in the IFC sandbox.' },
+  code_edit: { label: 'Code · edit', tone: 'code', description: 'Runs Python against a sandbox copy and stages detected changes for review.' },
+};
+
+// Current catalog names first; the legacy pre-consolidation names stay so
+// restored old transcripts (no activityKind) still label correctly.
+const SEMANTIC_TOOLS = new Set([
+  'edit_semantic',
+  'rename_element',
+  'rename_elements_batch',
+  'update_property_value',
+  'update_element_attribute',
+  'update_properties_batch',
+]);
+const GEOMETRY_TOOLS = new Set(['edit_structural', 'create_wall_from_ends', 'delete_element', 'propose_edit']);
+const VALIDATION_TOOLS = new Set(['validate_model', 'ids_validate', 'highlight_ids_failures', 'run_model_health_check', 'run_model_audit']);
+const VIEWER_TOOLS = new Set(['viewer_control', 'highlight_elements', 'select_element', 'isolate_elements', 'show_all_elements', 'clip_section_box_to_element']);
+
+export function toolActivityPresentation(tool: Pick<ToolCall, 'name' | 'activityKind'>): ToolActivityPresentation {
+  let kind = tool.activityKind;
+  // Restored v0.1.0 transcripts do not carry activityKind. Infer a safe label
+  // from the tool name so old conversations remain understandable.
+  if (!kind) {
+    if (tool.name === 'execute_ifc_query_code') kind = 'code_read';
+    else if (tool.name === 'execute_ifc_code') kind = 'code_edit';
+    else if (tool.name === 'undo_last_edit') kind = 'model_edit';
+    else if (SEMANTIC_TOOLS.has(tool.name)) kind = 'semantic_edit';
+    else if (GEOMETRY_TOOLS.has(tool.name)) kind = 'geometry_edit';
+    else if (VALIDATION_TOOLS.has(tool.name)) kind = 'validation';
+    else if (VIEWER_TOOLS.has(tool.name)) kind = 'viewer_action';
+    else kind = 'read_only';
+  }
+  return PRESENTATION[kind];
+}
+
+/** Pure helpers for the IDS CSV download button in ToolCallDisplay.
+ *  Kept separate so vitest can test them without mounting React. */
+
+export interface IdsCsvButtonState {
+  downloading: boolean;
+  error: boolean;
+  noModel: boolean;
+  failedCount: number | undefined;
+}
+
+/** Human-readable label for the IDS CSV download button. */
+export function getIdsCsvButtonLabel(s: IdsCsvButtonState): string {
+  if (s.downloading) return '⏳ Downloading…';
+  if (s.error) return '⚠ Download failed';
+  if (s.noModel) return '📥 Download failures CSV';
+  if (s.failedCount === 0) return '📥 Download CSV (0 failures)';
+  if (typeof s.failedCount === 'number')
+    return `📥 Download ${s.failedCount} failure${s.failedCount === 1 ? '' : 's'} as CSV`;
+  return '📥 Download failures CSV';
+}
+
+/** Tooltip text for the IDS CSV download button. */
+export function getIdsCsvButtonTitle(s: IdsCsvButtonState): string {
+  if (s.noModel) return 'No IFC model loaded - upload a model first';
+  if (s.error) return 'Download failed - is an IFC model loaded?';
+  if (s.failedCount === 0) return 'Download CSV report (no validation failures found)';
+  if (typeof s.failedCount === 'number')
+    return `Download ${s.failedCount} validation failure${s.failedCount === 1 ? '' : 's'} as CSV`;
+  return 'Download validation failures as CSV';
+}
+
+/** Extract failure count from a parsed validate_model (check='ids') tool
+ *  result object. Returns undefined when the field is absent or not a number. */
+export function extractIdsFailedCount(parsed: Record<string, unknown> | null): number | undefined {
+  if (!parsed) return undefined;
+  const v = parsed['failed'];
+  return typeof v === 'number' ? v : undefined;
+}
 
 /**
  * Full catalogue of concrete models, grouped by provider. Shown inline in the
@@ -76,8 +438,8 @@ const MODEL_CATALOGUE: Array<{ provider: string; providerLabel: string; models: 
 
 const DEFAULT_QUICK_ACTIONS = [
   { label: 'Model Summary', prompt: 'Give me a summary of this IFC model including element counts and storeys.' },
-  { label: 'Quantity Totals', prompt: 'Use get_quantities_summary to give me total area, volume, and length grouped by IFC type.' },
-  { label: 'Per-Storey Totals', prompt: 'Use get_quantities_summary grouped by storey and report total area and volume per storey.' },
+  { label: 'Quantity Totals', prompt: 'Use quantity_summary with kind "qto" to give me total area, volume, and length grouped by IFC type.' },
+  { label: 'Per-Storey Totals', prompt: 'Use quantity_summary with kind "qto" grouped by storey and report total area and volume per storey.' },
   { label: 'Isolate Top Storey', prompt: 'Find the topmost building storey and isolate just its elements in the viewer.' },
   { label: 'Find All Walls', prompt: 'How many walls are in this model? List them by storey.' },
   { label: 'Find All Doors', prompt: 'Show me all doors in this model and highlight them.' },
@@ -346,8 +708,13 @@ function ToolCallDisplay({ tc }: { tc: ToolCall }) {
           ? 'done'
           : 'running';
 
-  // IDS validate - show "Download failures CSV" when the tool produced results
-  const isIdsValidate = tc.name === 'ids_validate' && !!tc.result;
+  // IDS validate - show "Download failures CSV" when the tool produced results.
+  // Current catalog: validate_model with check='ids'; the ids_validate name
+  // check keeps the button working on restored legacy transcripts.
+  const isIdsValidate = !!tc.result && (
+    (tc.name === 'validate_model' && tc.arguments.check === 'ids') ||
+    tc.name === 'ids_validate'
+  );
   const idsBase64: string | undefined = typeof tc.arguments.ids_base64 === 'string'
     ? tc.arguments.ids_base64
     : undefined;
@@ -1386,7 +1753,7 @@ export default function ChatPanel({ embedded = false }: ChatPanelProps = {}) {
       run: (arg) => {
         const q = arg.trim();
         if (!q) return 'Search the loaded model.';
-        return `Use search_elements with query "${q}" and list the top results with their Express ID, IFC type, and storey.`;
+        return `Use query_elements with mode "text" and query "${q}" and list the top results with their Express ID, IFC type, and storey.`;
       },
     },
     {
@@ -1395,7 +1762,7 @@ export default function ChatPanel({ embedded = false }: ChatPanelProps = {}) {
       run: (arg) => {
         const ids = arg.split(/[,\s]+/).map((s) => parseInt(s, 10)).filter((n) => !Number.isNaN(n));
         if (!ids.length) return 'Isolate nothing. Show all.';
-        return `Call isolate_elements with element_ids=${JSON.stringify(ids)}.`;
+        return `Call viewer_control with action "isolate" and element_ids=${JSON.stringify(ids)}.`;
       },
     },
     {
@@ -2161,4 +2528,112 @@ export default function ChatPanel({ embedded = false }: ChatPanelProps = {}) {
       )}
     </div>
   );
+}
+
+/**
+ * Chat transcript export utilities.
+ * Pure functions - no DOM side effects except the triggered download.
+ */
+
+
+export type ExportFormat = 'markdown' | 'json';
+
+// ── Formatters ─────────────────────────────────────────────────────────────────
+
+/** Convert a list of ChatMessage objects to a Markdown string. */
+export function messagesToMarkdown(messages: ChatMessage[], modelName?: string): string {
+  const header = [
+    '# IFC Atlas - Chat Transcript',
+    `**Exported:** ${new Date().toISOString()}`,
+    modelName ? `**Model:** ${modelName}` : null,
+    '',
+    '---',
+    '',
+  ]
+    .filter((l) => l !== null)
+    .join('\n');
+
+  const body = messages
+    .map((msg) => {
+      const roleLabel = msg.role === 'user' ? '**You**' : '**Assistant**';
+      const lines: string[] = [`${roleLabel}\n`];
+
+      if (msg.content) lines.push(msg.content);
+
+      if (msg.toolCalls && msg.toolCalls.length > 0) {
+        for (const tc of msg.toolCalls) {
+          lines.push(`\n> **Tool call:** \`${tc.name}\``);
+          if (tc.result) lines.push(`> **Result:** ${tc.result.slice(0, 200)}${tc.result.length > 200 ? '…' : ''}`);
+        }
+      }
+
+      if (msg.attachments && msg.attachments.length > 0) {
+        const names = msg.attachments.map((a) => `\`${a.name ?? 'attachment'}\``).join(', ');
+        lines.push(`\n> **Attachments:** ${names}`);
+      }
+
+      return lines.join('\n');
+    })
+    .join('\n\n---\n\n');
+
+  return header + body;
+}
+
+/** Convert a list of ChatMessage objects to a pretty-printed JSON string. */
+export function messagesToJson(messages: ChatMessage[], modelName?: string): string {
+  return JSON.stringify(
+    {
+      exported: new Date().toISOString(),
+      model: modelName ?? null,
+      messages,
+    },
+    null,
+    2,
+  );
+}
+
+// ── Filename builder ───────────────────────────────────────────────────────────
+
+/** Generate a timestamped filename for the export. Delegates to the shared
+ *  `exportFilename` helper so the timestamp shape stays in one place. */
+export function buildExportFilename(format: ExportFormat): string {
+  const ext = format === 'markdown' ? 'md' : 'json';
+  return exportFilename('ifc-chat', ext);
+}
+
+// ── Download trigger ───────────────────────────────────────────────────────────
+
+/** Trigger a browser file download with the given text content. */
+export function downloadText(content: string, filename: string, mimeType: string): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ── High-level entry point ─────────────────────────────────────────────────────
+
+/**
+ * Export the given messages in the specified format and trigger a download.
+ * Safe to call with an empty array - produces a valid but sparse file.
+ */
+export function exportChatHistory(
+  messages: ChatMessage[],
+  format: ExportFormat,
+  modelName?: string,
+): void {
+  if (format === 'markdown') {
+    const content = messagesToMarkdown(messages, modelName);
+    const filename = buildExportFilename('markdown');
+    downloadText(content, filename, 'text/markdown;charset=utf-8');
+  } else {
+    const content = messagesToJson(messages, modelName);
+    const filename = buildExportFilename('json');
+    downloadText(content, filename, 'application/json;charset=utf-8');
+  }
 }

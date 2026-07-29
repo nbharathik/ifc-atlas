@@ -1,10 +1,10 @@
-import { useCallback } from 'react';
-
 import * as api from '../services/api';
+import { useCallback } from 'react';
 import { useStore } from '../store/useStore';
 import { getClientIfcFlag } from '../services/ifc/featureFlags';
 import { BROWSER_ONLY } from '../config/featureFlags';
 import type { ModelMeta, ProjectInfo } from '../types/ifc';
+import { newProject } from '../services/api';
 
 let uploadGeneration = 0;
 let activePersistController: AbortController | null = null;
@@ -346,4 +346,32 @@ function mergeBackendMeta(meta: ModelMeta, provisional: ProjectInfo): void {
     model_fingerprint: meta.model_fingerprint,
     edit_id: meta.edit_id,
   });
+}
+
+export type NewProjectTemplate = 'empty' | 'single_storey' | 'two_storey';
+
+/**
+ * Create a fresh IFC project from a template (plan A3) and load it through the
+ * normal upload pipeline, so from here on it behaves exactly like any opened
+ * model. Reused by the empty-state overlay and the File menu.
+ *
+ * Returns the same `{ ok }` shape as `useIfcUpload` so callers can surface an
+ * error inline without a throw.
+ */
+export function useNewProject() {
+  const upload = useIfcUpload();
+  return useCallback(
+    async (
+      template: NewProjectTemplate = 'single_storey',
+    ): Promise<{ ok: true } | { ok: false; error: string }> => {
+      try {
+        const bytes = await newProject(template);
+        const file = new File([bytes], 'New Project.ifc', { type: 'application/x-ifc' });
+        return await upload(file);
+      } catch (err) {
+        return { ok: false, error: `Could not create project: ${String(err)}` };
+      }
+    },
+    [upload],
+  );
 }

@@ -2,7 +2,7 @@
 
 IFC Atlas exposes its toolset as an [MCP](https://modelcontextprotocol.io/) server, so external LLM clients (Claude Desktop, Cursor, Continue, the Claude.ai connector, or any custom script) can query (and optionally edit) the loaded IFC model.
 
-By default the server exposes the **read** tier (every query / inspection tool plus the IDS validators). Setting `MCP_ALLOW_WRITES=1` additionally exposes the write tier (five write tools plus three pending-edit management tools) using a two-call diff-preview pattern: every write is staged first, then applied or discarded.
+By default the server exposes the **read** tiers (query and inspection tools, `validate_model`, and `get_docs`). Setting `MCP_ALLOW_WRITES=1` additionally exposes the write tier (four write tools plus three pending-edit management tools). Structural writes use a two-call diff-preview pattern: the edit is staged first, then applied or discarded.
 
 ---
 
@@ -99,7 +99,7 @@ async def main():
             await session.initialize()
             tools = await session.list_tools()
             print([t.name for t in tools.tools])
-            result = await session.call_tool("get_project_info", {})
+            result = await session.call_tool("describe_model", {"part": "project"})
             print(result.content[0].text)
 
 asyncio.run(main())
@@ -138,11 +138,10 @@ When the variable is unset (or `0`), every write tool and management tool return
 
 | Tool | Effect |
 |---|---|
-| `rename_element` | Rename an element by Express ID. |
-| `update_property_value` | Update a property in a property set. |
-| `create_wall_from_ends` | Build an `IfcWall` between two XY endpoints at a given height. |
-| `delete_element` | Delete an element by Express ID. |
-| `execute_ifc_code` | Run arbitrary Python in a sandboxed copy of the model. |
+| `edit_semantic` | Metadata edits (`set_name`, `set_property`, `set_attribute` ops). Applies directly for MCP callers (also requires the backend's `EDIT_MODE_ENABLED=1`); mixed op batches fall back to the staged ceremony. |
+| `edit_structural` | Geometry edits (`create_wall`, `delete_element` ops). Always staged. |
+| `execute_ifc_code` | Run arbitrary Python in a sandboxed copy of the model. Always staged when it mutates. |
+| `undo_last_edit` | Undo the most recently applied edit. Applies directly (same gate as `edit_semantic`). |
 
 ### Pending-edit management
 
@@ -154,12 +153,12 @@ When the variable is unset (or `0`), every write tool and management tool return
 
 ### Two-call diff-preview pattern
 
-Every write tool produces a **staged edit** rather than an immediate change.
+Staged write tools (`edit_structural`, mutating `execute_ifc_code`, mixed `edit_semantic` batches) produce a **staged edit** rather than an immediate change.
 
-1. **Stage**: call a write tool, e.g.:
+1. **Stage**: call a staged write tool, e.g.:
 
     ```json
-    {"tool": "rename_element", "arguments": {"express_id": 123, "new_name": "Wall A"}}
+    {"tool": "edit_structural", "arguments": {"ops": [{"op": "delete_element", "element_id": 123}]}}
     ```
 
     Returns a `pending_edit` envelope:
@@ -168,7 +167,7 @@ Every write tool produces a **staged edit** rather than an immediate change.
     {
       "action": "pending_edit",
       "edit_id": "uuid-...",
-      "summary": "renamed 1 element",
+      "summary": "deleted 1 element",
       "diff": { "changed": [...] }
     }
     ```
